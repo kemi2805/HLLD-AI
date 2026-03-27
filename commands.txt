@@ -1,0 +1,4 @@
+python -m src.data.generate --config configs/default-mignone.yaml --output data/raw/dataset_mignone.npz
+python -m src.data.preprocess --config configs/default-mignone.yaml
+python -m src.training.train --config configs/default-mignone.yaml
+python src/physics/run_shocktube.py configs/mignone/st1.yaml
