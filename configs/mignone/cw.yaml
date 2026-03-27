@@ -1,0 +1,55 @@
+# ============================================================
+#  1D SR-MHD — Isolated Contact Wave (CW)
+#  Mattia & Mignone 2021 (arXiv:2111.09369), Table 1, row "CW"
+#
+#  Both sides have identical velocity and B-field — only density
+#  differs (rhoL=10, rhoR=1). The solution is a single contact
+#  discontinuity advecting at vx=0 (stationary in this frame).
+#  All other primitives (p, v, B) should remain exactly constant.
+# ============================================================
+
+grid:
+  xmin:   0.0
+  xmax:   1.0
+  ncells: 40
+  ng:     2          # ghost cells on each side
+
+eos:
+  K:        0.0
+  gamma:    1.6666666
+  gamma_th: 1.6666666      # set to null for cold-only EOS
+
+run:
+  problem:  generic  # brio_wu | komissarov_1 | komissarov_2 | generic
+  t_end:    1
+  cfl:      0.8
+  atmo_rho: 1.0e-10
+  solver:   hlld     # hlld | hlle
+  device:   cpu      # cpu | cuda | mps
+
+  Only used when problem: generic
+  primL:
+    rho: 10.0
+    p: 1.0
+    vx: 0.0
+    vy: 0.7
+    vz: 0.2
+    Bx: 5.0
+    By: 1.0
+    Bz: 0.5
+  primR:
+    rho: 1.0
+    p: 1.0
+    vx: 0.0
+    vy: 0.7
+    vz: 0.2
+    Bx: 5.0
+    By: 1.0
+    Bz: 0.5
+  x_interface: 0.5
+
+
+output:
+  dir:           results/output_cw_hlld
+  every_n_steps: 1000      # save snapshot every N steps
+  dt_snapshot:   1000.0    # also save whenever simulation time advances by this amount 

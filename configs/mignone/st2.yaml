@@ -1,0 +1,53 @@
+# ============================================================
+#  1D SR-MHD — Shock Tube 2 (ST2)
+#  Mattia & Mignone 2021 (arXiv:2111.09369), Table 1, row "ST2"
+#
+#  Non-planar Riemann problem — transverse B rotates across the
+#  fan. Contains fast shock, Alfvén wave, slow rarefaction (left)
+#  and slow shock, Alfvén wave, fast shock (right) around a
+#  central contact wave.
+# ============================================================
+grid:
+  xmin: 0.0
+  xmax: 1.0
+  ncells: 800
+  ng: 2
+
+eos:
+  K:        0.0
+  gamma:    1.6666666
+  gamma_th: 1.6666666
+
+run:
+  problem:  generic
+  t_end:    0.55
+  cfl:      0.8
+  atmo_rho: 1.0e-10
+  solver:   hlld
+  device:   cpu
+
+  # Initial left/right states (Mattia & Mignone 2021, Table 1, ST2)
+  primL:
+    rho: 1.08
+    p:   0.95
+    vx:  0.4
+    vy:  0.3
+    vz:  0.2
+    Bx:  2.0
+    By:  0.3
+    Bz:  0.3
+  primR:
+    rho: 1.0
+    p:   1.0
+    vx: -0.45
+    vy: -0.2
+    vz:  0.2
+    Bx:  2.0
+    By: -0.7
+    Bz:  0.5
+  x_interface: 0.5
+
+output:
+  dir:           results/output_st2_hlld
+  every_n_steps: 1000
+  dt_snapshot:   1000.0

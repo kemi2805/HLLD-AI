@@ -1,0 +1,52 @@
+# ============================================================
+#  1D SR-MHD — Shock Tube 4 (ST4) — "Generic Alfvén test"
+#  Mattia & Mignone 2021 (arXiv:2111.09369), Table 1, row "ST4"
+#
+#  Full seven-wave solution: fast rarefaction, rotational wave,
+#  slow shock, contact, slow shock, rotational wave, fast shock.
+#  The most demanding test — only HLLD resolves all seven waves.
+# ============================================================
+grid:
+  xmin: 0.0
+  xmax: 1.0
+  ncells: 800
+  ng: 2
+
+eos:
+  K:        0.0
+  gamma:    1.6666666
+  gamma_th: 1.6666666
+
+run:
+  problem:  generic
+  t_end:    0.55
+  cfl:      0.8
+  atmo_rho: 1.0e-10
+  solver:   hlld
+  device:   cpu
+
+  # Initial left/right states (Mattia & Mignone 2021, Table 1, ST4)
+  primL:
+    rho: 1.0
+    p:   5.0
+    vx:  0.0
+    vy:  0.3
+    vz:  0.4
+    Bx:  1.0
+    By:  6.0
+    Bz:  2.0
+  primR:
+    rho: 0.9
+    p:   5.3
+    vx:  0.0
+    vy:  0.0
+    vz:  0.0
+    Bx:  1.0
+    By:  5.0
+    Bz:  2.0
+  x_interface: 0.5
+
+output:
+  dir:           results/output_st4_hlld
+  every_n_steps: 1000
+  dt_snapshot:   1000.0

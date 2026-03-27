@@ -1,0 +1,47 @@
+# ============================================================
+#  HLLD ML — Default configuration
+# ============================================================
+
+data:
+  n_samples: 199
+  seed: 44
+  raw_path: data/raw/dataset.npz
+  split_dir: data/splits
+  norm_method: standard    # standard | minmax | log
+
+  # Sampling ranges for primitive variables
+  # rho is sampled in log10 space: 10^lrho_min .. 10^lrho_max
+  # Velocities and B-fields are sampled as (magnitude, theta, phi)
+  # to guarantee sub-luminal speeds and consistent directions.
+  # W (Lorentz factor) range sets the velocity magnitude:
+  #   v = sqrt(1 - 1/W^2),  W=2.0 → v≈0.866
+  ranges:
+    lrho:   [-12.0, -2.8]   # log10(rho)
+    W:      [1.0,    2.0]   # Lorentz factor → sets |v|
+    temp:   [0.0,    0.0]   # temperature (0 = cold EOS, p derived from rho)
+    Bx:     [-5.0,   5.0]   # shared between L and R states
+    Bt_mag: [0.0,    5.0]   # magnitude of transverse B = sqrt(By^2 + Bz^2)
+
+  # Bias for edge-heavy sampling (beta-like transform)
+  # Set to 1 for uniform (no bias), >1 for more samples near edges
+  bias_strength: 1
+
+# EOS parameters — passed directly to hybrid_eos(K, gamma, gamma_th)
+# Set gamma_th to null for cold-only (no thermal component)
+eos:
+  K: 100
+  gamma: 2
+  gamma_th: 1.8   # set to null for cold EOS
+
+model:
+  n_input: 15              # 8 per side minus shared Bx = 15
+  hidden: [128, 128, 64]
+  activation: silu
+
+training:
+  epochs: 200
+  batch_size: 256
+  lr: 1.0e-3
+  weight_decay: 1.0e-5
+  lambda_phys: 0.1
+  device: mps              # mps (Apple Silicon) | cuda | cpu

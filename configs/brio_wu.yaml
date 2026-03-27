@@ -1,0 +1,49 @@
+# ============================================================
+#  1D SR-MHD Shocktube — configuration
+# ============================================================
+
+grid:
+  xmin:   0.0
+  xmax:   1.0
+  ncells: 40
+  ng:     2          # ghost cells on each side
+
+eos:
+  K:        0.0
+  gamma:    1.6666666
+  gamma_th: 1.66666667      # set to null for cold-only EOS
+
+run:
+  problem:  brio_wu | komissarov_1 | komissarov_2 | generic
+  t_end:    1.0
+  cfl:      0.8
+  atmo_rho: 1.0e-10
+  solver:   hlle     # hlld | hlle
+  device:   cpu      # cpu | cuda | mps
+
+  Only used when problem: generic
+  primL:
+    rho: 1.0
+    p: 1.0
+    vx: 0.4
+    vy: -0.3
+    vz: 0.5
+    Bx: 2.4
+    By: 1.0
+    Bz: -1.6
+  primR:
+    rho: 1.0
+    p: 1.0
+    vx: 0.377237
+    vy: -0.482389
+    vz: 0.424190
+    Bx: 2.4
+    By: -0.1
+    Bz: -2.178213
+  x_interface: 0.5
+
+
+output:
+  dir:           output
+  every_n_steps: 1      # save snapshot every N steps
+  #dt_snapshot:   1.0    # also save whenever simulation time advances by this amount 

@@ -1,0 +1,55 @@
+# ============================================================
+#  1D SR MHD — Balsara Test 1 (Brio & Wu)
+#              (Giacomazzo & Rezzolla, Table 4)
+#
+#  Gamma = 2
+#  The relativistic analogue of the classic Brio & Wu shock
+#  tube. Density and pressure jump; transverse By reverses.
+#  Produces: fast/slow shocks, rarefactions, contact discontinuity.
+#
+#  Left:  (rho, p, vx, vy, vz, Bx,  By, Bz) = (1.000, 1.0, 0, 0, 0, 0.5,  1.0, 0)
+#  Right: (rho, p, vx, vy, vz, Bx,  By, Bz) = (0.125, 0.1, 0, 0, 0, 0.5, -1.0, 0)
+# ============================================================
+
+grid:
+  xmin:   0.0
+  xmax:   1.0
+  ncells: 400
+  ng:     2
+
+eos:
+  K:        0.0
+  gamma:    2.0
+  gamma_th: 2.0
+
+run:
+  problem:  generic
+  t_end:    0.4
+  cfl:      0.4
+  atmo_rho: 1.0e-10
+  solver:   hllc
+  device:   cpu
+
+  primL:
+    rho: 1.000
+    p:   1.0
+    vx:  0.0
+    vy:  0.0
+    vz:  0.0
+    Bx:  0.5
+    By:  1.0
+    Bz:  0.0
+  primR:
+    rho: 0.125
+    p:   0.1
+    vx:  0.0
+    vy:  0.0
+    vz:  0.0
+    Bx:  0.5
+    By:  -1.0
+    Bz:  0.0
+  x_interface: 0.5
+
+output:
+  dir:           output_balsara1
+  every_n_steps: 1000

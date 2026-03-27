@@ -1,0 +1,46 @@
+# ============================================================
+#  1D SR hydro — propagating sound wave
+# ============================================================
+
+grid:
+  xmin:   0.0
+  xmax:   1.0
+  ncells: 40
+  ng:     2
+
+eos:
+  K:        0.0
+  gamma:    1.6666666
+  gamma_th: 1.6666666
+
+run:
+  problem:  generic
+  t_end:    0.4
+  cfl:      0.4
+  atmo_rho: 1.0e-10
+  solver:   hlld
+  device:   cpu
+
+  primL:
+    rho: 1.0
+    p:   0.1
+    vx:  0.3
+    vy:  0.0
+    vz:  0.0
+    Bx:  0.0
+    By:  0.0
+    Bz:  0.0
+  primR:
+    rho: 0.1
+    p:   0.1
+    vx:  0.3
+    vy:  0.0
+    vz:  0.0
+    Bx:  0.0
+    By:  0.0
+    Bz:  0.0
+  x_interface: 0.5
+
+output:
+  dir:           output
+  every_n_steps: 1

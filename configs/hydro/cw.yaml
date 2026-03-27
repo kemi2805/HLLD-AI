@@ -1,0 +1,61 @@
+# ============================================================
+#  1D SR hydro — Isolated contact wave (pure hydro, zero B)
+#
+#  Tests that the solver preserves a contact discontinuity.
+#  Both sides have identical pressure and velocity — only
+#  density differs. The exact solution is a sharp density
+#  jump advecting at vx=0.5, with p and vx exactly constant.
+#
+#  HLLE will smear the contact over many zones (diffusive).
+#  HLLD falls back to HLLE here (Bx=0) so same behavior.
+#
+#  Expected result:
+#    - rho: step function advected to x ~ 0.5 + 0.5*t_end
+#    - p:   exactly constant (1.0)
+#    - vx:  exactly constant (0.5)
+#    - By, Bz: exactly zero
+# ============================================================
+
+grid:
+  xmin:   0.0
+  xmax:   1.0
+  ncells: 40
+  ng:     2
+
+eos:
+  K:        0.0
+  gamma:    1.6666666
+  gamma_th: 1.6666666
+
+run:
+  problem:  generic
+  t_end:    0.5
+  cfl:      0.4
+  atmo_rho: 1.0e-10
+  solver:   hlld
+  device:   cpu
+
+  # Only rho differs — pure contact discontinuity
+  primL:
+    rho: 10.0
+    p:   1.0
+    vx:  0.0
+    vy:  0.5
+    vz:  0.0
+    Bx:  0.0
+    By:  0.0
+    Bz:  0.0
+  primR:
+    rho: 1.0
+    p:   1.0
+    vx:  0.0
+    vy:  0.5
+    vz:  0.0
+    Bx:  0.0
+    By:  0.0
+    Bz:  0.0
+  x_interface: 0.5
+
+output:
+  dir:           output_hydro_cw
+  every_n_steps: 1000

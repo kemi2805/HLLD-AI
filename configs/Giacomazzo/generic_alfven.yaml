@@ -1,0 +1,57 @@
+# ============================================================
+#  1D SR MHD — Generic Alfvén Test
+#              (Giacomazzo & Rezzolla, Table 4)
+#
+#  Gamma = 5/3
+#  Tests propagation and steepening of an Alfvén wave.
+#  Bx is constant; By and Bz change across the interface,
+#  driving rotational/Alfvén discontinuities.
+#  A good diagnostic: the Alfvén wave should be sharp and
+#  non-diffusive in a correctly implemented HLLD solver.
+#
+#  Left:  (rho, p,   vx, vy,  vz,  Bx, By,  Bz) = (1.0, 5.0, 0, 0.3,  0.4, 1, 6.0,  2.0)
+#  Right: (rho, p,   vx, vy,  vz,  Bx, By,  Bz) = (0.9, 5.3, 0, 0.0,  0.0, 1, 5.0,  2.0)
+# ============================================================
+
+grid:
+  xmin:   0.0
+  xmax:   1.0
+  ncells: 400
+  ng:     2
+
+eos:
+  K:        0.0
+  gamma:    1.6666666   # 5/3
+  gamma_th: 1.6666666
+
+run:
+  problem:  generic
+  t_end:    0.4
+  cfl:      0.4
+  atmo_rho: 1.0e-10
+  solver:   hllc
+  device:   cpu
+
+  primL:
+    rho: 1.0
+    p:   5.0
+    vx:  0.0
+    vy:  0.3
+    vz:  0.4
+    Bx:  1.0
+    By:  6.0
+    Bz:  2.0
+  primR:
+    rho: 0.9
+    p:   5.3
+    vx:  0.0
+    vy:  0.0
+    vz:  0.0
+    Bx:  1.0
+    By:  5.0
+    Bz:  2.0
+  x_interface: 0.5
+
+output:
+  dir:           output_alfven
+  every_n_steps: 1000

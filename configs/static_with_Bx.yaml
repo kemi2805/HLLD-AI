@@ -1,0 +1,64 @@
+# ============================================================
+#  1D SR-MHD — Uniform advection with normal B field
+#
+#  Tests that HLLD preserves a uniform state exactly when
+#  there is a nonzero normal magnetic field (Bx != 0).
+#
+#  With Bx != 0 on both sides, HLLD takes the full 5-wave
+#  path (bn_zero fallback is NOT triggered). The root-finder
+#  must find p* = p_total = p + 0.5*b² and all intermediate
+#  states must collapse back to the input state.
+#
+#  Cold EOS (gamma_th=null): p_cold = K*rho^gamma = 1*1^(5/3) = 1.0
+#  which is consistent with p=1.0 — no thermal floor is hit.
+#
+#  Expected result: all fields constant to machine precision
+#  (~1e-12) at t=1.0. Any drift indicates a bug in either
+#  the HLLD intermediate state construction or the C2P.
+# ============================================================
+
+grid:
+  xmin:   0.0
+  xmax:   1.0
+  ncells: 40
+  ng:     2
+
+eos:
+  K:        1.0
+  gamma:    1.6666666
+  gamma_th: null        # cold-only EOS: p = K * rho^gamma
+
+run:
+  problem:  generic
+  t_end:    1.0
+  cfl:      0.4
+  atmo_rho: 1.0e-10
+  solver:   hlld
+  device:   cpu
+
+  # Both sides identical — no wave should form.
+  # vx=0.3 tests that advection does not corrupt the state.
+  # Bx=1.0 ensures HLLD uses the full 5-wave path.
+  primL:
+    rho: 1.0
+    p:   1.0
+    vx:  0.3
+    vy:  0.0
+    vz:  0.0
+    Bx:  1.0
+    By:  0.0
+    Bz:  0.0
+  primR:
+    rho: 1.0
+    p:   1.0
+    vx:  0.3
+    vy:  0.0
+    vz:  0.0
+    Bx:  1.0
+    By:  0.0
+    Bz:  0.0
+  x_interface: 0.5
+
+output:
+  dir:           output_uniform_Bx
+  every_n_steps: 1000

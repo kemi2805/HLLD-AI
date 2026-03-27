@@ -1,0 +1,52 @@
+# ============================================================
+#  1D SR-MHD — Shock Tube 3 (ST3)
+#  Mattia & Mignone 2021 (arXiv:2111.09369), Table 1, row "ST3"
+#
+#  Two oppositely colliding ultra-relativistic streams (vx=±0.999).
+#  Co-planar, no rotational wave. Generates two strong fast shocks
+#  and two slow shocks. Tests robustness under extreme conditions.
+# ============================================================
+grid:
+  xmin: 0.0
+  xmax: 1.0
+  ncells: 400
+  ng: 2
+
+eos:
+  K:        0.0
+  gamma:    1.6666666
+  gamma_th: 1.6666666
+
+run:
+  problem:  generic
+  t_end:    0.4
+  cfl:      0.8
+  atmo_rho: 1.0e-10
+  solver:   hlld
+  device:   cpu
+
+  # Initial left/right states (Mattia & Mignone 2021, Table 1, ST3)
+  primL:
+    rho: 1.0
+    p:   0.1
+    vx:  0.999
+    vy:  0.0
+    vz:  0.0
+    Bx:  10.0
+    By:  7.0
+    Bz:  7.0
+  primR:
+    rho: 1.0
+    p:   0.1
+    vx: -0.999
+    vy:  0.0
+    vz:  0.0
+    Bx:  10.0
+    By: -7.0
+    Bz:  7.0
+  x_interface: 0.5
+
+output:
+  dir:           results/output_st3_hlld
+  every_n_steps: 1000
+  dt_snapshot:   1000.0

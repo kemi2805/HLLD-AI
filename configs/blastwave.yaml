@@ -1,0 +1,46 @@
+# ============================================================
+#  1D SR hydro — relativistic blast wave
+# ============================================================
+
+grid:
+  xmin:   0.0
+  xmax:   1.0
+  ncells: 100
+  ng:     2
+
+eos:
+  K:        1.0
+  gamma:    1.6666666
+  gamma_th: null
+
+run:
+  problem:  generic
+  t_end:    0.4
+  cfl:      0.1
+  atmo_rho: 1.0e-10
+  solver:   hlle
+  device:   cpu
+
+  primL:
+    rho: 1.0
+    p:   1000.0
+    vx:  0.0
+    vy:  0.0
+    vz:  0.0
+    Bx:  0.0
+    By:  0.0
+    Bz:  0.0
+  primR:
+    rho: 1.0
+    p:   0.01
+    vx:  0.0
+    vy:  0.0
+    vz:  0.0
+    Bx:  0.0
+    By:  0.0
+    Bz:  0.0
+  x_interface: 0.5
+
+output:
+  dir:           output
+  every_n_steps: 10

@@ -1,0 +1,67 @@
+# ============================================================
+#  1D SR hydro — Sod shock tube (pure hydro, zero B)
+#
+#  Classic shock tube test in the SR hydro limit.
+#  No magnetic field — HLLD falls back to HLLE via bn_zero.
+#
+#  Ideal gas EOS with K=0 (no cold floor):
+#    p = eps * rho * (gamma_th - 1) = pure thermal gas
+#    h = 1 + gamma_th/(gamma_th-1) * p/rho
+#
+#  Initial discontinuity at x=0.5 decays into three waves:
+#    - Left-going rarefaction fan
+#    - Contact discontinuity (density jump, p/v continuous)
+#    - Right-going shock
+#
+#  With 400 cells and t_end=0.1 the waves have not yet reached
+#  the boundaries so outflow BCs have no effect.
+#
+#  Expected result: smooth rarefaction, sharp contact and shock,
+#  no oscillations. HLLE is diffusive but stable.
+# ============================================================
+
+grid:
+  xmin:   0.0
+  xmax:   1.0
+  ncells: 400
+  ng:     2
+
+eos:
+  K:        0.0           # no cold polytrope floor
+  gamma:    1.6666666     # used only for p_cold (=0 here)
+  gamma_th: 1.6666666     # thermal adiabatic index (5/3)
+
+run:
+  problem:  generic
+  t_end:    0.1
+  cfl:      0.4
+  atmo_rho: 1.0e-10
+  solver:   hlld           # pure hydro — HLLD degenerates to HLLE anyway
+  device:   cpu
+
+  # Standard Sod initial conditions (relativistic version)
+  # Left: high density and pressure
+  # Right: low density and pressure, both at rest
+  primL:
+    rho: 1.0
+    p:   1.0
+    vx:  0.0
+    vy:  0.0
+    vz:  0.0
+    Bx:  0.0
+    By:  0.0
+    Bz:  0.0
+  primR:
+    rho: 0.125
+    p:   0.1
+    vx:  0.0
+    vy:  0.0
+    vz:  0.0
+    Bx:  0.0
+    By:  0.0
+    Bz:  0.0
+  x_interface: 0.5
+
+output:
+  dir:           output_shock
+  every_n_steps: 1000        # save every step — useful for debugging early evolution

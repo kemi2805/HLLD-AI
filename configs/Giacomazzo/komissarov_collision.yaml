@@ -1,0 +1,57 @@
+# ============================================================
+#  1D SR MHD — Komissarov: Collision Test
+#              (Giacomazzo & Rezzolla, Table 4)
+#
+#  Gamma = 4/3
+#  Two streams colliding head-on with equal but opposite
+#  velocities: vx = ±5/sqrt(26). Large transverse B-field.
+#  Tests the solver under a symmetric head-on collision.
+#
+#  Left:  (rho, p, vx,         vy, vz, Bx,  By,   Bz) = (1, 1,  5/√26, 0, 0, 10,  10, 0)
+#  Right: (rho, p, vx,         vy, vz, Bx,  By,   Bz) = (1, 1, -5/√26, 0, 0, 10, -10, 0)
+#
+#  5/sqrt(26) ~ 0.9806
+# ============================================================
+
+grid:
+  xmin:   0.0
+  xmax:   1.0
+  ncells: 400
+  ng:     2
+
+eos:
+  K:        0.0
+  gamma:    1.3333333   # 4/3
+  gamma_th: 1.3333333
+
+run:
+  problem:  generic
+  t_end:    0.4
+  cfl:      0.4
+  atmo_rho: 1.0e-10
+  solver:   hllc
+  device:   cpu
+
+  primL:
+    rho: 1.0
+    p:   1.0
+    vx:  0.98058068   # 5/sqrt(26)
+    vy:  0.0
+    vz:  0.0
+    Bx:  10.0
+    By:  10.0
+    Bz:  0.0
+  primR:
+    rho: 1.0
+    p:   1.0
+    vx:  -0.98058068  # -5/sqrt(26)
+    vy:  0.0
+    vz:  0.0
+    Bx:  10.0
+    By:  -10.0
+    Bz:  0.0
+  x_interface: 0.5
+
+output:
+  dir:           output_komissarov_collision
+  every_n_steps: 1000

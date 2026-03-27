@@ -1,0 +1,56 @@
+# ============================================================
+#  1D SR MHD — Balsara Test 3
+#              (Giacomazzo & Rezzolla, Table 4)
+#
+#  Gamma = 5/3
+#  Extreme pressure ratio (1000:0.1) combined with large
+#  B-field. One of the hardest Balsara tests — exercises
+#  robustness of the solver under magnetically dominated,
+#  high-Mach conditions.
+#
+#  Left:  (rho, p,      vx, vy, vz, Bx,  By, Bz) = (1, 1000, 0, 0, 0, 10, 7,   7)
+#  Right: (rho, p,      vx, vy, vz, Bx,  By, Bz) = (1,  0.1, 0, 0, 0, 10, 0.7, 0.7)
+# ============================================================
+
+grid:
+  xmin:   0.0
+  xmax:   1.0
+  ncells: 400
+  ng:     2
+
+eos:
+  K:        0.0
+  gamma:    1.6666666   # 5/3
+  gamma_th: 1.6666666
+
+run:
+  problem:  generic
+  t_end:    0.4
+  cfl:      0.4
+  atmo_rho: 1.0e-10
+  solver:   hllc
+  device:   cpu
+
+  primL:
+    rho: 1.0
+    p:   1000.0
+    vx:  0.0
+    vy:  0.0
+    vz:  0.0
+    Bx:  10.0
+    By:  7.0
+    Bz:  7.0
+  primR:
+    rho: 1.0
+    p:   0.1
+    vx:  0.0
+    vy:  0.0
+    vz:  0.0
+    Bx:  10.0
+    By:  0.7
+    Bz:  0.7
+  x_interface: 0.5
+
+output:
+  dir:           output_balsara3
+  every_n_steps: 1000

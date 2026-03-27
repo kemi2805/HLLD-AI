@@ -1,0 +1,54 @@
+# ============================================================
+#  1D SR MHD — Komissarov: Shock-Tube Test 1
+#              (Giacomazzo & Rezzolla, Table 4)
+#
+#  Gamma = 4/3
+#  Extreme pressure ratio (1000:1) with normal B-field.
+#  Tests shock-capturing robustness at high Mach number.
+#
+#  Left:  (rho, p, vx, vy, vz, Bx, By, Bz) = (1.0, 1000, 0, 0, 0, 1, 0, 0)
+#  Right: (rho, p, vx, vy, vz, Bx, By, Bz) = (0.1,    1, 0, 0, 0, 1, 0, 0)
+# ============================================================
+
+grid:
+  xmin:   0.0
+  xmax:   1.0
+  ncells: 400
+  ng:     2
+
+eos:
+  K:        0.0
+  gamma:    1.3333333   # 4/3
+  gamma_th: 1.3333333
+
+run:
+  problem:  generic
+  t_end:    0.4
+  cfl:      0.4
+  atmo_rho: 1.0e-10
+  solver:   hllc
+  device:   cpu
+
+  primL:
+    rho: 1.0
+    p:   1000.0
+    vx:  0.0
+    vy:  0.0
+    vz:  0.0
+    Bx:  1.0
+    By:  0.0
+    Bz:  0.0
+  primR:
+    rho: 0.1
+    p:   1.0
+    vx:  0.0
+    vy:  0.0
+    vz:  0.0
+    Bx:  1.0
+    By:  0.0
+    Bz:  0.0
+  x_interface: 0.5
+
+output:
+  dir:           output_komissarov_shock1
+  every_n_steps: 1000

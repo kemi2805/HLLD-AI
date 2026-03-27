@@ -1,0 +1,26 @@
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+.venv/
+venv/
+
+# VS Code
+.vscode/
+
+# Output directories
+output*/
+garbage_output/
+ken_output_new/
+results/
+checkpoints/
+
+# Plot images (regeneratable)
+*.png
+
+# Data (if large/generated)
+data/
