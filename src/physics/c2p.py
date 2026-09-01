@@ -198,6 +198,7 @@ class KastaunC2P:
         x0 = mu_lo.clone(); x1 = mu_hi.clone()
         f0 = f_lo.clone();  f1 = f_hi.clone()
 
+        converged = f1.abs() < tol
         for _ in range(n_iter):
             converged = f1.abs() < tol
             if torch.all(converged):
@@ -219,6 +220,7 @@ class KastaunC2P:
             x1   = x2;                          f1 = f2
 
         mu = x1
+        converged = f1.abs() < tol
         _, rhohat, epshat, What, vhat2 = self._master(mu)
 
         # ── Recover velocity vector ───────────────────────────────────────────
@@ -234,6 +236,16 @@ class KastaunC2P:
                            torch.sqrt(v2c / (v2 + _TINY)),
                            torch.ones_like(v2))
         vhatU = vhatU * norm.unsqueeze(1)
+
+        # Status masks.  `good_bracket` was already being computed here and
+        # then thrown away, so a degenerate cell fell through silently with
+        # whatever the iteration happened to produce.  The 2D rotor run needs
+        # to count these, so surface them instead.
+        self.status = {
+            "bracket_ok": good_bracket,
+            "converged": converged,
+            "v_clamped": v2 > 1.0 - 1e-10,
+        }
 
         phat = self.eos.press__eps_rho(epshat, rhohat)
 
@@ -259,11 +271,17 @@ def conservative_to_primitive(
     atmo_eps: float = 1e-10,
     n_iter: int = 60,
     tol: float = 1e-15,
-) -> dict[str, torch.Tensor]:
+    return_status: bool = False,
+):
     """
     Top-level C2P wrapper.
 
     Handles atmosphere enforcement and returns primitive state dict.
+
+    return_status=True additionally returns a dict of per-cell boolean masks
+    (bracket_ok, converged, v_clamped, atmo_floored) so a caller can count
+    and report inversion failures rather than have them pass silently.  This
+    is what the 2D rotor diagnostics consume.
     """
     solver = KastaunC2P(cons, eos)
     prims  = solver.invert(n_iter=n_iter, tol=tol)
@@ -278,4 +296,8 @@ def conservative_to_primitive(
     # Recompute pressure from floored state
     prims["p"]   = eos.press__eps_rho(prims["eps"], prims["rho"])
 
+    if return_status:
+        status = dict(solver.status)
+        status["atmo_floored"] = atmo_mask
+        return prims, status
     return prims

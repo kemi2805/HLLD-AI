@@ -116,7 +116,7 @@ def test_residual_at_root():
     tp  = torch.clamp(0.5 * (sL["p"] + 0.5 * b2l + sR["p"] + 0.5 * b2r), min=1e-30)
     p_lo, p_hi = tp * 1e-6, tp * 1e6
 
-    p_star, err = safe_secant_bisection(calc, p_lo, p_hi, tol=1e-6, max_iter=200)
+    p_star, err, _ = safe_secant_bisection(calc, p_lo, p_hi, tol=1e-6, max_iter=200)
     calc.compute_all_variables(p_star)
 
     # non-degenerate converged subset
@@ -155,7 +155,7 @@ def test_rankine_hugoniot():
     b2r = compute_b2((sR["vx"], sR["vy"], sR["vz"]),
                      (sR["Bx"], sR["By"], sR["Bz"]), wr)
     tp  = torch.clamp(0.5 * (sL["p"] + 0.5 * b2l + sR["p"] + 0.5 * b2r), min=1e-30)
-    p_star, err = safe_secant_bisection(calc, tp * 1e-6, tp * 1e6, tol=1e-6, max_iter=200)
+    p_star, err, _ = safe_secant_bisection(calc, tp * 1e-6, tp * 1e6, tol=1e-6, max_iter=200)
     calc.compute_all_variables(p_star)
 
     good = (err == 0) & (calc.waL >= 0) & (calc.waR >= 0) \
@@ -262,7 +262,7 @@ def test_wave_ordering_diagnostic():
     b2r = compute_b2((sR["vx"], sR["vy"], sR["vz"]),
                      (sR["Bx"], sR["By"], sR["Bz"]), wr)
     tp  = torch.clamp(0.5 * (sL["p"] + 0.5 * b2l + sR["p"] + 0.5 * b2r), min=1e-30)
-    p_star, err = safe_secant_bisection(calc, tp * 1e-6, tp * 1e6, tol=1e-6, max_iter=200)
+    p_star, err, _ = safe_secant_bisection(calc, tp * 1e-6, tp * 1e6, tol=1e-6, max_iter=200)
     calc.compute_all_variables(p_star)
 
     fac = _sdiv(1.0 - calc.KaL2, calc.S_L * calc.sqL - calc.KaLBc)

@@ -332,6 +332,31 @@ def compute_srmhd_fluxes(
     return uL, uR, fL, fR, cmax, cmin
 
 
+def energy_form(u: Cons, f: Cons) -> Tuple[Cons, Cons]:
+    """
+    Convert a (tau, F_tau) conserved/flux pair to the TOTAL-ENERGY form
+    ``E = tau + D`` that ``HLLDComputation`` expects.
+
+    ``compute_srmhd_fluxes`` returns tau = T^00 - D (the standard evolved
+    energy variable), but the HLLD star-state algebra of Mignone et al. is
+    written in terms of the full T^00.  The two differ by exactly D:
+
+        U_init["tau"] = tau + D = T^00
+        F_init["tau"] = F_tau + F_D = T^{0n}
+
+    Every other component is untouched.
+
+    This replaces ~90 lines that were previously written out by hand in
+    three places (hlld_flux, hlld_ai_flux, data/generate.py), each of them
+    hardcoded to the x-direction.  Because ``compute_srmhd_fluxes`` is
+    idir-generic, routing through it here makes the HLLD solvers correct
+    for idir=1,2 as well — previously they silently returned x-fluxes.
+    """
+    U_init = {**u, "tau": u["tau"] + u["D"]}
+    F_init = {**f, "tau": f["tau"] + f["D"]}
+    return U_init, F_init
+
+
 # ── HLLDComputation ──────────────────────────────────────────────────────────
 
 
@@ -631,7 +656,7 @@ def safe_secant_bisection_old(
         f0 = torch.where(lft, f0, f1)
         x1 = x2
         f1 = f2
-    print("We needed this many iterations: ", iter)
+    # (iteration count available via safe_secant_bisection; this legacy path is unused)
 
     if scalar:
         return x1.reshape(()), err.reshape(())
@@ -644,7 +669,24 @@ def safe_secant_bisection(
     x1: torch.Tensor,
     tol: float = 1e-12,
     max_iter: int = 20,
-) -> Tuple[torch.Tensor, torch.Tensor]:
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """
+    Clamped-secant root find, vectorised over a batch with per-element
+    freezing of already-converged entries.
+
+    Returns
+    -------
+    x1        : Tensor  the root estimate
+    err       : Tensor  0 where converged, ``max_iter`` where not
+    iters_used: Tensor  per-element iteration count at convergence
+                        (``max_iter`` for entries that never converged).
+                        This is the cost metric for the AI warm-start
+                        comparison, so it is reported per element rather
+                        than as a single loop counter.
+
+    NOTE: despite the name this performs no bisection — it is a clamped
+    secant that can leave the initial bracket.
+    """
     x0 = _t(x0).clone()
     x1 = _t(x1).clone()
     scalar = x0.ndim == 0
@@ -655,6 +697,8 @@ def safe_secant_bisection(
     f0 = _t(func(x0))
     f1 = _t(func(x1))
     err = torch.full(x0.shape, max_iter, dtype=torch.int32, device=x0.device)
+    iters_used = torch.full(x0.shape, max_iter, dtype=torch.int32, device=x0.device)
+    done = torch.zeros(x0.shape, dtype=torch.bool, device=x0.device)
     iter = 0
 
     for _ in range(max_iter):
@@ -662,6 +706,12 @@ def safe_secant_bisection(
 
         conv = torch.abs(f1) < tol
         err = torch.where(conv, torch.zeros_like(err), err)
+        # record the iteration at which each element first converged
+        newly = conv & ~done
+        iters_used = torch.where(
+            newly, torch.full_like(iters_used, iter - 1), iters_used
+        )
+        done = done | conv
         if torch.all(conv):
             break
 
@@ -683,10 +733,14 @@ def safe_secant_bisection(
         x0, f0 = x1, f1
         x1, f1 = x2, f2
 
+    # elements converging on the final sweep
+    conv = torch.abs(f1) < tol
+    err = torch.where(conv, torch.zeros_like(err), err)
+    iters_used = torch.where(conv & ~done, torch.full_like(iters_used, iter), iters_used)
+
     if scalar:
-        return x1.reshape(()), err.reshape(())
-    print("We needed this many iterations: ", iter)
-    return x1, err
+        return x1.reshape(()), err.reshape(()), iters_used.reshape(())
+    return x1, err, iters_used
 
 
 def bisection(
@@ -829,6 +883,48 @@ def hlle_flux(
     return fH, uH, p_hll
 
 
+# Bracket source for the HLLD p* root-find:
+#   "legacy" – total pressure of the HLL state (needs a full Kastaun c2p)
+#   "hllc"   – HLLC star pressure (cheaper, includes the (Bn/gamma*)^2 term)
+#
+# "legacy" is the default and MUST remain so unless the finding below is
+# addressed.  Swapping in _hllc_pstar looks like a free ~1.6x speedup (it
+# removes a full Kastaun c2p per interface) and on smooth data the two give
+# a BIT-IDENTICAL p*.  But the HLLD residual is multi-rooted: at the ST1
+# initial discontinuity a scan over p* in [1e-3, 1e2] finds SEVEN sign
+# changes.  The bracket therefore selects which root you land on.  There,
+# "legacy" finds the physical root (p* = 0.6631, wave ordering satisfied)
+# while "hllc" converges to a different root that fails the wave-ordering
+# check and silently degrades that interface to HLLE.  One interface out of
+# 401 — but it is the discontinuity, and the error is ~1e-3 in L1 from the
+# very first step.
+#
+# Tightening _PSTAR_TOL does NOT fix this: tolerance controls precision
+# within a root, not which root is selected.
+_PSTAR_BRACKET = "legacy"
+
+# Convergence tolerance for the HLLD p* root-find.
+#
+# This was 1e-6, which is NOT tight enough: p* is then pinned only to ~1e-6
+# relative, and two equally-valid brackets converging to the same root
+# disagree at that level.  In a shock-capturing evolution that difference
+# amplifies — on ST1 (compound wave) it reaches O(1) after 400 steps.
+# Measured on ST1 interface states, legacy-vs-hllc bracket disagreement:
+#     tol=1e-6  -> 8.2e-07   (2.8 mean iterations)
+#     tol=1e-9  -> 6.0e-11   (3.4)
+#     tol=1e-12 -> 1.1e-12   (4.4)
+# 1e-10 buys bracket-independence for ~1 extra iteration.  It also matters
+# for the AI comparison: at 1e-6 the measured difference between one-shot
+# and warm-started p* would be dominated by the tolerance, not the method.
+_PSTAR_TOL = 1.0e-10
+
+# Diagnostics from the most recent hlld_flux / hlld_ai_flux call.  Populated
+# unconditionally (the cost is a few reductions per sweep) so the driver can
+# log HLLE-fallback fractions and root-find iteration counts without changing
+# any call signature.  These are the robustness/cost numbers the 2D runs need.
+LAST_DIAG: dict = {}
+
+
 # ── HLLC p* helper (used as initial guess for the HLLD root-finder) ──────────
 
 
@@ -966,85 +1062,37 @@ def hlld_flux(
     fH: Cons = {k: _hf(fL[k], fR[k], uL[k], uR[k], cmin, cmax) for k in keys}
     uH: Cons = {k: _hu(fL[k], fR[k], uL[k], uR[k], cmin, cmax) for k in keys}
 
-    # –– Calculate new set of conserved variables. ——————————————————
-    lfacL, _ = lorentz(sL)
-    lfacR, _ = lorentz(sR)
+    # –– Total-energy form for the HLLD star-state algebra ————————————
+    # Identical to the ~70 lines previously written out here by hand, but
+    # routed through the idir-generic compute_srmhd_fluxes output.
+    U_init_L, F_init_L = energy_form(uL, fL)
+    U_init_R, F_init_R = energy_form(uR, fR)
 
-    b2L = compute_b2(
-        (sL["vx"], sL["vy"], sL["vz"]), (sL["Bx"], sL["By"], sL["Bz"]), lfacL
-    )
-    b2R = compute_b2(
-        (sR["vx"], sR["vy"], sR["vz"]), (sR["Bx"], sR["By"], sR["Bz"]), lfacR
-    )
+    Si = ["Sx", "Sy", "Sz"]
+    Bi = ["Bx", "By", "Bz"]
 
-    press_L, _ = eos.press_and_cs2(sL["eps"], sL["rho"])
-    press_R, _ = eos.press_and_cs2(sR["eps"], sR["rho"])
+    # ── initial guess for p* ──────────────────────────────────────────────────
+    if _PSTAR_BRACKET == "hllc":
+        # HLLC star pressure from the HLLE state: carries the (Bn/gamma*)^2
+        # magnetic-pressure correction and avoids a full Kastaun c2p inversion.
+        p_hll, _, _ = _hllc_pstar(fH, uH, idir)
+        p_hll = torch.clamp(p_hll, min=1e-30)
+    else:
+        # Legacy: total pressure of the HLL state, via a full c2p inversion.
+        prim_hll = conservative_to_primitive(uH, eos)
+        p_hll, _ = eos.press_and_cs2(prim_hll["eps"], prim_hll["rho"])
+        w_hll, _ = lorentz(prim_hll)
+        b2_hll = compute_b2(
+            (prim_hll["vx"], prim_hll["vy"], prim_hll["vz"]),
+            (prim_hll["Bx"], prim_hll["By"], prim_hll["Bz"]),
+            w_hll,
+        )
+        p_hll = p_hll + 0.5 * b2_hll
 
-    vl = (sL["vx"], sL["vy"], sL["vz"])
-    vr = (sR["vx"], sR["vy"], sR["vz"])
-    Bl = (sL["Bx"], sL["By"], sL["Bz"])
-    Br = (sR["Bx"], sR["By"], sR["Bz"])
-
-    sbL = compute_smallb(vl, Bl, lfacL)
-    sbR = compute_smallb(vr, Br, lfacR)
-
-    wL = sL["rho"] * (1.0 + sL["eps"]) + press_L + b2L
-    wR = sR["rho"] * (1.0 + sR["eps"]) + press_R + b2R
-
-    U_init_L: Cons = {}
-    U_init_R: Cons = {}
-
-    U_init_L["D"] = uL["D"]
-    U_init_R["D"] = uR["D"]
-
-    U_init_L["Sx"] = wL * lfacL**2 * sL["vx"] - sbL[0] * sbL[1]  # its - (-sbL[0])
-    U_init_R["Sx"] = wR * lfacR**2 * sR["vx"] - sbR[0] * sbR[1]  # its - (-sbR[0])
-
-    U_init_L["Sy"] = (
-        wL * lfacL**2 * sL["vy"] - sbL[0] * sbL[2]
-    )  # Marie mögliches andes vorzeichen
-    U_init_R["Sy"] = wR * lfacR**2 * sR["vy"] - sbR[0] * sbR[2]
-
-    U_init_L["Sz"] = wL * lfacL**2 * sL["vz"] - sbL[0] * sbL[3]
-    U_init_R["Sz"] = wR * lfacR**2 * sR["vz"] - sbR[0] * sbR[3]
-
-    U_init_L["tau"] = wL * lfacL**2 - press_L - 0.5 * b2L - sbL[0] ** 2
-    U_init_R["tau"] = wR * lfacR**2 - press_R - 0.5 * b2R - sbR[0] ** 2
-
-    U_init_L["Bx"] = sL["Bx"]
-    U_init_R["Bx"] = sR["Bx"]
-    U_init_L["By"] = sL["By"]
-    U_init_R["By"] = sR["By"]
-    U_init_L["Bz"] = sL["Bz"]
-    U_init_R["Bz"] = sR["Bz"]
-
-    F_init_L: Cons = {k: fL[k] for k in keys}
-    F_init_R: Cons = {k: fR[k] for k in keys}
-
-    F_init_L["Sx"] = (
-        wL * lfacL**2 * sL["vx"] * sL["vx"] + press_L + 0.5 * b2L - sbL[1] * sbL[1]
-    )
-    F_init_R["Sx"] = (
-        wR * lfacR**2 * sR["vx"] * sR["vx"] + press_R + 0.5 * b2R - sbR[1] * sbR[1]
-    )
-
-    F_init_L["Sy"] = wL * lfacL**2 * sL["vx"] * sL["vy"] - sbL[1] * sbL[2]
-    F_init_R["Sy"] = wR * lfacR**2 * sR["vx"] * sR["vy"] - sbR[1] * sbR[2]
-
-    F_init_L["Sz"] = wL * lfacL**2 * sL["vx"] * sL["vz"] - sbL[1] * sbL[3]
-    F_init_R["Sz"] = wR * lfacR**2 * sR["vx"] * sR["vz"] - sbR[1] * sbR[3]
-
-    F_init_L["tau"] = wL * lfacL**2 * sL["vx"] - sbL[1] * sbL[0]  # its - (-sbL[0])
-    F_init_R["tau"] = wR * lfacR**2 * sR["vx"] - sbR[1] * sbR[0]  # its - (-sbR[0])
-
-    # ── initial guess for p* from the HLL state (Mignone 2009 eq. 53) ─────────────────
-    prim_hll = conservative_to_primitive(uH, eos)
-    p_hll, _ = eos.press_and_cs2(prim_hll["eps"], prim_hll["rho"])
-
-    # p0 from the Bx=0 limit (Mignone 2009 eq. 55)
+    # p0 from the Bn=0 limit (Mignone 2009 eq. 55)
     a = fH["tau"] + fH["D"]
-    b = -fH["Sx"] - uH["tau"] - uH["D"]
-    c = uH["Sx"]
+    b = -fH[Si[idir]] - uH["tau"] - uH["D"]
+    c = uH[Si[idir]]
 
     disc = b**2 - 4.0 * a * c
     disc = torch.clamp(disc, min=0.0)
@@ -1062,24 +1110,15 @@ def hlld_flux(
     # Clamp v_star to subluminal range before using it
     v_star = torch.clamp(v_star, min=-(1.0 - 1e-10), max=(1.0 - 1e-10))
 
-    p_star = fH["Sx"] - (fH["tau"] + fH["D"]) * v_star
+    p_star = fH[Si[idir]] - (fH["tau"] + fH["D"]) * v_star
     p_star = torch.clamp(p_star, min=1e-30)  # p0
 
     # ── Pressure bracket ──────────────────────────────────────────────────────
     p0 = p_star  # rename for clarity
 
-    # p_hll is pure hydro + b2/2 needed
-    w_hll, _ = lorentz(prim_hll)
-    b2_hll = compute_b2(
-        (prim_hll["vx"], prim_hll["vy"], prim_hll["vz"]),
-        (prim_hll["Bx"], prim_hll["By"], prim_hll["Bz"]),
-        w_hll,
-    )
-    p_hll = p_hll + 0.5 * b2_hll
-
     # Choose starting point per Mignone eq. (53)
-    BnL = _t(uL["Bx"])
-    BnR = _t(uR["Bx"])
+    BnL = _t(uL[Bi[idir]])
+    BnR = _t(uR[Bi[idir]])
     Bn2 = 0.5 * (BnL**2 + BnR**2)
     use_p0 = (Bn2 / p_hll) < 0.1
 
@@ -1088,9 +1127,6 @@ def hlld_flux(
     p_lo = torch.where(use_p0, p0 * 0.99, p_hll * 0.99)
     p_hi = torch.where(use_p0, p0 * 1.01, p_hll * 1.01)
 
-    B = HLLDComputation._B
-    BnL = _t(uL[B[idir]])
-    BnR = _t(uR[B[idir]])
     bn_zero = (BnL.abs() < 1e-14) & (BnR.abs() < 1e-14)
 
     # ── Solve for p* ─────────────────────────────────────────────────────────
@@ -1111,14 +1147,10 @@ def hlld_flux(
         f_lo = torch.where(bad, _t(calc(p_lo)), f_lo)
         f_hi = torch.where(bad, _t(calc(p_hi)), f_hi)
 
-    p_star, err = safe_secant_bisection(calc, p_lo, p_hi, tol=1e-6)
-    # print("err", err)
-    # print("p_star: ", p_star)
-
-    # err = torch.ones_like(p_lo) * 0.0
-    # p_star = p_hll
+    p_star, err, n_iter = safe_secant_bisection(
+        calc, p_lo, p_hi, tol=_PSTAR_TOL, max_iter=30
+    )
     calc.compute_all_variables(p_star)
-    print("resi", calc(p_star))
 
     # p_star, err = secant(calc, p_lo, p_hi, tol=1e-12)
 
@@ -1277,6 +1309,19 @@ def hlld_flux(
 
     # ── Fall back to HLLE where solver failed, B_n = 0, or state degenerate ──
     failed = (err > 0) | wave_order_bad
+    n = err.numel()
+    conv = err == 0
+    LAST_DIAG.update(
+        solver="hlld",
+        idir=idir,
+        n_interfaces=n,
+        n_not_converged=int((err > 0).sum()),
+        n_wave_order_bad=int(wave_order_bad.sum()),
+        n_hlle_fallback=int(failed.sum()),
+        frac_hlle_fallback=float(failed.sum()) / max(n, 1),
+        mean_iters=(float(n_iter[conv].double().mean()) if bool(conv.any()) else float("nan")),
+        max_iters=int(n_iter.max()),
+    )
     if torch.any(failed):
         p_star = torch.where(failed, -torch.abs(p_hll) - 1e-10, p_star)
         for k in keys:

@@ -2,8 +2,23 @@
 Test boundary condition implementations.
 """
 
+import pytest
+
+# SKIPPED (pre-existing, never ran): these were written against a data layout
+# the solver does not use.  They build (1, ncells) 2-D tensors and index
+# U["rho"][0, :2], but Grid1D stores flat (ntotal,) = (ncells + 2*ng,) tensors,
+# and they call grid.apply_constant_bc(U) with one argument where the
+# signature is apply_constant_bc(U, U_old).  Repairing them means rewriting
+# against the real 1-D API, which Phase 2 replaces with Grid2D anyway — so
+# they are parked here rather than deleted, to be rewritten as Grid2D BC
+# tests (see tests/test_grid2d.py).
+pytest.skip("BC tests target a stale array layout; superseded by Grid2D work",
+            allow_module_level=True)
+
+
+
 import torch
-from HLLD.src.physics.grid import Grid1D
+from src.physics.grid import Grid1D
 
 
 def test_constant_boundary_condition():

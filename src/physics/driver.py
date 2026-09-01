@@ -81,10 +81,16 @@ def compute_dt(
     cfl: float,
     ng: int,
     ncells: int,
+    speed_of_light: bool = False,
 ) -> torch.Tensor:
     """
     Estimate maximum stable time-step via CFL condition.
     Uses the fast magnetosonic speed in the physical domain.
+
+    speed_of_light=True restores the old hardcoded ``dt = cfl*dx`` (max
+    signal speed pinned to c).  Returns a 0-d tensor on the same device and
+    dtype as the input, so the caller does not silently get a float64 CPU
+    tensor back from a GPU run.
     """
     phys = slice(ng, ng + ncells)
     rho = prims["rho"][phys]
@@ -109,9 +115,16 @@ def compute_dt(
     v_fast = torch.sqrt(torch.clamp(v02, min=0.0, max=1.0))
     max_speed = (vx.abs() + v_fast).max()
     max_speed = torch.clamp(max_speed, min=1e-14)
-    max_speed = torch.ones_like(max_speed)
 
-    return torch.tensor(cfl * dx) / max_speed
+    if speed_of_light:
+        # Legacy behaviour: assume the max signal speed is c = 1, i.e.
+        # dt = cfl*dx.  Safe in SR (all speeds <= c) but needlessly small,
+        # and it silently discards the wave speed computed above.  In 2D the
+        # CFL limit must combine both directions, so this cannot be the
+        # default there; kept as a switch for bisecting scheme problems.
+        max_speed = torch.ones_like(max_speed)
+
+    return (cfl * dx) / max_speed
 
 
 # ── RHS: compute dU/dt ────────────────────────────────────────────────────────
@@ -125,6 +138,7 @@ def compute_rhs(
     grid: Grid1D,
     eos: hybrid_eos,
     flux_fn=hlld_flux,
+    limiter: str = "pcm",
 ) -> dict:
     """
     Compute the spatial RHS  −(F_{i+1/2} − F_{i-1/2}) / dx
@@ -132,8 +146,13 @@ def compute_rhs(
 
     Parameters
     ----------
-    solver : "hlld" | "hlle"
+    flux_fn : callable
         Riemann solver used at each interface.
+    limiter : "pcm" | "minmod" | "mc"
+        Reconstruction.  NOTE the default is "pcm" (piecewise constant,
+        1st order) purely to preserve historical behaviour — this was
+        hardcoded here, so every published 1D run so far is 1st order
+        despite the module docstring claiming PLM.  Set it from config.
 
     Returns a dict of (ntotal,) tensors where only the physical
     region [ng : ng+N] is meaningful (ghosts are zero).
@@ -142,10 +161,8 @@ def compute_rhs(
     ncells = grid.ncells
     dx = grid.dx
 
-    # flux_fn = _SOLVERS.get(solver, hlld_flux)
-
     # Reconstruct at interfaces (ncells+1 of them)
-    primL, primR = get_interface_states(prims, ng, ncells, limiter="pcm")
+    primL, primR = get_interface_states(prims, ng, ncells, limiter=limiter)
 
     # Riemann flux at each interface
     fHLLD, _, _ = flux_fn(primL, primR, eos, idir=0)
@@ -181,6 +198,7 @@ def rk2_step(
     atmo_rho: float,
     bc: str = "outflow",
     flux_fn=hlld_flux,
+    limiter: str = "pcm",
 ) -> tuple[dict, dict]:
     """
     One SSP-RK2 (Heun) step:
@@ -198,7 +216,7 @@ def rk2_step(
         return grid.apply_periodic_bc(U)
 
     # Stage 1
-    k1 = compute_rhs(cons, prims, grid, eos, flux_fn)
+    k1 = compute_rhs(cons, prims, grid, eos, flux_fn, limiter)
     cons1 = {k: cons[k] + dt * k1[k] for k in _CONS_KEYS}
     cons1 = _bc(cons1, cons)
     # Enforce Bx = constant (copy from initial)
@@ -208,7 +226,7 @@ def rk2_step(
     prims1 = _bc(prims1, prims)
 
     # Stage 2
-    k2 = compute_rhs(cons1, prims1, grid, eos, flux_fn)
+    k2 = compute_rhs(cons1, prims1, grid, eos, flux_fn, limiter)
     cons_new = {k: 0.5 * (cons[k] + cons1[k] + dt * k2[k]) for k in _CONS_KEYS}
     cons_new = _bc(cons_new, cons)
     cons_new["Bx"] = cons["Bx"].clone()
@@ -218,52 +236,10 @@ def rk2_step(
     return cons_new, prims_new
 
 
-def rk2_midpoint_step(
-    cons: dict,
-    prims: dict,
-    grid: Grid1D,
-    eos: hybrid_eos,
-    dt: torch.Tensor,
-    atmo_rho: float,
-    bc: str = "outflow",
-    solver: str = "hlld",
-) -> tuple[dict, dict]:
-    """
-    One RK2 midpoint step:
-        U^(1/2) = U^n + 0.5*dt * L(U^n)
-        U^{n+1} = U^n + dt * L(U^(1/2))
-
-    Returns updated (cons, prims).
-    """
-
-    def _bc(U, U_old):
-        if bc == "outflow":
-            return grid.apply_outflow_bc(U)
-        elif bc == "constant":
-            print("constant")
-            return grid.apply_constant_bc(U, U_old)
-        return grid.apply_periodic_bc(U)
-
-    # Stage 1 — half step
-    k1 = compute_rhs(cons, prims, grid, eos, solver)
-    cons1 = {k: cons[k] + 0.5 * dt * k1[k] for k in _CONS_KEYS}
-    cons1 = _bc(cons1, cons)
-    cons1["Bx"] = cons["Bx"].clone()
-    prims1 = cons_to_prims_grid(cons1, eos, atmo_rho)
-    prims1 = _bc(prims1, prims)
-
-    # Stage 2 — full step using midpoint RHS
-    k2 = compute_rhs(cons1, prims1, grid, eos, solver)
-    cons_new = {k: cons[k] + dt * k2[k] for k in _CONS_KEYS}
-    cons_new = _bc(cons_new, cons)
-    cons_new["Bx"] = cons["Bx"].clone()
-    prims_new = cons_to_prims_grid(cons_new, eos, atmo_rho)
-    prims_new = _bc(prims_new, prims)
-
-    return cons_new, prims_new
-
-
-# ── Output ────────────────────────────────────────────────────────────────────
+# NOTE: rk2_midpoint_step was removed here.  It was dead code and broken:
+# it passed its `solver: str` argument into compute_rhs's `flux_fn` slot,
+# which expects a callable, so it would have raised on first use.  SSP-RK3
+# for the 2D driver is implemented in driver2d.py instead.
 
 
 def save_snapshot(
@@ -406,8 +382,16 @@ def run(cfg: dict):
         f"Starting {problem}  ncells={grid.ncells}  t_end={t_end}  solver={solver}  device={device}"
     )
 
+    # Reconstruction + dt options.  Defaults reproduce the historical
+    # behaviour exactly (1st-order PCM, dt = cfl*dx) so existing configs are
+    # unaffected; set them in the `run:` block to opt in.
+    limiter = rc.get("limiter", "pcm")
+    dt_c = bool(rc.get("dt_speed_of_light", True))
+
     while t < t_end:
-        dt = compute_dt(prims, eos, grid.dx, cfl, grid.ng, grid.ncells).item()
+        dt = compute_dt(
+            prims, eos, grid.dx, cfl, grid.ng, grid.ncells, speed_of_light=dt_c
+        ).item()
         dt = min(dt, t_end - t)
         if dt <= 0.0:
             break
@@ -425,6 +409,7 @@ def run(cfg: dict):
             torch.tensor(dt, dtype=dtype, device=device),
             atmo_rho,
             flux_fn=flux_fn,
+            limiter=limiter,
         )
         t += dt
         step += 1

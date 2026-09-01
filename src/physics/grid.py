@@ -71,7 +71,6 @@ class Grid1D:
         """
         ng = self.ng
         N = self.ncells
-        print("N = ", N)
         for k, v in U.items():
             v_old = U_old[k]
             # left ghosts  ← initial left ghost values
