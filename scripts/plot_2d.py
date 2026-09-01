@@ -1,4 +1,4 @@
-"""Plot magnetic-rotor snapshots (density, pressure, |v|, magnetic pressure)."""
+"""Plot 2D snapshots (density, pressure, |v|, magnetic pressure, By, div B)."""
 import argparse, glob, os, sys
 import numpy as np
 import matplotlib
@@ -22,6 +22,9 @@ def main():
     ap.add_argument("rundir")
     ap.add_argument("--snap", default="fin")
     ap.add_argument("--out", default=None)
+    ap.add_argument("--title", default=None,
+                    help="problem name for the figure title; inferred from "
+                         "the run directory when omitted")
     a = ap.parse_args()
 
     f = os.path.join(a.rundir, f"snap_{a.snap}.npz")
@@ -40,10 +43,15 @@ def main():
     dv = np.abs(d["divB"])
     panel(axs[1, 2], x, y, np.maximum(dv, 1e-20), "|div B|", cmap="cividis", log=True)
 
-    fig.suptitle(f"Magnetized rotor, t = {t:.3f}   ({rho.shape[0]}^2, "
+    name = a.title
+    if name is None:
+        base = os.path.basename(os.path.normpath(a.rundir))
+        name = ("Orszag-Tang vortex" if base.startswith(("ot", "orszag"))
+                else "Magnetized rotor")
+    fig.suptitle(f"{name}, t = {t:.3f}   ({rho.shape[0]}^2, "
                  f"constrained transport)", fontsize=13)
     fig.tight_layout()
-    out = a.out or os.path.join(a.rundir, f"rotor_{a.snap}.png")
+    out = a.out or os.path.join(a.rundir, f"snap_{a.snap}.png")
     fig.savefig(out, dpi=120)
     print("wrote", out)
 
@@ -58,14 +66,20 @@ def main():
             ax2[0].semilogy(tt, [float(r["divB_max"]) for r in rows], label="max")
             ax2[0].semilogy(tt, [float(r["divB_l2"]) for r in rows], label="L2")
             ax2[0].set_title("div B"); ax2[0].legend(); ax2[0].set_xlabel("t")
-            ax2[1].semilogy(tt, [float(r["sym_err"]) for r in rows])
-            ax2[1].set_title("pi-rotation symmetry error"); ax2[1].set_xlabel("t")
+            sy = [float(r["sym_err"]) for r in rows]
+            if any(v == v for v in sy):            # NaN for problems without it
+                ax2[1].semilogy(tt, sy)
+                ax2[1].set_title("pi-rotation symmetry error")
+            else:
+                ax2[1].semilogy(tt, [float(r["divB_l2"]) for r in rows])
+                ax2[1].set_title("div B (L2)")
+            ax2[1].set_xlabel("t")
             ax2[2].plot(tt, [float(r["rho_max"]) for r in rows], label="rho_max")
             ax2[2].plot(tt, [float(r["W_max"]) for r in rows], label="W_max")
             ax2[2].set_title("extrema"); ax2[2].legend(); ax2[2].set_xlabel("t")
             for a_ in ax2: a_.grid(alpha=0.3)
             fig2.tight_layout()
-            out2 = os.path.join(a.rundir, "rotor_diagnostics.png")
+            out2 = os.path.join(a.rundir, "diagnostics.png")
             fig2.savefig(out2, dpi=120)
             print("wrote", out2)
 
