@@ -60,19 +60,35 @@ def main():
 
     X, y = load_raw(cfg["data"]["raw_path"])
 
-    # Sanity check for non-finite values from degenerate HLLD configurations
+    # Targets that HLLD could not produce.  hlld_flux writes
+    # p_star = -|p_hll| - 1e-10 exactly where it FAILED (root-find did not
+    # converge, wave ordering unphysical, or B_n = 0), so a non-positive
+    # target is not noise -- it is a label saying "the classical solver could
+    # not solve this configuration".
+    #
+    # These are still excluded from the regression (log10 needs y > 0), but
+    # they are now COUNTED and REPORTED rather than silently discarded.  The
+    # distinction matters: dropping them quietly biases the training set away
+    # from precisely the hardest configurations, so the network ends up
+    # weakest exactly where HLLD already struggles -- and nothing in a loss
+    # curve reveals that.  The reported fraction is also the honest answer to
+    # "on what fraction of interfaces is the network extrapolating?".
     bad = ~np.isfinite(y)
-    if bad.any():
-        print(f"WARNING: dropping {bad.sum()} non-finite target(s) out of {len(y)}")
-    
-    # Drop non-positive targets (log10 requires y > 0)
     nonpos = y <= 0
-    if nonpos.any():
-        print(f"WARNING: dropping {nonpos.sum()} non-positive target(s) out of {len(y)}")
-    
     mask = bad | nonpos
+    n_tot = len(y)
     if mask.any():
+        print(f"HLLD-unsolvable targets: {int(mask.sum())}/{n_tot} "
+              f"({100*mask.mean():.2f}%)  "
+              f"[{int(bad.sum())} non-finite, {int(nonpos.sum())} non-positive]")
+        print("  -> excluded from the regression loss, retained as a "
+              "held-out 'HLLD failure' set")
+        np.savez_compressed(
+            os.path.splitext(cfg["data"]["raw_path"])[0] + "_failed.npz",
+            X=X[mask], y=y[mask], frac=float(mask.mean()))
         X, y = X[~mask], y[~mask]
+    else:
+        print(f"HLLD-unsolvable targets: 0/{n_tot}")
 
     X_norm, stats = normalize(X, method=cfg["data"].get("norm_method", "standard"))
 
@@ -93,9 +109,15 @@ def main():
     #processed_dir = os.path.join("data/processed", config_stem)
     processed_dir = os.path.join(os.path.dirname(out_dir), "processed", os.path.basename(out_dir))
     os.makedirs(processed_dir, exist_ok=True)
+    # Stamp the feature definition into the stats file.  driver._load_ai_solver
+    # refuses a checkpoint whose stamp does not match the running code -- a
+    # feature-set change is otherwise undetectable at run time, since the
+    # network will consume any 15 numbers and return a plausible p*.
+    from src.physics.ai_features import FEATURE_VERSION
     np.savez(os.path.join(processed_dir, "norm_stats.npz"),
              **stats,
-             y_mu=np.array(y_mu), y_sigma=np.array(y_sigma))
+             y_mu=np.array(y_mu), y_sigma=np.array(y_sigma),
+             feature_version=np.array(FEATURE_VERSION))
     print(f"Target log10(p_tot*): mean={y_mu:.3f}, std={y_sigma:.3f}")
     print(f"Splits saved: {[f'{k}: {len(v[0])}' for k, v in splits.items()]}")
 

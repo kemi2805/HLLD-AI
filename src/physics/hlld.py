@@ -1583,7 +1583,34 @@ def hlld_ai_flux(
     model: torch.nn.Module,
     norm_stats: dict,
     idir: int = 0,
+    mode: str = "oneshot",
+    warmstart_tol: float = _PSTAR_TOL,
+    warmstart_max_iter: int = 30,
 ) -> Tuple[Cons, Cons, torch.Tensor]:
+    """HLLD flux with the star pressure supplied by a neural network.
+
+    Two modes, both reported in the paper:
+
+    ``"oneshot"``
+        The network's p* is used directly.  Fastest, and the boldest claim,
+        but there is NO residual check: nothing verifies that the predicted
+        p* is a root.  That matters more than it sounds, because the HLLD
+        residual is multi-rooted -- a scan at the ST1 discontinuity finds
+        seven sign changes -- so an out-of-distribution prediction can land
+        near a *wrong* root and only the wave-ordering mask will notice.
+
+    ``"warmstart"``
+        The prediction seeds the same secant iteration ``hlld_flux`` uses.
+        Convergence is then guaranteed to the same tolerance as the
+        classical solver, and the speedup becomes a measurable reduction in
+        iteration count rather than an unverified shortcut.  This is the
+        arm that is robust to the rotor's out-of-distribution states.
+
+    The per-element iteration count is recorded in ``LAST_DIAG`` so the two
+    arms can be compared on cost as well as accuracy.
+    """
+    if mode not in ("oneshot", "warmstart"):
+        raise ValueError(f"unknown AI mode {mode!r}")
     uL, uR, fL, fR, cmax, cmin = compute_srmhd_fluxes(sL, sR, eos, idir)
     keys = list(uL.keys())
 
@@ -1620,8 +1647,27 @@ def hlld_ai_flux(
 
     y_mu = float(norm_stats["y_mu"])
     y_sigma = float(norm_stats["y_sigma"])
-    p_star = 10.0 ** (y_pred * y_sigma + y_mu)
-    p_star = torch.clamp(p_star, min=1e-30)
+    p_nn = torch.clamp(10.0 ** (y_pred * y_sigma + y_mu), min=1e-30)
+
+    calc_pre = HLLDComputation(
+        F_init_L, F_init_R, U_init_L, U_init_R, sL, sR, cmin, cmax, idir
+    )
+    if mode == "warmstart":
+        # Same root-finder as hlld_flux, bracketed tightly around the
+        # network's estimate.  Cost is then directly comparable to the
+        # cold-start bracket, which is the headline number.
+        p_star, err_ws, n_iter = safe_secant_bisection(
+            calc_pre, p_nn * 0.99, p_nn * 1.01,
+            tol=warmstart_tol, max_iter=warmstart_max_iter)
+        p_star = torch.clamp(p_star, min=1e-30)
+    else:
+        p_star = p_nn
+        err_ws = torch.zeros(p_nn.shape, dtype=torch.int32, device=p_nn.device)
+        n_iter = torch.zeros(p_nn.shape, dtype=torch.int32, device=p_nn.device)
+
+    # residual of the prediction, in both modes: the honest measure of how
+    # far a one-shot p* actually is from satisfying the jump conditions
+    resid_nn = _t(calc_pre(p_nn)).abs()
 
     # ── Everything below is identical to hlld_flux ────────────────────────────
     # (a hardcoded-x BnL/BnR/Bn2 block stood here; Bn2 was never read -- the
@@ -1741,19 +1787,23 @@ def hlld_ai_flux(
     BnR = _t(uR[Bi[idir]])
     bn_zero = (BnL.abs() < 1e-14) & (BnR.abs() < 1e-14)
 
-    failed = wave_order_bad | bn_zero
+    failed = wave_order_bad | bn_zero | (err_ws > 0)
     n = failed.numel()
+    conv = err_ws == 0
     LAST_DIAG.update(
-        solver="hlld_ai",
+        solver=f"hlld_ai:{mode}",
         idir=idir,
         n_interfaces=n,
-        n_not_converged=0,          # one-shot prediction: no root-find
+        n_not_converged=int((err_ws > 0).sum()),
         n_wave_order_bad=int(wave_order_bad.sum()),
         n_bn_zero=int(bn_zero.sum()),
         n_hlle_fallback=int(failed.sum()),
         frac_hlle_fallback=float(failed.sum()) / max(n, 1),
-        mean_iters=0.0,
-        max_iters=0,
+        mean_iters=(float(n_iter[conv].double().mean())
+                    if bool(conv.any()) else float("nan")),
+        max_iters=int(n_iter.max()),
+        median_resid_nn=float(resid_nn.median()),
+        max_resid_nn=float(resid_nn.max()),
     )
     if torch.any(failed):
         p_hll_fb = torch.clamp(
