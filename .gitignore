@@ -24,8 +24,10 @@ checkpoints/
 # Plot images (regeneratable)
 *.png
 
-# Data (if large/generated)
-data/
+# Data (if large/generated).  Root-anchored: an unanchored "data/" also
+# matches src/data/, which silently kept the entire training-data pipeline
+# (generate.py, preprocess.py, dataset.py) out of version control.
+/data/
 
 # Run logs
 logs/
