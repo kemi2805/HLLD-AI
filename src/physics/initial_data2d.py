@@ -125,24 +125,44 @@ def magnetic_rotor(grid, eos, r0: float = 0.1, rho_in: float = 10.0,
     return prims, Az
 
 
-def orszag_tang(grid, eos, gamma: float = 5.0 / 3.0, v0: float = 0.99,
-                B0: float | None = None, press: float = 1.0,
-                rho: float = 1.0):
-    """Relativistic Orszag-Tang vortex on a periodic unit square.
+def orszag_tang(grid, eos, v_max: float = 0.99, B0: float | None = None,
+                press: float | None = None, rho: float | None = None):
+    """Relativistic Orszag-Tang vortex on the periodic unit square.
 
-    Smooth initial data whose vector potential
-    ``Az = B0*(cos(4 pi x)/(4 pi) + cos(2 pi y)/(2 pi))`` gives
-    ``B = B0*(-sin(2 pi y), sin(4 pi x), 0)``.
+    Standard relativistic parameters (Del Zanna et al. 2007; also Beckwith &
+    Stone 2011), with an ideal gas of Gamma = 4/3 supplied by the caller:
+
+        rho = 25/(36 pi),   p = 5/(12 pi),   B0 = 1/sqrt(4 pi)
+        v   = (v_max/sqrt2) * (-sin 2 pi y,  sin 2 pi x,  0)
+        B   =  B0           * (-sin 2 pi y,  sin 4 pi x,  0)
+
+    ``v_max`` is the peak speed (0.99, i.e. W ~ 7), reached where both sines
+    saturate; the per-component amplitude is therefore ``v_max/sqrt2``.
+
+    Unlike the rotor this is smooth, so it isolates a different failure
+    mode: it is the test that exercises the PERIODIC staggered boundary,
+    where the faces at ``ng`` and ``ng+n`` are the same physical face and
+    div(B) drifts at the seam if they are allowed to differ.
+
+    The vector potential ``Az = B0*(cos(4 pi x)/(4 pi) + cos(2 pi y)/(2 pi))``
+    reproduces B exactly under the discrete curl, so div(B) = 0 to machine
+    precision at t = 0.
     """
     if B0 is None:
-        B0 = 1.0
+        B0 = 1.0 / math.sqrt(4.0 * math.pi)
+    if rho is None:
+        rho = 25.0 / (36.0 * math.pi)
+    if press is None:
+        press = 5.0 / (12.0 * math.pi)
+
+    amp = v_max / math.sqrt(2.0)
     X, Y = grid.X, grid.Y
     zeros = torch.zeros(grid.shape, dtype=torch.float64, device=grid.device)
     prims = {
         "rho": torch.full_like(zeros, rho),
         "p": torch.full_like(zeros, press),
-        "vx": -v0 * torch.sin(2 * math.pi * Y) / 2.0,
-        "vy": v0 * torch.sin(2 * math.pi * X) / 2.0,
+        "vx": -amp * torch.sin(2 * math.pi * Y),
+        "vy": amp * torch.sin(2 * math.pi * X),
         "vz": zeros.clone(),
         "Bx": -B0 * torch.sin(2 * math.pi * Y),
         "By": B0 * torch.sin(4 * math.pi * X),

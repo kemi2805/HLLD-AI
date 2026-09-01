@@ -389,3 +389,75 @@ def test_zero_normal_field_does_not_overflow():
     for k, v in Fy.items():
         assert torch.isfinite(v).all(), f"non-finite flux in {k}"
         assert float(v.abs().max()) < 1e6, f"{k} overflowed to {float(v.abs().max()):.2e}"
+
+
+# ── Orszag-Tang: the periodic staggered seam ─────────────────────────────
+
+
+def _ot_state(g, eos):
+    from src.physics.driver2d import prims_to_cons_2d, sync_state
+    from src.physics.initial_data2d import orszag_tang
+    from src.physics.state import EVOLVED_KEYS, State2D
+
+    prims, Az = orszag_tang(g, eos)
+    Bxf, Byf = b_from_potential(Az, g.dx, g.dy)
+    cons_all = prims_to_cons_2d(prims, g)
+    st = State2D(cons={k: cons_all[k] for k in EVOLVED_KEYS},
+                 Bxf=Bxf, Byf=Byf, prims=prims)
+    return sync_state(st, g, eos, "periodic", "periodic")
+
+
+def test_orszag_tang_initial_data():
+    """Standard relativistic OT parameters and an exactly div-free start."""
+    import math
+    from src.physics.eos import hybrid_eos
+    from src.physics.initial_data2d import orszag_tang
+
+    eos = hybrid_eos(K=0.0, gamma=4.0 / 3.0, gamma_th=4.0 / 3.0)
+    g = Grid2D(0.0, 1.0, 64, 0.0, 1.0, 64, ng=2)
+    prims, Az = orszag_tang(g, eos)
+    ph = g.phys
+    assert float(prims["rho"][0, 0]) == pytest.approx(25 / (36 * math.pi))
+    assert float(prims["p"][0, 0]) == pytest.approx(5 / (12 * math.pi))
+    v = torch.sqrt(prims["vx"][ph] ** 2 + prims["vy"][ph] ** 2)
+    assert 0.95 < float(v.max()) <= 0.99          # W ~ 7
+    Bxf, Byf = b_from_potential(Az, g.dx, g.dy)
+    assert float(div_b(Bxf, Byf, g.dx, g.dy)[ph].abs().max()) < 1e-13
+
+
+def test_orszag_tang_periodic_seam_stays_divergence_free():
+    """div(B) must not drift at the periodic seam.
+
+    This is the specific reason Orszag-Tang is in the suite.  Under
+    periodicity the staggered faces at ``ng`` and ``ng+n`` are the SAME
+    physical face; if they are merely *numerically close* rather than kept
+    identical, div(B) develops a seam-localised error that the rotor (with
+    outflow boundaries) would never reveal.
+    """
+    from src.physics.driver2d import compute_dt_2d, rk_step_ct
+    from src.physics.eos import hybrid_eos
+
+    eos = hybrid_eos(K=0.0, gamma=4.0 / 3.0, gamma_th=4.0 / 3.0)
+    g = Grid2D(0.0, 1.0, 32, 0.0, 1.0, 32, ng=2)
+    st = _ot_state(g, eos)
+    ng, nx, ny = g.ng, g.nx, g.ny
+
+    for _ in range(10):
+        dt = compute_dt_2d(st.prims, g, eos, 0.25)
+        st, _ = rk_step_ct(st, g, eos, dt, scheme="rk3",
+                           bc_x="periodic", bc_y="periodic")
+
+    # the seam faces must remain bit-identical, not merely close
+    assert torch.equal(st.Bxf[ng], st.Bxf[ng + nx]), "x seam faces diverged"
+    assert torch.equal(st.Byf[:, ng], st.Byf[:, ng + ny]), "y seam faces diverged"
+
+    d = div_b(st.Bxf, st.Byf, g.dx, g.dy)[g.phys]
+    Bmax = max(float(st.Bxf.abs().max()), float(st.Byf.abs().max()))
+    assert float(d.abs().max()) / (Bmax / g.dx) < 1e-13
+
+    # and the error must not be concentrated at the seam
+    edge = float(d[0, :].abs().max())
+    bulk = float(d[nx // 4:3 * nx // 4, :].abs().max())
+    assert edge <= max(20 * bulk, 1e-18), (
+        f"div(B) is seam-localised: edge {edge:.2e} vs bulk {bulk:.2e}"
+    )
