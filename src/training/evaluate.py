@@ -20,7 +20,7 @@ def evaluate(cfg: dict):
 
     # Load model
     model = PressureNet(
-        n_input=cfg["model"].get("n_input", 15),
+        n_input=cfg["model"].get("n_input", 19),
         hidden=cfg["model"].get("hidden", [128, 128, 64]),
         activation=cfg["model"].get("activation", "silu"),
     ).to(device)

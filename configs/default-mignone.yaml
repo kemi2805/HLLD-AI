@@ -19,9 +19,11 @@
 data:
   n_samples:  10000000
   batch_size: 1000000
+  n_angles: 1
+  
   seed: 43
-  raw_path: data/raw/dataset_mignone.npz
-  split_dir: data/splits_mignone
+  raw_path: data/raw/dataset_mignone_rankine.npz
+  split_dir: data/splits_mignone_rankine
   norm_method: standard    # standard | minmax | log
 
   ranges:
@@ -36,7 +38,7 @@ data:
     press:   [0.1, 1.0]
 
     # Bx shared between L and R (divergence-free); covers 0.5..10.0
-    Bx:     [0.49, 0.51] #[0.5, 10.0]
+    Bx:     [0.01, 1.01] #[0.5, 10.0]
 
     # Transverse B magnitude sqrt(By^2+Bz^2):
     # ST1: |Bt|=1.0, ST2: up to ~0.76, ST3: |Bt|=9.90, ST4: |Bt|=6.32
@@ -54,19 +56,25 @@ eos:
 
 model:
   n_input: 15
-  hidden: [256, 256, 256, 128, 64]
-  activation: tanh
+  dropout: 0.00
+  #hidden: [256, 256, 256, 128, 64]
+  #activation: tanh
+  hidden: [256, 256, 256, 256, 128, 64]
+  activation: silu  # or gelu — smoother gradient than tanh for regression
 
 training:
   epochs: 300
-  batch_size: 8056 #4028
-  weight_decay: 5.0e-6
+  batch_size: 4096
+  weight_decay: 1.0e-4
   lambda_phys: 0.0
-  lr_patience: 18
+  lr_patience: 10
   lr: 3.0e-3
   lr_min: 1.0e-7
   lr_max: 5.0e-3
   lr_step_size_up: 7
   lr_step_size_down: 15
+  T_max: 300
+  eta_min: 1.0e-6
+
 
   device: mps       # mps (Apple Silicon) | cuda | cpu

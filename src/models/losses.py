@@ -41,3 +41,29 @@ class PhysicsInformedLoss(nn.Module):
         # TODO: add more physics constraints as needed
 
         return data_loss + self.lambda_phys * positivity_penalty
+
+
+class RelativeMSELoss(nn.Module):
+    """
+    Relative MSE loss in normalized log10(p*) space.
+
+    Penalises relative errors rather than absolute ones, so weak and
+    strong shock cases are weighted equally regardless of pressure magnitude.
+
+    eps: small constant to avoid division by zero for near-zero targets.
+    """
+    def __init__(self, eps: float = 1e-6):
+        super().__init__()
+        self.eps = eps
+
+    def forward(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        return torch.mean(((pred - target) / (target.abs() + self.eps)) ** 2)
+    
+class PressureLoss(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.mse = nn.MSELoss()
+
+    def forward(self, pred, target):
+        return self.mse(pred, target)
+

@@ -15,7 +15,9 @@ venv/
 # Output directories
 output*/
 garbage_output/
-ken_output_new/
+ken_output*/
+Self-Sim/ken_output*/
+test_exact/
 results/
 checkpoints/
 

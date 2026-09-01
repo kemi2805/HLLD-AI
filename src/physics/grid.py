@@ -14,12 +14,13 @@ import torch
 
 
 class Grid1D:
-    def __init__(self, xmin: float, xmax: float, ncells: int,
-                 ng: int = 2, device: str = "cpu"):
-        self.xmin   = xmin
-        self.xmax   = xmax
-        self.ncells = ncells          # number of physical cells
-        self.ng     = ng              # number of ghost cells on each side
+    def __init__(
+        self, xmin: float, xmax: float, ncells: int, ng: int = 2, device: str = "cpu"
+    ):
+        self.xmin = xmin
+        self.xmax = xmax
+        self.ncells = ncells  # number of physical cells
+        self.ng = ng  # number of ghost cells on each side
         self.device = device
 
         self.dx = (xmax - xmin) / ncells
@@ -27,7 +28,7 @@ class Grid1D:
 
         # Cell-centre coordinates (including ghosts)
         i = torch.arange(self.ntotal, dtype=torch.float64, device=device)
-        self.x = xmin + (i - ng + 0.5) * self.dx   # shape (ntotal,)
+        self.x = xmin + (i - ng + 0.5) * self.dx  # shape (ntotal,)
 
         # Slice objects for physical region
         self.phys = slice(ng, ng + ncells)
@@ -45,19 +46,36 @@ class Grid1D:
         Works in-place and returns U.
         """
         ng = self.ng
-        N  = self.ncells
+        N = self.ncells
         for k, v in U.items():
             # left ghosts  ← first physical cell
-            v[:ng]        = v[ng].unsqueeze(0).expand(ng, *v.shape[1:])
+            v[:ng] = v[ng].unsqueeze(0).expand(ng, *v.shape[1:])
             # right ghosts ← last physical cell
-            v[ng + N:]    = v[ng + N - 1].unsqueeze(0).expand(ng, *v.shape[1:])
+            v[ng + N :] = v[ng + N - 1].unsqueeze(0).expand(ng, *v.shape[1:])
         return U
 
     def apply_periodic_bc(self, U: dict) -> dict:
         """Periodic boundary conditions."""
         ng = self.ng
-        N  = self.ncells
+        N = self.ncells
         for k, v in U.items():
-            v[:ng]     = v[N:N + ng]
-            v[N + ng:] = v[ng:2 * ng]
+            v[:ng] = v[N : N + ng]
+            v[N + ng :] = v[ng : 2 * ng]
+        return U
+
+    def apply_constant_bc(self, U: dict, U_old: dict) -> dict:
+        """
+        Constant boundary conditions.
+        Holds ghost cells fixed at their initial/reference values from U_old.
+        Works in-place and returns U.
+        """
+        ng = self.ng
+        N = self.ncells
+        print("N = ", N)
+        for k, v in U.items():
+            v_old = U_old[k]
+            # left ghosts  ← initial left ghost values
+            v[:ng] = v_old[:ng]
+            # right ghosts ← initial right ghost values
+            v[ng + N :] = v_old[ng + N :]
         return U
