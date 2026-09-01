@@ -26,3 +26,6 @@ checkpoints/
 
 # Data (if large/generated)
 data/
+
+# Run logs
+logs/

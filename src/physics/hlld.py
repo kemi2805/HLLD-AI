@@ -1308,7 +1308,18 @@ def hlld_flux(
     # print(degen)
 
     # ── Fall back to HLLE where solver failed, B_n = 0, or state degenerate ──
-    failed = (err > 0) | wave_order_bad
+    #
+    # bn_zero is essential, not defensive.  With no normal field the two
+    # Alfven waves collapse onto the contact and the HLLD star-state algebra
+    # divides by quantities that vanish with B_n, producing overflow rather
+    # than a wrong-but-finite answer (observed: |F(S_t)| ~ 1e268).
+    #
+    # This never fired in 1D because every shock tube in the suite has a
+    # nonzero constant Bx.  It fires immediately and everywhere in 2D: the
+    # magnetic rotor starts with By identically zero, so EVERY y-sweep is a
+    # degenerate Riemann problem until the field winds up.  The condition
+    # was already computed here and then discarded.
+    failed = (err > 0) | wave_order_bad | bn_zero
     n = err.numel()
     conv = err == 0
     LAST_DIAG.update(
@@ -1317,6 +1328,7 @@ def hlld_flux(
         n_interfaces=n,
         n_not_converged=int((err > 0).sum()),
         n_wave_order_bad=int(wave_order_bad.sum()),
+        n_bn_zero=int(bn_zero.sum()),
         n_hlle_fallback=int(failed.sum()),
         frac_hlle_fallback=float(failed.sum()) / max(n, 1),
         mean_iters=(float(n_iter[conv].double().mean()) if bool(conv.any()) else float("nan")),
@@ -1791,7 +1803,30 @@ def hlld_ai_flux(
     wave_order_bad = (
         (calc.vaR > cmax) | (calc.vaL < -cmin) | (vc < calc.laL) | (vc > calc.laR)
     )
-    failed = wave_order_bad
+    # Same degenerate guard as hlld_flux: with B_n = 0 the Alfven waves
+    # collapse onto the contact and the star-state algebra overflows.  This
+    # matters MORE here than in hlld_flux, because the network predicts p*
+    # in one shot with no residual check, so the wave-ordering mask is the
+    # only remaining safety net.
+    Bi = ["Bx", "By", "Bz"]
+    BnL = _t(uL[Bi[idir]])
+    BnR = _t(uR[Bi[idir]])
+    bn_zero = (BnL.abs() < 1e-14) & (BnR.abs() < 1e-14)
+
+    failed = wave_order_bad | bn_zero
+    n = failed.numel()
+    LAST_DIAG.update(
+        solver="hlld_ai",
+        idir=idir,
+        n_interfaces=n,
+        n_not_converged=0,          # one-shot prediction: no root-find
+        n_wave_order_bad=int(wave_order_bad.sum()),
+        n_bn_zero=int(bn_zero.sum()),
+        n_hlle_fallback=int(failed.sum()),
+        frac_hlle_fallback=float(failed.sum()) / max(n, 1),
+        mean_iters=0.0,
+        max_iters=0,
+    )
     if torch.any(failed):
         p_hll_fb = torch.clamp(
             0.5 * (press_L + 0.5 * b2L + press_R + 0.5 * b2R), min=1e-30

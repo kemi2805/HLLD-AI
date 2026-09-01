@@ -93,9 +93,33 @@ def _hll(fL, fR, uL, uR, cmin, cmax):
     return (cmax * fL + cmin * fR - cmax * cmin * (uR - uL)) / (cmax + cmin)
 
 
+def _upwind_sign(F: torch.Tensor, rel_tol: float) -> torch.Tensor:
+    """``sign(F)`` with a deadband around zero.
+
+    ``sign`` is discontinuous at 0, so it turns an arbitrarily small
+    perturbation of the mass flux into an O(1) change in the upwind weights.
+    That is not hypothetical here: in the rotor's static ambient medium the
+    physical mass flux is exactly zero, but the computed flux is O(1e-12)
+    round-off left over from the HLL dissipation term ``-cmax*cmin*(uR-uL)``,
+    with no definite sign.  Taking ``sign`` of that noise selected a
+    direction at ~97% of faces and destroyed the discrete pi-rotation
+    symmetry of the rotor (measured: 1.3e-01, versus 3e-15 for the
+    non-upwinded variant).
+
+    Suppressing the selector where the flux is negligible restores the
+    centred limit exactly where upwinding carries no information anyway.
+    The scale is the largest mass flux in the sweep, so the test is
+    dimensionless and independent of the problem's units.
+    """
+    scale = F.abs().max()
+    return torch.where(F.abs() > rel_tol * scale, torch.sign(F),
+                       torch.zeros_like(F))
+
+
 def corner_emf(Ec: torch.Tensor, Efx: torch.Tensor, Efy: torch.Tensor,
                Fx_rho: torch.Tensor, Fy_rho: torch.Tensor,
-               upwind: bool = True) -> torch.Tensor:
+               upwind: bool = True, sign_rel_tol: float = 1e-9
+               ) -> torch.Tensor:
     """Gardiner-Stone corner EMF; shape ``(nxt+1, nyt+1)``.
 
     The first term is the plain four-face arithmetic average — i.e. the
@@ -103,10 +127,10 @@ def corner_emf(Ec: torch.Tensor, Efx: torch.Tensor, Efy: torch.Tensor,
     ``upwind=False``.  The remaining terms are the Gardiner-Stone upwinded
     transverse-derivative corrections, selected by the sign of the mass flux.
 
-    The upwind selector uses ``torch.sign``, which returns exactly 0 at 0.
-    ``copysign`` would return +1 there, fixing a handedness at the
-    zero-crossing of the mass flux and breaking discrete rotational symmetry
-    — which is precisely the property the rotor test checks.
+    The upwind selector is ``_upwind_sign``: ``sign`` with a deadband (see
+    its docstring for why the deadband is required, not merely defensive).
+    Note ``torch.sign`` and not ``copysign``: copysign(1, 0) returns +1 and
+    would fix a handedness at an exact zero crossing.
 
     Design property (asserted in tests): if ``E^z`` varies only with y, the
     result reduces EXACTLY to the y-face value, and symmetrically for x.
@@ -135,14 +159,14 @@ def corner_emf(Ec: torch.Tensor, Efx: torch.Tensor, Efy: torch.Tensor,
     Eavg = 0.25 * ((Ezyf + Ezyfm) + (Ezxf + Ezxfm))
 
     if upwind:
-        Sx = torch.sign(Fx_rho[I, J])
-        Sxm = torch.sign(Fx_rho[I, Jm])
+        Sx = _upwind_sign(Fx_rho, sign_rel_tol)[I, J]
+        Sxm = _upwind_sign(Fx_rho, sign_rel_tol)[I, Jm]
         dEdyN = (1.0 - Sx) * (EzNE - Ezyf) + (1.0 + Sx) * (EzNW - Ezyfm)
         dEdyS = (1.0 - Sxm) * (Ezyf - EzSE) + (1.0 + Sxm) * (Ezyfm - EzSW)
         dEdy = 0.125 * (dEdyS - dEdyN)
 
-        Sy = torch.sign(Fy_rho[I, J])
-        Sym = torch.sign(Fy_rho[Im, J])
+        Sy = _upwind_sign(Fy_rho, sign_rel_tol)[I, J]
+        Sym = _upwind_sign(Fy_rho, sign_rel_tol)[Im, J]
         dEdxE = (1.0 - Sy) * (EzNE - Ezxf) + (1.0 + Sy) * (EzSE - Ezxfm)
         dEdxW = (1.0 - Sym) * (Ezxf - EzNW) + (1.0 + Sym) * (Ezxfm - EzSW)
         dEdx = 0.125 * (dEdxW - dEdxE)

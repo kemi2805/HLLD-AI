@@ -309,3 +309,83 @@ def test_rotor_initial_data_matches_reference_setup():
     Bxf, Byf = b_from_potential(Az, g.dx, g.dy)
     assert float((Bxf - 1.0).abs().max()) < 1e-14
     assert float(Byf.abs().max()) < 1e-14
+
+
+# ── discrete symmetry of the rotor ───────────────────────────────────────
+
+ROTOR_PARITY = {"rho": +1, "p": +1, "vx": -1, "vy": -1, "Bx": +1, "By": +1}
+
+
+def rotor_symmetry_error(st, g):
+    """Max relative violation of the rotor's exact pi-rotation symmetry.
+
+    The rotor initial data is invariant under a pi rotation about z combined
+    with SRMHD's B -> -B invariance, so for all time
+        rho(-r)=rho(r), p(-r)=p(r), v(-r)=-v(r), Bx(-r)=+Bx(r), By(-r)=+By(r)
+    """
+    ph = g.phys
+    worst = 0.0
+    for k, par in ROTOR_PARITY.items():
+        a = st.prims[k][ph]
+        b = torch.flip(a, dims=(0, 1))
+        worst = max(worst, float((a - par * b).abs().max())
+                    / max(float(a.abs().max()), 1e-30))
+    return worst
+
+
+def test_upwind_sign_deadband_suppresses_noise():
+    """Round-off-level fluxes must not select an upwind direction.
+
+    sign() is discontinuous at zero, so without a deadband a 1e-12 flux --
+    which is what the HLL dissipation term leaves behind in a region at
+    rest -- picks a direction and injects an O(1) asymmetry.
+    """
+    from src.physics.ct import _upwind_sign
+
+    F = torch.tensor([1.0, -2.0, 1e-13, -1e-13, 0.0], dtype=torch.float64)
+    s = _upwind_sign(F, 1e-9)
+    assert float(s[0]) == 1.0 and float(s[1]) == -1.0
+    assert float(s[2]) == 0.0 and float(s[3]) == 0.0 and float(s[4]) == 0.0
+
+
+def test_rotor_preserves_discrete_rotational_symmetry():
+    """The evolved rotor keeps its pi-rotation symmetry to round-off.
+
+    This is a far sharper regression test than inspecting contour plots, and
+    it is exactly what a handedness in the upwind EMF selector destroys: the
+    same run without the deadband drifts to ~1e-1 within a few steps.
+    """
+    from src.physics.driver2d import rk_step_ct
+    from src.physics.eos import hybrid_eos
+
+    eos = hybrid_eos(K=0.0, gamma=5.0 / 3.0, gamma_th=5.0 / 3.0)
+    g = Grid2D(-0.5, 0.5, 32, -0.5, 0.5, 32, ng=2)
+    st = _rotor_state(g, eos)
+
+    assert rotor_symmetry_error(st, g) < 1e-13
+    for _ in range(8):
+        st, _ = rk_step_ct(st, g, eos, 6e-4, scheme="rk3")
+    err = rotor_symmetry_error(st, g)
+    assert err < 1e-9, f"pi-rotation symmetry degraded to {err:.3e}"
+
+
+def test_zero_normal_field_does_not_overflow():
+    """B_n = 0 is a genuine HLLD singularity and must fall back, not overflow.
+
+    The rotor starts with By identically zero, so every y-sweep hits it.
+    Before the guard this produced |F| ~ 1e268 rather than a wrong-but-finite
+    answer.
+    """
+    from src.physics.driver2d import prims_to_cons_2d, sync_state
+    from src.physics.eos import hybrid_eos
+    from src.physics.sweep import sweep
+
+    eos = hybrid_eos(K=0.0, gamma=5.0 / 3.0, gamma_th=5.0 / 3.0)
+    g = Grid2D(-0.5, 0.5, 24, -0.5, 0.5, 24, ng=2)
+    st = _rotor_state(g, eos)
+
+    Fy, ay = sweep(st.prims, g, eos, 1)          # normal field is By == 0
+    assert ay["diag"]["n_bn_zero"] == ay["diag"]["n_interfaces"]
+    for k, v in Fy.items():
+        assert torch.isfinite(v).all(), f"non-finite flux in {k}"
+        assert float(v.abs().max()) < 1e6, f"{k} overflowed to {float(v.abs().max()):.2e}"
