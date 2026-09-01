@@ -14,6 +14,7 @@ from src.physics.driver2d import (compute_dt_2d, prims_to_cons_2d, rk_step_ct,
 from src.physics.initial_data2d import (b_from_potential, magnetic_rotor,
                                         orszag_tang)
 from src.physics.state import EVOLVED_KEYS, State2D
+from src.physics.envelope import EnvelopeRecorder, format_summary
 from src.physics.hlld import hlld_flux, hlle_flux, hllc_flux, hlld_ai_flux
 
 SOLVERS = {"hlld": hlld_flux, "hlle": hlle_flux, "hllc": hllc_flux,
@@ -65,6 +66,13 @@ def main():
                          "Gardiner-Stone upwinding")
     ap.add_argument("--out", default=None)
     ap.add_argument("--nsnap", type=int, default=5)
+    ap.add_argument("--envelope", default=None,
+                    help="record the interface states fed to the Riemann "
+                         "solver to this .npz (measured ML training ranges)")
+    ap.add_argument("--envelope-every", type=int, default=20,
+                    help="record every Nth sweep")
+    ap.add_argument("--envelope-samples", type=int, default=4000,
+                    help="interfaces subsampled per recorded sweep")
     a = ap.parse_args()
 
     P = PROBLEMS[a.problem]
@@ -107,6 +115,10 @@ def main():
     log.write("step,t,dt,divB_max,divB_l2,sym_err,rho_max,rho_min,p_min,W_max,"
               "hlle_frac_x,hlle_frac_y,mean_iters,c2p_bad\n")
 
+    rec = (EnvelopeRecorder(n_per_call=a.envelope_samples,
+                            every=a.envelope_every)
+           if a.envelope else None)
+
     t, step, t0 = 0.0, 0, time.time()
     next_snap = 1
     while t < tend - 1e-14:
@@ -115,7 +127,7 @@ def main():
                               bc_x=bc_x, bc_y=bc_y,
                               flux_fn=SOLVERS[a.solver],
                               limiter=a.limiter, emf_mode=a.emf_mode,
-                              upwind=not a.no_upwind_emf)
+                              upwind=not a.no_upwind_emf, recorder=rec)
         t += dt
         step += 1
 
@@ -154,6 +166,14 @@ def main():
 
     save("fin", t)
     log.close()
+    if rec is not None:
+        os.makedirs(os.path.dirname(a.envelope) or ".", exist_ok=True)
+        summ = rec.save(a.envelope, problem=a.problem, n=a.n,
+                        solver=a.solver, tend=tend, gamma=P["gamma"])
+        nrow = sum(r.shape[0] for r in rec.rows)
+        print(f"\nmeasured interface envelope ({nrow} sampled states) "
+              f"-> {a.envelope}", flush=True)
+        print(format_summary(summ), flush=True)
     print(f"done in {time.time()-t0:.0f}s, {step} steps -> {out}", flush=True)
 
 

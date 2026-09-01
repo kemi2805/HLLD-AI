@@ -38,6 +38,7 @@ def sweep(
     Bnf: torch.Tensor | None = None,
     freeze_normal_B: bool = True,
     want_hll_aux: bool = False,
+    recorder=None,
 ) -> tuple[dict[str, torch.Tensor], dict]:
     """Compute face fluxes along ``axis``.
 
@@ -86,6 +87,11 @@ def sweep(
         key = _BKEY[axis]
         L[key] = Bnf
         R[key] = Bnf
+
+    if recorder is not None:
+        # Records the states actually handed to the Riemann solver, which is
+        # exactly the distribution the ML surrogate must cover.
+        recorder.record(L, R, axis, eos)
 
     fF, uF, p_star = flux_fn(flat(L), flat(R), eos, idir=axis)
     F = unflat(fF, face_shape)

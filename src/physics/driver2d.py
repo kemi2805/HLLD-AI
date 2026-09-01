@@ -160,7 +160,7 @@ def rk_step(
 
 
 def ct_stage(state, grid, eos, *, flux_fn=hlld_flux, limiter="mc",
-             vel_var="Wv", emf_mode="solver", upwind=True):
+             vel_var="Wv", emf_mode="solver", upwind=True, recorder=None):
     """One spatial-residual evaluation with constrained transport.
 
     Returns ``(rhs_cons, dBxf, dByf, diag)``.  ``state.prims`` must already
@@ -176,9 +176,9 @@ def ct_stage(state, grid, eos, *, flux_fn=hlld_flux, limiter="mc",
 
     want_hll = emf_mode == "hll"
     Fx, ax = sweep(prims, grid, eos, 0, flux_fn, limiter, vel_var,
-                   Bnf=state.Bxf, want_hll_aux=want_hll)
+                   Bnf=state.Bxf, want_hll_aux=want_hll, recorder=recorder)
     Fy, ay = sweep(prims, grid, eos, 1, flux_fn, limiter, vel_var,
-                   Bnf=state.Byf, want_hll_aux=want_hll)
+                   Bnf=state.Byf, want_hll_aux=want_hll, recorder=recorder)
 
     Efx = ct.face_emf_x(Fx, ax, emf_mode)
     Efy = ct.face_emf_y(Fy, ay, emf_mode)
@@ -221,7 +221,7 @@ def sync_state(state, grid, eos, bc_x="outflow", bc_y="outflow",
 def rk_step_ct(state, grid, eos, dt, *, scheme="rk3", bc_x="outflow",
                bc_y="outflow", flux_fn=hlld_flux, limiter="mc",
                vel_var="Wv", emf_mode="solver", upwind=True,
-               atmo_rho=1e-10):
+               atmo_rho=1e-10, recorder=None):
     """One SSP-RK step with constrained transport.
 
     The cell-centred conserved variables and the staggered field are
@@ -241,7 +241,7 @@ def rk_step_ct(state, grid, eos, dt, *, scheme="rk3", bc_x="outflow",
     for a, b, c in stages:
         rhs, dBxf, dByf, diag = ct_stage(
             S, grid, eos, flux_fn=flux_fn, limiter=limiter, vel_var=vel_var,
-            emf_mode=emf_mode, upwind=upwind)
+            emf_mode=emf_mode, upwind=upwind, recorder=recorder)
         L = State2D(cons=rhs, Bxf=dBxf, Byf=dByf)
         S = combine([S0, S, L], [a, b, c * dt])
         S = sync_state(S, grid, eos, bc_x, bc_y, atmo_rho)
