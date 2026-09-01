@@ -37,7 +37,39 @@ import torch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.physics.eos import hybrid_eos
-from src.physics.hlld import hlle_flux, hllc_flux, hlld_flux
+from src.physics.hlld import hlle_flux, hllc_flux, hlld_flux, hlld_ai_flux
+
+
+def _ai_stub():
+    """hlld_ai_flux bound to a deterministic stand-in network.
+
+    The rotation identity is a property of the SOLVER, not of the trained
+    weights: whatever p* the network returns for a given feature vector, the
+    rotated problem must produce the rotated flux.  A fixed linear stub keeps
+    the test independent of any checkpoint on disk, and -- because the
+    features are rotation invariant by construction -- it returns the same
+    p* for a state and its rotation, which is precisely what makes the
+    identity testable.
+    """
+    import numpy as np
+    from src.physics.ai_features import N_FEATURES
+
+    class _Net(torch.nn.Module):
+        def forward(self, x):
+            return 0.05 * x.sum(dim=1, keepdim=True) / N_FEATURES
+
+    norm = {"mu": np.zeros(N_FEATURES), "sigma": np.ones(N_FEATURES),
+            "y_mu": 0.0, "y_sigma": 1.0}
+    net = _Net()
+
+    def _f(sL, sR, eos, idir=0):
+        return hlld_ai_flux(sL, sR, eos, net, norm, idir=idir)
+
+    _f.__name__ = "hlld_ai_flux"
+    return _f
+
+
+AI_FLUX = _ai_stub()
 
 torch.manual_seed(20260824)
 
@@ -101,8 +133,8 @@ def max_rel(a: torch.Tensor, b: torch.Tensor) -> float:
     return float((a - b).abs().max() / scale)
 
 
-@pytest.mark.parametrize("flux_fn", [hlle_flux, hllc_flux, hlld_flux],
-                         ids=["hlle", "hllc", "hlld"])
+@pytest.mark.parametrize("flux_fn", [hlle_flux, hllc_flux, hlld_flux, AI_FLUX],
+                         ids=["hlle", "hllc", "hlld", "hlld_ai"])
 @pytest.mark.parametrize("n_cyc", [1, 2], ids=["idir1", "idir2"])
 def test_rotation_equivalence(flux_fn, n_cyc):
     """flux(C^n P, idir=n) must equal C^n(flux(P, idir=0)).
@@ -156,8 +188,8 @@ def test_rotation_equivalence(flux_fn, n_cyc):
     )
 
 
-@pytest.mark.parametrize("flux_fn", [hlle_flux, hllc_flux, hlld_flux],
-                         ids=["hlle", "hllc", "hlld"])
+@pytest.mark.parametrize("flux_fn", [hlle_flux, hllc_flux, hlld_flux, AI_FLUX],
+                         ids=["hlle", "hllc", "hlld", "hlld_ai"])
 def test_idir0_unchanged_by_relabelling(flux_fn):
     """Sanity: C is a relabelling, so a C-symmetric state gives C-symmetric flux."""
     eos = hybrid_eos(K=0.0, gamma=GAMMA, gamma_th=GAMMA)

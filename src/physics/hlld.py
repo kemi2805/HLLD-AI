@@ -17,6 +17,7 @@ from typing import Dict, Tuple
 import torch
 
 from .c2p import conservative_to_primitive
+from . import ai_features as _ai
 from .eos import hybrid_eos
 
 # ── type aliases ─────────────────────────────────────────────────────────────
@@ -1589,97 +1590,25 @@ def hlld_ai_flux(
     fH: Cons = {k: _hf(fL[k], fR[k], uL[k], uR[k], cmin, cmax) for k in keys}
     uH: Cons = {k: _hu(fL[k], fR[k], uL[k], uR[k], cmin, cmax) for k in keys}
 
-    # ── Reconstruct U_init and F_init (identical to hlld_flux) ───────────────
-    lfacL, _ = lorentz(sL)
-    lfacR, _ = lorentz(sR)
-    b2L = compute_b2(
-        (sL["vx"], sL["vy"], sL["vz"]), (sL["Bx"], sL["By"], sL["Bz"]), lfacL
-    )
-    b2R = compute_b2(
-        (sR["vx"], sR["vy"], sR["vz"]), (sR["Bx"], sR["By"], sR["Bz"]), lfacR
-    )
+    # ── Total-energy form + features (shared with the data generator) ────────
+    # Previously written out by hand here, hardcoded to x: the U_init/F_init
+    # block and the 15-feature vector both used literal "Sx"/"vx"/b^x, so
+    # hlld_ai_flux silently returned x-fluxes for idir != 0.  Both now route
+    # through the same code the generator uses.
+    U_init_L, F_init_L = energy_form(uL, fL)
+    U_init_R, F_init_R = energy_form(uR, fR)
+
     press_L, _ = eos.press_and_cs2(sL["eps"], sL["rho"])
     press_R, _ = eos.press_and_cs2(sR["eps"], sR["rho"])
-    vl = (sL["vx"], sL["vy"], sL["vz"])
-    vr = (sR["vx"], sR["vy"], sR["vz"])
-    Bl = (sL["Bx"], sL["By"], sL["Bz"])
-    Br = (sR["Bx"], sR["By"], sR["Bz"])
-    sbL = compute_smallb(vl, Bl, lfacL)
-    sbR = compute_smallb(vr, Br, lfacR)
-    wL = sL["rho"] * (1.0 + sL["eps"]) + press_L + b2L
-    wR = sR["rho"] * (1.0 + sR["eps"]) + press_R + b2R
+    lfacL, _ = lorentz(sL)
+    lfacR, _ = lorentz(sR)
+    b2L = compute_b2((sL["vx"], sL["vy"], sL["vz"]),
+                     (sL["Bx"], sL["By"], sL["Bz"]), lfacL)
+    b2R = compute_b2((sR["vx"], sR["vy"], sR["vz"]),
+                     (sR["Bx"], sR["By"], sR["Bz"]), lfacR)
 
-    U_init_L: Cons = {
-        "D": uL["D"],
-        "Sx": wL * lfacL**2 * sL["vx"] - sbL[0] * sbL[1],
-        "Sy": wL * lfacL**2 * sL["vy"] - sbL[0] * sbL[2],
-        "Sz": wL * lfacL**2 * sL["vz"] - sbL[0] * sbL[3],
-        "tau": wL * lfacL**2 - press_L - 0.5 * b2L - sbL[0] ** 2,
-        "Bx": sL["Bx"],
-        "By": sL["By"],
-        "Bz": sL["Bz"],
-    }
-    U_init_R: Cons = {
-        "D": uR["D"],
-        "Sx": wR * lfacR**2 * sR["vx"] - sbR[0] * sbR[1],
-        "Sy": wR * lfacR**2 * sR["vy"] - sbR[0] * sbR[2],
-        "Sz": wR * lfacR**2 * sR["vz"] - sbR[0] * sbR[3],
-        "tau": wR * lfacR**2 - press_R - 0.5 * b2R - sbR[0] ** 2,
-        "Bx": sR["Bx"],
-        "By": sR["By"],
-        "Bz": sR["Bz"],
-    }
-    F_init_L: Cons = {k: fL[k] for k in keys}
-    F_init_R: Cons = {k: fR[k] for k in keys}
-    F_init_L.update(
-        {
-            "Sx": wL * lfacL**2 * sL["vx"] ** 2 + press_L + 0.5 * b2L - sbL[1] * sbL[1],
-            "Sy": wL * lfacL**2 * sL["vx"] * sL["vy"] - sbL[1] * sbL[2],
-            "Sz": wL * lfacL**2 * sL["vx"] * sL["vz"] - sbL[1] * sbL[3],
-            "tau": wL * lfacL**2 * sL["vx"] - sbL[1] * sbL[0],
-        }
-    )
-    F_init_R.update(
-        {
-            "Sx": wR * lfacR**2 * sR["vx"] ** 2 + press_R + 0.5 * b2R - sbR[1] * sbR[1],
-            "Sy": wR * lfacR**2 * sR["vx"] * sR["vy"] - sbR[1] * sbR[2],
-            "Sz": wR * lfacR**2 * sR["vx"] * sR["vz"] - sbR[1] * sbR[3],
-            "tau": wR * lfacR**2 * sR["vx"] - sbR[1] * sbR[0],
-        }
-    )
-
-    # ── R-vectors (same definition as generate.py) ────────────────────────────
-    RL = {k: cmin * U_init_L[k] - F_init_L[k] for k in U_init_L}
-    RR = {k: cmax * U_init_R[k] - F_init_R[k] for k in U_init_R}
-
-    # ── Build the 15-feature input vector matching generate.py exactly ────────
-    vt_L = torch.sqrt(sL["vy"] ** 2 + sL["vz"] ** 2)
-    vt_R = torch.sqrt(sR["vy"] ** 2 + sR["vz"] ** 2)
-    St_L = torch.sqrt(RL["Sy"] ** 2 + RL["Sz"] ** 2)
-    St_R = torch.sqrt(RR["Sy"] ** 2 + RR["Sz"] ** 2)
-    Bt_L = torch.sqrt(RL["By"] ** 2 + RL["Bz"] ** 2)
-    Bt_R = torch.sqrt(RR["By"] ** 2 + RR["Bz"] ** 2)
-
-    X_raw = torch.stack(
-        [
-            RL["tau"],
-            RL["Sx"],
-            St_L,
-            Bt_L,
-            sL["vx"],
-            vt_L,
-            RR["tau"],
-            RR["Sx"],
-            St_R,
-            Bt_R,
-            sR["vx"],
-            vt_R,
-            sL["Bx"],
-            cmin,
-            cmax,
-        ],
-        dim=1,
-    )  # (N, 15)
+    RL, RR = _ai.r_vectors(U_init_L, F_init_L, U_init_R, F_init_R, cmin, cmax)
+    X_raw = _ai.build_pstar_features(sL, sR, uL, uR, RL, RR, cmin, cmax, idir)
 
     # ── Normalize and run model ───────────────────────────────────────────────
     mu = torch.tensor(norm_stats["mu"], dtype=X_raw.dtype, device=X_raw.device)
@@ -1695,10 +1624,9 @@ def hlld_ai_flux(
     p_star = torch.clamp(p_star, min=1e-30)
 
     # ── Everything below is identical to hlld_flux ────────────────────────────
-    BnL = _t(uL["Bx"])
-    BnR = _t(uR["Bx"])
-    Bn2 = 0.5 * (BnL**2 + BnR**2)
-
+    # (a hardcoded-x BnL/BnR/Bn2 block stood here; Bn2 was never read -- the
+    #  network supplies p* directly, so there is no bracket to select -- and
+    #  BnL/BnR are recomputed with the correct idir a few lines down.)
     calc = HLLDComputation(
         F_init_L, F_init_R, U_init_L, U_init_R, sL, sR, cmin, cmax, idir
     )
