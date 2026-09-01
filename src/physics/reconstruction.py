@@ -1,21 +1,28 @@
 """
-Piecewise Linear Method (PLM) reconstruction.
+Piecewise-constant (PCM) and piecewise-linear (PLM) reconstruction.
 
-Given cell-averaged primitives Q[i] over the full domain (including ghosts),
-returns interface states:
-    QL[j]  — left  state at interface between cell j-1 and cell j   (right side of cell j-1)
-    QR[j]  — right state at interface between cell j-1 and cell j   (left  side of cell j)
+Face indexing convention
+------------------------
+All reconstruction output uses ONE convention, shared with the staggered
+magnetic field in Grid2D:
 
-Indices run over the *physical* interfaces:  j = ng .. ng+N  (N+1 interfaces)
+    face i  =  the face between cell i-1 and cell i   ("lower" face of cell i)
 
-All operations are batched over the variable axis and vectorised with torch —
-no Python loops over cells.
+so an axis with ``n`` cells has ``n + 1`` faces, and ``QL[i]`` / ``QR[i]``
+are the states on the left/right side of face ``i``.  Entries 0 and n are
+pure ghost (they would need cells -1 and n) and are filled with the
+adjacent cell value; with ng >= 1 they are never read.
+
+This uniformity is deliberate.  Previously ``reconstruct_pcm`` returned
+``ntotal-1`` entries and ``reconstruct_plm`` returned ``ntotal-2``, but
+``get_interface_states`` sliced both at the same offset — so PLM was shifted
+by one cell.  The bug was latent only because the driver hardcoded PCM.
 """
 
 import torch
 
-
 # ── slope limiters ────────────────────────────────────────────────────────────
+
 
 def minmod(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
     """Minmod limiter: returns the smaller-magnitude slope if same sign, else 0."""
@@ -31,64 +38,148 @@ def mc_limiter(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
     c = 0.5 * (a + b)
     return torch.where(
         a * b > 0.0,
-        torch.sign(c) * torch.minimum(2.0 * a.abs(),
-                        torch.minimum(2.0 * b.abs(), c.abs())),
+        torch.sign(c)
+        * torch.minimum(2.0 * a.abs(), torch.minimum(2.0 * b.abs(), c.abs())),
         torch.zeros_like(a),
     )
 
 
-# ── PLM reconstruction ────────────────────────────────────────────────────────
+_LIMITERS = {"mc": mc_limiter, "minmod": minmod}
 
-def reconstruct_plm(
-    Q: torch.Tensor,
+
+# ── core reconstruction along one axis ────────────────────────────────────────
+
+
+def _sl(axis: int, s, ndim: int) -> tuple:
+    out = [slice(None)] * ndim
+    out[axis] = s
+    return tuple(out)
+
+
+def cell_slopes(Q: torch.Tensor, axis: int = 0, limiter: str = "mc") -> torch.Tensor:
+    """Limited slopes at cell centres; same shape as ``Q``, zero on the edges."""
+    lim = _LIMITERS.get(limiter)
+    if lim is None:
+        raise ValueError(f"unknown limiter {limiter!r}")
+    nd = Q.ndim
+    fwd = Q[_sl(axis, slice(1, None), nd)] - Q[_sl(axis, slice(None, -1), nd)]
+    slope = torch.zeros_like(Q)
+    slope[_sl(axis, slice(1, -1), nd)] = lim(
+        fwd[_sl(axis, slice(None, -1), nd)], fwd[_sl(axis, slice(1, None), nd)]
+    )
+    return slope
+
+
+def reconstruct(
+    Q: torch.Tensor, axis: int = 0, limiter: str = "pcm"
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Reconstruct ``Q`` to faces along ``axis``.
+
+    Returns ``(QL, QR)``, each with ``Q.shape[axis] + 1`` entries along
+    ``axis``: the states on the left and right side of each face.
+    """
+    nd = Q.ndim
+    if limiter == "pcm":
+        slope = torch.zeros_like(Q)
+    else:
+        slope = cell_slopes(Q, axis, limiter)
+
+    left = Q + 0.5 * slope  # right edge of each cell
+    right = Q - 0.5 * slope  # left edge of each cell
+
+    # face i is between cell i-1 and cell i
+    edge_lo = left[_sl(axis, slice(0, 1), nd)]
+    edge_hi = right[_sl(axis, slice(-1, None), nd)]
+    QL = torch.cat([edge_lo, left], dim=axis)
+    QR = torch.cat([right, edge_hi], dim=axis)
+    return QL, QR
+
+
+# ── primitive-variable reconstruction ────────────────────────────────────────
+
+_RECON_KEYS = ("rho", "p", "vx", "vy", "vz", "Bx", "By", "Bz")
+
+
+def reconstruct_prims(
+    prims: dict[str, torch.Tensor],
+    axis: int,
+    eos,
     limiter: str = "mc",
-) -> tuple[torch.Tensor, torch.Tensor]:
+    vel_var: str = "Wv",
+    floor_rho: float = 1e-12,
+    floor_p: float = 1e-14,
+) -> tuple[dict[str, torch.Tensor], dict[str, torch.Tensor]]:
+    """Reconstruct primitives to faces along ``axis``.
+
+    Two things this does that a naive variable-by-variable PLM does not:
+
+    ``vel_var="Wv"``
+        Reconstruct the spatial four-velocity ``z^i = W v^i`` and recover
+        ``v^i = z^i / sqrt(1 + |z|^2)``.  This makes ``|v| < 1`` true at every
+        face *by construction*.  Reconstructing ``v`` directly can produce a
+        superluminal interface state wherever the limiter is active near a
+        steep velocity gradient — fatal for the magnetic rotor, whose initial
+        data already sits at W ~ 10.
+
+    EOS consistency
+        ``eps`` is recomputed from the reconstructed ``(p, rho)`` rather than
+        reconstructed independently, which would leave the face state off the
+        EOS surface.
+
+    Cells where the limited state would violate the density or pressure floor
+    fall back to piecewise-constant on that face.
     """
-    PLM reconstruction.
+    nd = next(iter(prims.values())).ndim
 
-    Parameters
-    ----------
-    Q : (ntotal, nvars)  — cell-averaged primitives on full domain (with ghosts).
-    limiter : "mc" | "minmod"
+    work = {k: prims[k] for k in _RECON_KEYS if k in prims}
+    if vel_var == "Wv":
+        v2 = prims["vx"] ** 2 + prims["vy"] ** 2 + prims["vz"] ** 2
+        W = 1.0 / torch.sqrt(torch.clamp(1.0 - v2, min=1e-14))
+        for c in ("vx", "vy", "vz"):
+            work[c] = W * prims[c]
 
-    Returns
-    -------
-    QL : (ntotal-1, nvars)  — left  state at each interface  (right edge of left cell)
-    QR : (ntotal-1, nvars)  — right state at each interface  (left  edge of right cell)
+    L: dict[str, torch.Tensor] = {}
+    R: dict[str, torch.Tensor] = {}
+    for k, v in work.items():
+        L[k], R[k] = reconstruct(v, axis=axis, limiter=limiter)
 
-    Interface j (0-based) sits between cell j and cell j+1 in the full array,
-    so the caller slices QL/QR to the physical interfaces it needs.
-    """
-    lim = mc_limiter if limiter == "mc" else minmod
+    # positivity fallback: revert to PCM on faces where the limited state
+    # would be unphysical
+    if limiter != "pcm":
+        pL, pR = reconstruct(prims["rho"], axis=axis, limiter="pcm")
+        bad = (L["rho"] <= floor_rho) | (R["rho"] <= floor_rho)
+        pLp, pRp = reconstruct(prims["p"], axis=axis, limiter="pcm")
+        bad = bad | (L["p"] <= floor_p) | (R["p"] <= floor_p)
+        if bool(bad.any()):
+            for k in work:
+                cL, cR = reconstruct(work[k], axis=axis, limiter="pcm")
+                L[k] = torch.where(bad, cL, L[k])
+                R[k] = torch.where(bad, cR, R[k])
 
-    # forward / backward differences
-    dQf = Q[1:]   - Q[:-1]          # shape (ntotal-1, nvars)
-    dQb = Q[:-1]  - Q[1:]           # = -dQf, but keep explicit for clarity
+    for side in (L, R):
+        if vel_var == "Wv":
+            z2 = side["vx"] ** 2 + side["vy"] ** 2 + side["vz"] ** 2
+            fac = 1.0 / torch.sqrt(1.0 + z2)
+            for c in ("vx", "vy", "vz"):
+                side[c] = side[c] * fac
+        side["rho"] = torch.clamp(side["rho"], min=floor_rho)
+        side["p"] = torch.clamp(side["p"], min=floor_p)
+        side["eps"] = eos.eps__press_rho(side["p"], side["rho"])
 
-    # centred slopes at each cell centre:  slope[i] = lim( Q[i]-Q[i-1], Q[i+1]-Q[i] )
-    # dQb[i] = Q[i] - Q[i+1]  →  we want Q[i] - Q[i-1] = dQf[i-1]
-    # so slope[i] = lim( dQf[i-1],  dQf[i] )  for i in 1..ntotal-2
-    slope = lim(dQf[:-1], dQf[1:])   # shape (ntotal-2, nvars)
+    return L, R
 
-    # Reconstruct at interfaces
-    # Interface j sits between cell j and cell j+1 (0-based full indexing).
-    # QL[j] = Q[j]   + 0.5 * slope[j-1]   (right edge of cell j,   j>=1)
-    # QR[j] = Q[j+1] - 0.5 * slope[j]     (left  edge of cell j+1, j>=1)
-    #
-    # slope has indices 0..ntotal-3 corresponding to cell centres 1..ntotal-2.
-    # Interface indices 1..ntotal-2 (ntotal-2 interfaces):
-    QL = Q[1:-1] + 0.5 * slope        # shape (ntotal-2, nvars)
-    QR = Q[2:]   - 0.5 * slope        # shape (ntotal-2, nvars)  (Q[j+1] = Q[2:])
 
-    return QL, QR
+# ── 1D compatibility wrapper ─────────────────────────────────────────────────
 
-def reconstruct_pcm(
-    Q: torch.Tensor,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """PCM reconstruction — piecewise constant, first-order."""
-    QL = Q[:-1]   # right edge of left cell = cell average
-    QR = Q[1:]    # left  edge of right cell = cell average
-    return QL, QR
+
+def reconstruct_plm(Q: torch.Tensor, limiter: str = "mc"):
+    """Backwards-compatible 1D PLM (see module docstring for the convention)."""
+    return reconstruct(Q, axis=0, limiter=limiter)
+
+
+def reconstruct_pcm(Q: torch.Tensor):
+    """Backwards-compatible 1D PCM."""
+    return reconstruct(Q, axis=0, limiter="pcm")
 
 
 def get_interface_states(
@@ -97,48 +188,17 @@ def get_interface_states(
     ncells: int,
     limiter: str = "pcm",
 ) -> tuple[dict[str, torch.Tensor], dict[str, torch.Tensor]]:
-    """
-    Reconstruct all primitive variables and return left/right interface states
-    for the *physical* interfaces (ncells+1 of them).
+    """1D helper: interface states on the ``ncells+1`` physical faces.
 
-    Parameters
-    ----------
-    prims  : dict of (ntotal,) tensors — primitives on full domain incl. ghosts.
-    ng     : number of ghost cells on each side.
-    ncells : number of physical cells.
-
-    Returns
-    -------
-    primL, primR : dicts of (ncells+1,) tensors — interface states.
+    Physical face ``b`` (between cells ``b-1`` and ``b``) runs
+    ``b = ng .. ng+ncells``, which is a direct slice under the face
+    convention documented at the top of this module.
     """
     keys = list(prims.keys())
-    nvars = len(keys)
-    ntotal = next(iter(prims.values())).shape[0]
-
-    # Stack into a single (ntotal, nvars) tensor for vectorised reconstruction
     Q = torch.stack([prims[k] for k in keys], dim=1)  # (ntotal, nvars)
+    QL, QR = reconstruct(Q, axis=0, limiter=limiter)  # (ntotal+1, nvars)
 
-    if limiter == "pcm":
-        QL_all, QR_all = reconstruct_pcm(Q)
-    else:
-        QL_all, QR_all = reconstruct_plm(Q, limiter=limiter)
-
-
-
-    # QL_all[j] is the right edge of cell (j+1) in full indexing.
-    # Physical interfaces run from j = ng-1 .. ng+ncells-1  in QL_all indexing
-    # (because QL_all has shape ntotal-2, indexed 0..ntotal-3,
-    #  and QL_all[j] corresponds to the right edge of full cell j+1).
-    #
-    # Full-cell interface between physical cell i and i+1 corresponds to
-    # QL_all index  i + ng - 1  (for i = 0..ncells, giving ncells+1 interfaces).
-    i0 = ng - 1
-    i1 = i0 + ncells + 1   # exclusive
-
-    QL_phys = QL_all[i0:i1]   # (ncells+1, nvars)
-    QR_phys = QR_all[i0:i1]   # (ncells+1, nvars)
-
-    primL = {k: QL_phys[:, j] for j, k in enumerate(keys)}
-    primR = {k: QR_phys[:, j] for j, k in enumerate(keys)}
-
+    sl = slice(ng, ng + ncells + 1)
+    primL = {k: QL[sl, j] for j, k in enumerate(keys)}
+    primR = {k: QR[sl, j] for j, k in enumerate(keys)}
     return primL, primR
