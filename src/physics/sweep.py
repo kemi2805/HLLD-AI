@@ -37,6 +37,7 @@ def sweep(
     vel_var: str = "Wv",
     Bnf: torch.Tensor | None = None,
     freeze_normal_B: bool = True,
+    want_hll_aux: bool = False,
 ) -> tuple[dict[str, torch.Tensor], dict]:
     """Compute face fluxes along ``axis``.
 
@@ -96,6 +97,19 @@ def sweep(
         "p_star": p_star.reshape(face_shape),
         "diag": dict(_hlld.LAST_DIAG),
     }
+    if want_hll_aux:
+        # Only for emf_mode="hll", which needs the raw HLL ingredients to
+        # form the transverse-field EMF independently of the chosen solver.
+        # Paid only in that mode; the production "solver" mode reads the
+        # transverse-B flux straight out of F.
+        from .hlld import compute_srmhd_fluxes
+        uL, uR, fL, fR, cmax, cmin = compute_srmhd_fluxes(
+            flat(L), flat(R), eos, axis)
+        aux["hll"] = {
+            "uL": unflat(uL, face_shape), "uR": unflat(uR, face_shape),
+            "fL": unflat(fL, face_shape), "fR": unflat(fR, face_shape),
+            "cmax": cmax.reshape(face_shape), "cmin": cmin.reshape(face_shape),
+        }
     return F, aux
 
 

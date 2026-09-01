@@ -154,3 +154,96 @@ def rk_step(
         grid.apply_bc_cc(P, bc_x, bc_y)
 
     return U, P, diag
+
+
+# ── constrained-transport driver ─────────────────────────────────────────────
+
+
+def ct_stage(state, grid, eos, *, flux_fn=hlld_flux, limiter="mc",
+             vel_var="Wv", emf_mode="solver", upwind=True):
+    """One spatial-residual evaluation with constrained transport.
+
+    Returns ``(rhs_cons, dBxf, dByf, diag)``.  ``state.prims`` must already
+    be consistent with ``state.cons`` and with the staggered field.
+    """
+    from . import ct
+
+    Bcx, Bcy = ct.cell_centred_B(state.Bxf, state.Byf)
+    prims = dict(state.prims)
+    prims["Bx"], prims["By"] = Bcx, Bcy
+
+    Ec = ct.emf_cell(Bcx, Bcy, prims["vx"], prims["vy"])
+
+    want_hll = emf_mode == "hll"
+    Fx, ax = sweep(prims, grid, eos, 0, flux_fn, limiter, vel_var,
+                   Bnf=state.Bxf, want_hll_aux=want_hll)
+    Fy, ay = sweep(prims, grid, eos, 1, flux_fn, limiter, vel_var,
+                   Bnf=state.Byf, want_hll_aux=want_hll)
+
+    Efx = ct.face_emf_x(Fx, ax, emf_mode)
+    Efy = ct.face_emf_y(Fy, ay, emf_mode)
+    Ez = ct.corner_emf(Ec, Efx, Efy, Fx["D"], Fy["D"], upwind=upwind)
+
+    from .state import EVOLVED_KEYS
+    rx = flux_divergence(Fx, 0, grid.dx, EVOLVED_KEYS)
+    ry = flux_divergence(Fy, 1, grid.dy, EVOLVED_KEYS)
+    rhs = {k: rx[k] + ry[k] for k in EVOLVED_KEYS}
+
+    dBxf, dByf = ct.ct_rhs(Ez, grid.dx, grid.dy)
+    return rhs, dBxf, dByf, {"x": ax, "y": ay}
+
+
+def sync_state(state, grid, eos, bc_x="outflow", bc_y="outflow",
+               atmo_rho=1e-10, return_status=False):
+    """Make ``prims`` consistent with ``cons`` + staggered B, and apply BCs.
+
+    Order matters: the staggered field is the primary variable, so the
+    cell-centred B fed to the inversion is always re-derived from it.
+    """
+    from . import ct
+
+    grid.apply_bc_face(state.Bxf, state.Byf, bc_x, bc_y)
+    grid.apply_bc_cc(state.cons, bc_x, bc_y)
+
+    Bcx, Bcy = ct.cell_centred_B(state.Bxf, state.Byf)
+    cons = dict(state.cons)
+    cons["Bx"], cons["By"] = Bcx, Bcy
+
+    out = cons_to_prims_2d(cons, grid, eos, atmo_rho, return_status)
+    prims, status = out if return_status else (out, None)
+    prims["Bx"], prims["By"] = Bcx, Bcy
+    prims["Bz"] = cons["Bz"]
+    grid.apply_bc_cc(prims, bc_x, bc_y)
+    state.prims = prims
+    return (state, status) if return_status else state
+
+
+def rk_step_ct(state, grid, eos, dt, *, scheme="rk3", bc_x="outflow",
+               bc_y="outflow", flux_fn=hlld_flux, limiter="mc",
+               vel_var="Wv", emf_mode="solver", upwind=True,
+               atmo_rho=1e-10):
+    """One SSP-RK step with constrained transport.
+
+    The cell-centred conserved variables and the staggered field are
+    combined with IDENTICAL Runge-Kutta coefficients (via ``state.combine``),
+    which is what keeps every stage divergence-free without any dedicated
+    CT/RK machinery.
+    """
+    from .state import EVOLVED_KEYS, State2D, combine
+
+    stages = _SCHEMES[scheme]
+    S0 = State2D(cons={k: state.cons[k].clone() for k in EVOLVED_KEYS},
+                 Bxf=state.Bxf.clone(), Byf=state.Byf.clone(),
+                 prims=state.prims)
+    S = state
+    diag: dict = {}
+
+    for a, b, c in stages:
+        rhs, dBxf, dByf, diag = ct_stage(
+            S, grid, eos, flux_fn=flux_fn, limiter=limiter, vel_var=vel_var,
+            emf_mode=emf_mode, upwind=upwind)
+        L = State2D(cons=rhs, Bxf=dBxf, Byf=dByf)
+        S = combine([S0, S, L], [a, b, c * dt])
+        S = sync_state(S, grid, eos, bc_x, bc_y, atmo_rho)
+
+    return S, diag
