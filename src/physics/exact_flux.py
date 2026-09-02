@@ -183,6 +183,7 @@ def exact_flux(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
     solvable = (~bad) & (~weak) & ((cls == C.FULL7) | (cls == C.COPLANAR))
 
     n_conv = n_ray_fan = n_unphys = 0
+    solved_idx: list[int] = []
     idx = torch.nonzero(solvable).reshape(-1).tolist()
 
     if idx:
@@ -237,12 +238,17 @@ def exact_flux(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
             F[k][i] = fS[k][0]
             U[k][i] = uS[k][0]
         p_star[i] = P_tot
+        solved_idx.append(i)
         n_conv += 1
         if reg in RAY.FAN_REGIONS:
             n_ray_fan += 1
 
     fell_back = N - n_conv
+    exact_mask = torch.zeros(N, dtype=torch.bool)
+    if solved_idx:
+        exact_mask[torch.tensor(solved_idx, dtype=torch.long)] = True
     LAST_DIAG.update(
+        exact_mask=exact_mask,
         solver="exact",
         idir=idir,
         n_interfaces=N,
@@ -260,4 +266,198 @@ def exact_flux(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
     # p_star already carries hlld_flux's negative sentinel on every lane that
     # fell back, because those lanes were never overwritten -- so
     # tests/test_idir.py's branch-flip logic works unchanged.
+    return F, U, p_star
+
+
+# ===========================================================================
+# Batched path -- the one a production run uses
+# ===========================================================================
+
+_SOLVER_CACHE: dict = {}
+
+
+def _batched_parts(gamma):
+    """Build (and cache) the batched solvers and ray for one ``gamma``.
+
+    Cached because ``make_solver`` source-recompiles the scalar kernels, which
+    is not something to repeat per sweep.
+    """
+    if gamma in _SOLVER_CACHE:
+        return _SOLVER_CACHE[gamma]
+    from batched import api as API
+    from batched import rarefaction_b as RB
+    from batched import ray_b as RAY
+    from batched import wave_speeds_b as WB
+    import numpy as np
+
+    idx = {"LF": 0, "LS": 1, "RS": 2, "RF": 3}
+
+    def xi_fn(state, switch, Bn, g=gamma):
+        eig, _, _, ok = WB.xi_all(*state, Bn, g)
+        return np.where(ok, eig[:, idx[switch]], np.nan)
+
+    fan_p, fan_n = RB.make_integrators(gamma, lambda s, sw, B, g:
+                                       xi_fn(s, sw, B, g))
+    parts = dict(solve=API.make_solver(gamma), ray=RAY, xi=xi_fn,
+                 fan_p=fan_p, fan_n=fan_n, np=np)
+    _SOLVER_CACHE[gamma] = parts
+    return parts
+
+
+def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
+                       fallback=hlld_flux, tau_weak: float = 1e-6,
+                       accuracy: float = 1e-8, max_iter: int = 40,
+                       n_retries: int = 0):
+    """Godunov flux from the exact solution at ``xi = 0``, batched.
+
+    Same contract as :func:`exact_flux` and as ``hlld_flux``, so ``sweep()``
+    needs only the name.  Every interface of a sweep is solved in one call.
+
+    The structure of the routine is: HLLD everywhere first, then overwrite the
+    lanes the exact solver actually owns.  That ordering is deliberate -- a
+    lane that fails ANY gate keeps a valid flux rather than a hole, and the
+    negative ``p_star`` sentinel ``hlld_flux`` wrote survives on exactly those
+    lanes, which is what ``tests/test_idir.py``'s branch-flip logic reads.
+    """
+    P = _batched_parts(_check_eos(eos))
+    np = P["np"]
+    RAY = P["ray"]
+    gamma = _check_eos(eos)
+    N = sL["rho"].numel()
+    dt = sL["rho"].dtype
+
+    F, U, p_star = fallback(sL, sR, eos, idir=idir)
+    F = {k: v.clone() for k, v in F.items()}
+    U = {k: v.clone() for k, v in U.items()}
+    p_star = p_star.clone()
+
+    (L7, BnL), (R7, BnR) = to_solver_frame(sL, eos, idir), to_solver_frame(sR, eos, idir)
+    dBn = float((BnL - BnR).abs().max())
+    if dBn > 1e-10 * float(BnL.abs().max().clamp(min=1e-30)):
+        raise ValueError(f"normal field is not single-valued at the face "
+                         f"(max |Bn_L - Bn_R| = {dBn:.3e})")
+
+    to_np = lambda t: t.detach().cpu().numpy().astype(float)
+    left = [to_np(c) for c in L7]
+    right = [to_np(c) for c in R7]
+    Bn = to_np(BnL)
+
+    jump = relative_jump(sL, sR)
+    v2L = sL["vx"] ** 2 + sL["vy"] ** 2 + sL["vz"] ** 2
+    v2R = sR["vx"] ** 2 + sR["vy"] ** 2 + sR["vz"] ** 2
+    bad = (v2L >= 1.0) | (v2R >= 1.0) | (sL["rho"] <= 0) | (sR["rho"] <= 0)
+    weak = (~bad) & (jump < tau_weak)
+    live = to_np((~bad) & (~weak)).astype(bool)
+    sel = np.flatnonzero(live)
+
+    diag = dict(solver="exact-batched", idir=idir, n_interfaces=N,
+                n_bad=int(bad.sum()), n_weak_gate=int(weak.sum()))
+
+    if sel.size == 0:
+        LAST_DIAG.update(**diag, n_attempted=0, n_exact=0,
+                         n_hlld_fallback=N, frac_hlld_fallback=1.0,
+                         frac_exact=0.0)
+        return F, U, p_star
+
+    subL = [c[sel] for c in left]
+    subR = [c[sel] for c in right]
+    subBn = Bn[sel]
+
+    # The ML warm start is not optional here.  Without it the Newton starts
+    # from a structure-free guess, and the difference is not marginal: on the
+    # same 40 interfaces, neutral seeding solved 23 and took 1896 s where the
+    # warm start solved 30 in 383 s.  The scalar path auto-loads for the same
+    # reason, so the batched one must too or the comparison is meaningless.
+    import ml_guess as mg
+    if model is None or scaler is None:
+        model, scaler = mg.load(os.path.join(_RMHD_ROOT,
+                                             "data/ml_guess_gamma53.pt"))
+    from batched import ml_b as MB
+    seed6, feats = MB.predict_unk6(
+        model, scaler, np.stack(subL, axis=1), np.stack(subR, axis=1), subBn)
+    # per-lane RNG keys folded from each lane's own canonical features, so a
+    # retry jitter cannot depend on where the interface sits in the batch
+    keys = MB.lane_keys(feats) if n_retries else None
+
+    res, d = P["solve"](subL, subR, subBn, seed6=seed6, accuracy=accuracy,
+                        max_iter=max_iter, n_retries=n_retries, keys=keys)
+    diag.update(d)
+
+    from batched import classify as C
+    cls = res["cls"]
+    conv = res["converged"]
+
+    # ── xi = 0, by structure class ────────────────────────────────────────
+    star = [np.zeros(sel.size) for _ in range(7)]
+    ray_ok = np.zeros(sel.size, dtype=bool)
+    region = np.full(sel.size, -1, dtype=int)
+    n_fan = 0
+
+    m7 = np.flatnonzero(conv & np.isin(cls, (C.FULL7, C.COPLANAR)))
+    if m7.size:
+        st, reg, e = RAY.state_at_xi(
+            [c[m7] for c in subL], [c[m7] for c in subR],
+            [[z[j][m7] for j in range(7)] for z in res["zones"]],
+            [v[m7] for v in res["VsLv"]], [v[m7] for v in res["VsRv"]],
+            subBn[m7], gamma, P["xi"], P["fan_p"], P["fan_n"])
+        for j in range(7):
+            star[j][m7] = st[j]
+        region[m7] = reg
+        ray_ok[m7] = ~e
+        n_fan += int(np.isin(reg, RAY.FAN_REGIONS).sum())
+
+    m3 = np.flatnonzero(conv & ~np.isin(cls, (C.FULL7, C.COPLANAR)))
+    if m3.size:
+        st, reg, e = RAY.state_at_xi_3wave(
+            [c[m3] for c in subL], [c[m3] for c in subR],
+            [z[m3] for z in res["zones"][2]], [z[m3] for z in res["zones"][3]],
+            res["VsL"][m3], res["VsR"][m3], subBn[m3], gamma, P["xi"],
+            P["fan_p"])
+        for j in range(7):
+            star[j][m3] = st[j]
+        region[m3] = reg
+        ray_ok[m3] = ~e
+        n_fan += int(np.isin(reg, RAY.FAN_REGIONS_3).sum())
+
+    # ── the resolved state must itself be physical ────────────────────────
+    rho, P_tot, vn, vt1, vt2, Bt1, Bt2 = star
+    v2 = vn * vn + vt1 * vt1 + vt2 * vt2
+    W2 = 1.0 / np.maximum(1.0 - v2, 1e-300)
+    eta = subBn * vn + Bt1 * vt1 + Bt2 * vt2
+    b2 = (subBn ** 2 + Bt1 ** 2 + Bt2 ** 2) / W2 + eta ** 2
+    physical = (rho > 0.0) & (v2 < 1.0) & (P_tot - 0.5 * b2 > 0.0)
+    for c in star:
+        physical &= np.isfinite(c)
+    take = conv & ray_ok & physical
+
+    n_unphys = int((conv & ray_ok & ~physical).sum())
+    g = sel[take]
+    if g.size:
+        tt = lambda a: torch.tensor(a[take], dtype=dt)
+        one = {k: v[g] for k, v in sL.items()}
+        star_t = from_solver_frame([tt(c) for c in star], tt(subBn),
+                                   eos, idir, one)
+        uS, _, fS, _, _, _ = compute_srmhd_fluxes(star_t, star_t, eos, idir)
+        for k in F:
+            F[k][g] = fS[k]
+            U[k][g] = uS[k]
+        p_star[g] = torch.tensor(P_tot[take], dtype=dt)
+
+    n_exact = int(g.size)
+    fell_back = N - n_exact
+    exact_mask = torch.zeros(N, dtype=torch.bool)
+    if g.size:
+        exact_mask[torch.as_tensor(g, dtype=torch.long)] = True
+    LAST_DIAG.update(
+        **diag,
+        exact_mask=exact_mask,
+        n_attempted=int(sel.size),
+        n_exact=n_exact,
+        n_fan_interior=n_fan,
+        n_unphysical_star=n_unphys,
+        n_ray_failed=int((conv & ~ray_ok).sum()),
+        n_hlld_fallback=fell_back,
+        frac_hlld_fallback=fell_back / max(N, 1),
+        frac_exact=n_exact / max(N, 1),
+    )
     return F, U, p_star
