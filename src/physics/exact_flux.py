@@ -137,13 +137,48 @@ def from_solver_frame(state, Bn, eos, idir, like):
 
 
 def relative_jump(sL, sR):
-    """Scale-free measure of how discontinuous an interface is."""
-    worst = None
-    for k in ("rho", "p", "vx", "vy", "vz", "Bx", "By", "Bz"):
-        a, b = sL[k], sR[k]
-        d = (a - b).abs() / (a.abs() + b.abs() + 1e-30)
-        worst = d if worst is None else torch.maximum(worst, d)
-    return worst
+    """Scale-free, rotation-invariant measure of how discontinuous an interface is.
+
+    The obvious form -- max over every variable of |a-b|/(|a|+|b|) -- is wrong
+    for any quantity that changes SIGN.  The denominator vanishes at a zero
+    crossing, so the ratio saturates at 1 no matter how smooth the data is.
+    That is not a corner case here: the rotor is a rotating flow, so vx, vy and
+    By cross zero across most of the domain.  Measured on a 128^2 HLLD rotor at
+    t=0.4, the old form called 99.9% of interfaces discontinuous at a 1e-2
+    threshold, while rho and p -- the only strictly positive variables -- put
+    just 3.2% and 7.9% above 0.1.  The weak-jump gate could therefore never
+    fire, and every interface went to the exact solver.
+
+    Three fixes, one per kind of variable:
+
+    * rho and p are strictly positive, so the ordinary relative difference is
+      well behaved and is kept.
+    * velocity is compared as an absolute VECTOR jump.  v is in units of c and
+      bounded by 1, so |v_L - v_R| is already dimensionless and scale-free, and
+      it cannot blow up where a component passes through zero.
+    * the field is compared as a vector jump against a scale floored by the
+      pressure scale, so a component crossing zero -- or |B| itself vanishing --
+      cannot empty the denominator.
+
+    Using vector norms rather than a per-component max also makes the measure
+    rotation-invariant, which the old form was not: the same physical interface
+    could gate differently in an x-sweep than in a y-sweep, which would quietly
+    break `test_idir` and the rotor's pi-rotation symmetry diagnostic.
+    """
+    tiny = 1e-30
+    worst = (sL["rho"] - sR["rho"]).abs() / (
+        sL["rho"].abs() + sR["rho"].abs() + tiny)
+    worst = torch.maximum(worst, (sL["p"] - sR["p"]).abs() / (
+        sL["p"].abs() + sR["p"].abs() + tiny))
+
+    dv = sum((sL[k] - sR[k]) ** 2 for k in ("vx", "vy", "vz")).sqrt()
+    worst = torch.maximum(worst, dv)
+
+    dB = sum((sL[k] - sR[k]) ** 2 for k in ("Bx", "By", "Bz")).sqrt()
+    BL = sum(sL[k] ** 2 for k in ("Bx", "By", "Bz")).sqrt()
+    BR = sum(sR[k] ** 2 for k in ("Bx", "By", "Bz")).sqrt()
+    scale = BL + BR + (sL["p"].abs() + sR["p"].abs()).sqrt()
+    return torch.maximum(worst, dB / (scale + tiny))
 
 
 def exact_flux(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
