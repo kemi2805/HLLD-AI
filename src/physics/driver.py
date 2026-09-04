@@ -22,6 +22,7 @@ from .c2p import conservative_to_primitive
 from .eos import hybrid_eos
 from .grid import Grid1D
 from .hlld import (
+    LAST_DIAG,
     compute_srmhd_fluxes,
     hllc_flux,
     hlld_ai_flux,
@@ -398,6 +399,7 @@ def run(cfg: dict):
     t_next_snap = 0.0
 
     # ── Solver dispatch ───────────────────────────────────────────────────────
+    harvester = None
     if solver == "hlld_ai":
         model, norm_stats = _load_ai_solver(cfg, device)
         flux_fn = functools.partial(hlld_ai_flux, model=model, norm_stats=norm_stats)
@@ -407,11 +409,29 @@ def run(cfg: dict):
         # resolve fall back to HLLD and the fraction is reported in LAST_DIAG,
         # so a run is never silently part-exact.
         from src.physics.exact_flux import exact_flux_batched
+        # Optional: keep the Riemann problems the run actually produced.
+        # The ones the retry ladder rescued are hard problems WITH exact
+        # answers, in-distribution by construction; the ones that fell back
+        # are the failure set in the regime that matters.  Off unless a
+        # harvest block is present, since a 256^2 rotor is ~668M solves.
+        harvester = None
+        hc = cfg.get("harvest") or {}
+        if hc.get("enabled"):
+            from src.physics.harvest import Harvester
+            harvester = Harvester(
+                hc.get("dir", "harvest"), cfg["eos"]["gamma"],
+                stride=hc.get("stride", 1),
+                max_solved=hc.get("max_solved", 200_000),
+                max_unsolved=hc.get("max_unsolved", 200_000),
+                only_retried=hc.get("only_retried", True),
+                flush_every=hc.get("flush_every", 20_000),
+                rank=hc.get("rank", 0))
         flux_fn = functools.partial(
             exact_flux_batched,
             tau_weak=rc.get("tau_weak", 1e-6),
             n_retries=rc.get("n_retries", 0),
             max_iter=rc.get("exact_max_iter", 40),
+            harvester=harvester,
         )
     else:
         flux_fn = {"hlld": hlld_flux, "hlle": hlle_flux, "hllc": hllc_flux}.get(
@@ -465,4 +485,11 @@ def run(cfg: dict):
             print(f"  step {step:6d}  t={t:.4e}  dt={dt:.3e}  → {fname.name}")
 
     print("Done.")
+    if harvester is not None:
+        # Without this the last partial shard is lost, which on a short run
+        # can be all of it.
+        info = harvester.close()
+        print(f"  harvested {info['harvest_solved']} solved / "
+              f"{info['harvest_unsolved']} unsolved -> {info['harvest_dir']}")
+        LAST_DIAG.update(info)
     return t, grid, prims, cons

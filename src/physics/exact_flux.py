@@ -333,7 +333,7 @@ def _batched_parts(gamma):
 def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
                        fallback=hlld_flux, tau_weak: float = 1e-6,
                        accuracy: float = 1e-8, max_iter: int = 40,
-                       n_retries: int = 0):
+                       n_retries: int = 0, harvester=None):
     """Godunov flux from the exact solution at ``xi = 0``, batched.
 
     Same contract as :func:`exact_flux` and as ``hlld_flux``, so ``sweep()``
@@ -456,6 +456,20 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
     take = conv & ray_ok & physical
 
     n_unphys = int((conv & ray_ok & ~physical).sum())
+
+    # Harvest before the flux assembly, while the per-lane verdict is still
+    # in hand: `take` is the only place that knows a lane cleared EVERY gate
+    # (converged, ray resolved, state physical), and downstream only the
+    # assembled flux survives.
+    if harvester is not None:
+        from src.physics.harvest import Harvester           # noqa: F401
+        harvester.record(
+            subL, subR, subBn, cls=cls, converged=conv, zones=res["zones"],
+            VsLv=res["VsLv"], VsRv=res["VsRv"],
+            attempts=res.get("attempts", np.ones(sel.size, dtype=int)),
+            accepted=take,
+            seven_wave=np.isin(cls, (C.FULL7, C.COPLANAR)))
+
     g = sel[take]
     if g.size:
         tt = lambda a: torch.tensor(a[take], dtype=dt)
