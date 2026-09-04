@@ -69,6 +69,15 @@ def main():
                          "HLLD.  The error is O(jump^2), so 1e-2 costs ~1e-4 "
                          "relative -- far below scheme truncation -- and it "
                          "is what makes the exact flux affordable at all")
+    ap.add_argument("--tau-bt", type=float, default=1e-9,
+                    help="interfaces whose tangential field, relative to "
+                         "|Bn| + sqrt(P_L+P_R), is below this go straight to "
+                         "HLLD.  With Bt = 0 on both sides three of the six "
+                         "unknowns are undefined (ln|Bt_CD| and the two "
+                         "rotations), so the solver cannot represent an "
+                         "answer -- the rotor at t=0 is exactly this case.  "
+                         "Kept tight: it should catch the unrepresentable, "
+                         "not the merely hard")
     ap.add_argument("--exact-retries", type=int, default=0,
                     help="retry ladder rounds per unconverged interface")
     ap.add_argument("--exact-max-iter", type=int, default=40)
@@ -147,10 +156,11 @@ def main():
                                   stride=a.harvest_stride)
         flux_fn = functools.partial(exact_flux_batched,
                                     tau_weak=a.tau_weak,
+                                    tau_bt=a.tau_bt,
                                     n_retries=a.exact_retries,
                                     max_iter=a.exact_max_iter,
                                     harvester=harvester)
-        print(f"  exact flux: tau_weak={a.tau_weak:g}  "
+        print(f"  exact flux: tau_weak={a.tau_weak:g}  tau_bt={a.tau_bt:g}  "
               f"retries={a.exact_retries}  max_iter={a.exact_max_iter}"
               + (f"  harvest -> {a.harvest}" if a.harvest else ""))
 

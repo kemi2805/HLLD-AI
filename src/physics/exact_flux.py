@@ -367,6 +367,7 @@ def _batched_parts(gamma):
 
 def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
                        fallback=hlld_flux, tau_weak: float = 1e-6,
+                       tau_bt: float = 1e-9,
                        accuracy: float = 1e-8, max_iter: int = 40,
                        n_retries: int = 0, harvester=None):
     """Godunov flux from the exact solution at ``xi = 0``, batched.
@@ -447,8 +448,14 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
     # retry jitter cannot depend on where the interface sits in the batch
     keys = MB.lane_keys(feats) if n_retries else None
 
+    # tau_bt is applied INSIDE solve_batch rather than here: it must only
+    # skip the seven-wave classes.  The reduced three-wave solver carries no
+    # rotation unknowns and handles Bt = 0 correctly -- 8 of the rotor's 12
+    # degenerate x-sweep lanes converge on it at t=0 -- so a tier-0 gate would
+    # have thrown those answers away along with the unrepresentable ones.
     res, d = P["solve"](subL, subR, subBn, seed6=seed6, accuracy=accuracy,
-                        max_iter=max_iter, n_retries=n_retries, keys=keys)
+                        max_iter=max_iter, n_retries=n_retries, keys=keys,
+                        tau_bt=tau_bt)
     diag.update(d)
     diag["n_seed_clamped"] = n_seed_clamped
 
