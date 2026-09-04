@@ -15,10 +15,14 @@ from src.physics.initial_data2d import (b_from_potential, magnetic_rotor,
                                         orszag_tang)
 from src.physics.state import EVOLVED_KEYS, State2D
 from src.physics.envelope import EnvelopeRecorder, format_summary
-from src.physics.hlld import hlld_flux, hlle_flux, hllc_flux, hlld_ai_flux
+from src.physics.hlld import (hlld_flux, hlle_flux, hllc_flux, hlld_ai_flux,
+                              LAST_DIAG)
 
+# `exact` is built lazily in main(): it needs tau_weak / n_retries bound in,
+# and importing exact_flux drags in the rmhd_final solver, which should not
+# happen for an ordinary HLLD run.
 SOLVERS = {"hlld": hlld_flux, "hlle": hlle_flux, "hllc": hllc_flux,
-           "hlld_ai": hlld_ai_flux}
+           "hlld_ai": hlld_ai_flux, "exact": None}
 
 # problem -> (domain, gamma, default t_end, bc_x, bc_y, has pi-rotation symmetry)
 PROBLEMS = {
@@ -59,6 +63,19 @@ def main():
     ap.add_argument("--tend", type=float, default=None)
     ap.add_argument("--cfl", type=float, default=0.25)
     ap.add_argument("--solver", default="hlld", choices=list(SOLVERS))
+    # --- exact-flux options (ignored unless --solver exact) ---
+    ap.add_argument("--tau-weak", type=float, default=1e-2,
+                    help="interfaces whose relative jump is below this go to "
+                         "HLLD.  The error is O(jump^2), so 1e-2 costs ~1e-4 "
+                         "relative -- far below scheme truncation -- and it "
+                         "is what makes the exact flux affordable at all")
+    ap.add_argument("--exact-retries", type=int, default=0,
+                    help="retry ladder rounds per unconverged interface")
+    ap.add_argument("--exact-max-iter", type=int, default=40)
+    ap.add_argument("--harvest", type=str, default=None,
+                    help="directory to record solved-after-retry and "
+                         "unsolved Riemann problems into")
+    ap.add_argument("--harvest-stride", type=int, default=1)
     ap.add_argument("--emf-mode", default="solver", choices=["solver", "hll"])
     ap.add_argument("--limiter", default="mc")
     ap.add_argument("--no-upwind-emf", action="store_true",
@@ -119,13 +136,31 @@ def main():
                             every=a.envelope_every)
            if a.envelope else None)
 
+    flux_fn = SOLVERS[a.solver]
+    harvester = None
+    if a.solver == "exact":
+        import functools
+        from src.physics.exact_flux import exact_flux_batched
+        if a.harvest:
+            from src.physics.harvest import Harvester
+            harvester = Harvester(a.harvest, P["gamma"],
+                                  stride=a.harvest_stride)
+        flux_fn = functools.partial(exact_flux_batched,
+                                    tau_weak=a.tau_weak,
+                                    n_retries=a.exact_retries,
+                                    max_iter=a.exact_max_iter,
+                                    harvester=harvester)
+        print(f"  exact flux: tau_weak={a.tau_weak:g}  "
+              f"retries={a.exact_retries}  max_iter={a.exact_max_iter}"
+              + (f"  harvest -> {a.harvest}" if a.harvest else ""))
+
     t, step, t0 = 0.0, 0, time.time()
     next_snap = 1
     while t < tend - 1e-14:
         dt = min(compute_dt_2d(st.prims, g, eos, a.cfl), tend - t)
         st, diag = rk_step_ct(st, g, eos, dt, scheme="rk3",
                               bc_x=bc_x, bc_y=bc_y,
-                              flux_fn=SOLVERS[a.solver],
+                              flux_fn=flux_fn,
                               limiter=a.limiter, emf_mode=a.emf_mode,
                               upwind=not a.no_upwind_emf, recorder=rec)
         t += dt
