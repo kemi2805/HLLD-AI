@@ -179,6 +179,11 @@ def main():
     ap.add_argument("configs", nargs="+")
     ap.add_argument("--ncells", type=int, default=200)
     ap.add_argument("--solvers", default="hlld,exact")
+    ap.add_argument("--progress-every", type=int, default=25,
+                    help="steps between progress lines on each arm; the "
+                         "exact arm is ~300x slower than HLLD, so a run "
+                         "with no output is indistinguishable from a hung "
+                         "one")
     args = ap.parse_args()
 
     for cpath in args.configs:
@@ -193,7 +198,12 @@ def main():
             cfg["grid"]["ncells"] = args.ncells
             cfg["run"]["solver"] = solver
             cfg["output"]["dir"] = f"/tmp/tube_{name}_{solver}"
-            cfg["output"]["every_n_steps"] = 10 ** 9
+            # Print (and snapshot) periodically rather than never.  The
+            # exact arm runs ~300x slower than HLLD, so a run with no
+            # progress output is indistinguishable from a hung one -- and
+            # there is no other signal, since nothing else is written until
+            # the very end.
+            cfg["output"]["every_n_steps"] = args.progress_every
             t0 = time.perf_counter()
             _t, grid, prims, _cons = run(cfg)
             dt = time.perf_counter() - t0
