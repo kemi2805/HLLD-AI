@@ -435,6 +435,14 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
     from batched import ml_b as MB
     seed6, feats = MB.predict_unk6(
         model, scaler, np.stack(subL, axis=1), np.stack(subR, axis=1), subBn)
+    # The net is an interpolator; outside its training box it extrapolates
+    # without limit.  Measured on the t=0 rotor x-sweep, where |Bt| is exactly
+    # zero on both sides: it is fed log(0 + 1e-30) = -69 against a training
+    # minimum of -6.9 and answers ln|Bt_CD| ~ 110, seeding the Newton at 1e48
+    # so its first residual is inf.  Bounding the seed does not rescue those
+    # lanes -- they fall back to HLLD and are counted -- it keeps a nonsense
+    # seed from putting non-finite numbers into a shared batch.
+    seed6, n_seed_clamped = MB.clamp_seed_physical(seed6, subL, subR, subBn)
     # per-lane RNG keys folded from each lane's own canonical features, so a
     # retry jitter cannot depend on where the interface sits in the batch
     keys = MB.lane_keys(feats) if n_retries else None
@@ -442,6 +450,7 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
     res, d = P["solve"](subL, subR, subBn, seed6=seed6, accuracy=accuracy,
                         max_iter=max_iter, n_retries=n_retries, keys=keys)
     diag.update(d)
+    diag["n_seed_clamped"] = n_seed_clamped
 
     from batched import classify as C
     cls = res["cls"]
