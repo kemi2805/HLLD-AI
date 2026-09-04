@@ -48,6 +48,33 @@ import torch
 from .hlld import LAST_DIAG, compute_srmhd_fluxes, hlld_flux
 
 _RMHD_ROOT = "/Users/miler/Codes/rmhd_final"
+
+# Which warm-start checkpoint to auto-load.  Override with RMHD_ML_CKPT.
+#
+# Default is v5 because it is the measured best on the SHOCK-TUBE regime,
+# which is what the 1D gate exercises: 90.7% converged with the 4x retry
+# ladder, against 89.0% for ml_guess_gamma53.pt (the previous hardcoded
+# default) on the same 300-problem eval set.
+#
+# It is deliberately NOT the right choice for the rotor.  The rotor-trained
+# checkpoints win there and lose here, and the gap is significant in both
+# directions (paired McNemar, evalset_rotor_600 / evalset_300):
+#
+#     checkpoint                  rotor    tubes
+#     ml_guess_gamma53_v5.pt      83.8%    90.7%
+#     ml_guess_rotor_ft.pt        88.8%    84.0%
+#     ml_guess_rotor_scratch.pt   87.2%    82.3%
+#
+# So for rotor production runs, set
+#     RMHD_ML_CKPT=data/ml_guess_rotor_ft.pt
+# rather than changing this default.  Which one to promote outright is an
+# open decision -- ft and scratch are statistically indistinguishable from
+# each other on both regimes.
+#
+# The checkpoint only affects convergence RATE and speed, never correctness:
+# interfaces the Newton cannot resolve fall back to HLLD and are counted in
+# LAST_DIAG.
+_DEFAULT_CKPT = os.environ.get("RMHD_ML_CKPT", "data/ml_guess_gamma53_v5.pt")
 if _RMHD_ROOT not in sys.path:
     # APPEND, never insert: rmhd_final uses flat top-level module names
     # (eos, solver, contact, hlle) and must never shadow this package's own.
@@ -190,8 +217,7 @@ def exact_flux(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
         import ml_guess as mg
         from fullcontact import fullcontact6
         if model is None or scaler is None:
-            model, scaler = mg.load(os.path.join(_RMHD_ROOT,
-                                                 "data/ml_guess_gamma53.pt"))
+            model, scaler = mg.load(os.path.join(_RMHD_ROOT, _DEFAULT_CKPT))
 
     for i in idx:
         left = [float(c[i]) for c in L7]
@@ -370,8 +396,7 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
     # reason, so the batched one must too or the comparison is meaningless.
     import ml_guess as mg
     if model is None or scaler is None:
-        model, scaler = mg.load(os.path.join(_RMHD_ROOT,
-                                             "data/ml_guess_gamma53.pt"))
+        model, scaler = mg.load(os.path.join(_RMHD_ROOT, _DEFAULT_CKPT))
     from batched import ml_b as MB
     seed6, feats = MB.predict_unk6(
         model, scaler, np.stack(subL, axis=1), np.stack(subR, axis=1), subBn)
