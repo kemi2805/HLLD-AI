@@ -401,6 +401,18 @@ def run(cfg: dict):
     if solver == "hlld_ai":
         model, norm_stats = _load_ai_solver(cfg, device)
         flux_fn = functools.partial(hlld_ai_flux, model=model, norm_stats=norm_stats)
+    elif solver in ("exact", "exact_batched"):
+        # The exact Riemann solution evaluated on the ray xi = 0, ML
+        # warm-started and batched over the whole sweep.  Interfaces it cannot
+        # resolve fall back to HLLD and the fraction is reported in LAST_DIAG,
+        # so a run is never silently part-exact.
+        from src.physics.exact_flux import exact_flux_batched
+        flux_fn = functools.partial(
+            exact_flux_batched,
+            tau_weak=rc.get("tau_weak", 1e-6),
+            n_retries=rc.get("n_retries", 0),
+            max_iter=rc.get("exact_max_iter", 40),
+        )
     else:
         flux_fn = {"hlld": hlld_flux, "hlle": hlle_flux, "hllc": hllc_flux}.get(
             solver, hlld_flux
