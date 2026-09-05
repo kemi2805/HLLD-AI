@@ -140,8 +140,10 @@ def exact_profile(cfg, x, t):
     idx = {"LF": 0, "LS": 1, "RS": 2, "RF": 3}
 
     def xi_fn(state, switch, B, gg=g):
+        # per-ROOT validity; see the twin in src/physics/exact_flux.py
+        k = idx[switch]
         eig, _, _, ok = WB.xi_all(*state, B, gg)
-        return np.where(ok, eig[:, idx[switch]], np.nan)
+        return np.where(ok[:, k], eig[:, k], np.nan)
 
     fan_p, fan_n = RB.make_integrators(g, lambda s, sw, B, gg: xi_fn(s, sw, B))
     xi = (x - x0) / t

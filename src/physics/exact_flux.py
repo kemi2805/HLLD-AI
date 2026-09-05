@@ -354,8 +354,16 @@ def _batched_parts(gamma):
     idx = {"LF": 0, "LS": 1, "RS": 2, "RF": 3}
 
     def xi_fn(state, switch, Bn, g=gamma):
+        # ok is per-ROOT, (N, 4), aligned with eig's [LF, LS, RS, RF].  Ask it
+        # about the root being requested and no other: near B_n = 0 the
+        # interior pair merges into a double root that double precision cannot
+        # resolve, while the fast pair stays exact to ~1e-17.  Gating LF/RF on
+        # the interior pair's failure refuses rarefactions that are perfectly
+        # well determined -- and B_n = By IS the rotor's y-sweep, zero at t=0
+        # and small for a long while after.  See rmhd_final commit 2392aa6.
+        k = idx[switch]
         eig, _, _, ok = WB.xi_all(*state, Bn, g)
-        return np.where(ok, eig[:, idx[switch]], np.nan)
+        return np.where(ok[:, k], eig[:, k], np.nan)
 
     fan_p, fan_n = RB.make_integrators(gamma, lambda s, sw, B, g:
                                        xi_fn(s, sw, B, g))
