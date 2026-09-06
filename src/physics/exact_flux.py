@@ -338,6 +338,20 @@ def exact_flux(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
 # ===========================================================================
 
 _SOLVER_CACHE: dict = {}
+_MODEL_CACHE: dict = {}
+
+
+def _load_model_cached(path):
+    """torch.load the warm-start checkpoint once per process, not per flux call.
+
+    Every sweep called mg.load, i.e. a torch.load from disk -- ~800 loads per
+    32^2 run, ~9000 at 64^2.  Numerics-neutral: the same file yields the same
+    weights.  Keyed by path so RMHD_ML_CKPT can still switch checkpoints.
+    """
+    if path not in _MODEL_CACHE:
+        import ml_guess as mg
+        _MODEL_CACHE[path] = mg.load(path)
+    return _MODEL_CACHE[path]
 
 
 def _batched_parts(gamma):
@@ -443,7 +457,7 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
     # reason, so the batched one must too or the comparison is meaningless.
     import ml_guess as mg
     if model is None or scaler is None:
-        model, scaler = mg.load(os.path.join(_RMHD_ROOT, _DEFAULT_CKPT))
+        model, scaler = _load_model_cached(os.path.join(_RMHD_ROOT, _DEFAULT_CKPT))
     from batched import ml_b as MB
     seed6, feats = MB.predict_unk6(
         model, scaler, np.stack(subL, axis=1), np.stack(subR, axis=1), subBn)
