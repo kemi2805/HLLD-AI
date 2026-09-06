@@ -466,8 +466,9 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
     if model is None or scaler is None:
         model, scaler = _load_model_cached(os.path.join(_RMHD_ROOT, _DEFAULT_CKPT))
     from batched import ml_b as MB
-    seed6, feats = MB.predict_unk6(
+    cands, feats = MB.predict_unk6_k(
         model, scaler, np.stack(subL, axis=1), np.stack(subR, axis=1), subBn)
+    seed6 = cands[0]          # a best-of-K checkpoint: candidate 0 is the primary
     # The net is an interpolator; outside its training box it extrapolates
     # without limit.  Measured on the t=0 rotor x-sweep, where |Bt| is exactly
     # zero on both sides: it is fed log(0 + 1e-30) = -69 against a training
@@ -482,8 +483,11 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
     # the ensemble: one clamped seed per extra checkpoint, retry k from the
     # k-th (per-lane predictions, so batch-independence is untouched)
     seeds_extra = None
-    if n_retries and _EXTRA_CKPTS:
+    if n_retries and (len(cands) > 1 or _EXTRA_CKPTS):
         seeds_extra = []
+        for u_k in cands[1:]:               # the primary's own extra candidates first
+            u_k, _ = MB.clamp_seed_physical(u_k, subL, subR, subBn)
+            seeds_extra.append(u_k)
         for ck in _EXTRA_CKPTS:
             m_k, s_k = _load_model_cached(os.path.join(_RMHD_ROOT, ck))
             u_k, _ = MB.predict_unk6(m_k, s_k, np.stack(subL, axis=1),
