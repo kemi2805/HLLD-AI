@@ -85,6 +85,10 @@ def main():
                     help="directory to record solved-after-retry and "
                          "unsolved Riemann problems into")
     ap.add_argument("--harvest-stride", type=int, default=1)
+    ap.add_argument("--harvest-all", action="store_true",
+                    help="record EVERY solved seven-wave lane (not only the "
+                         "retry-rescued ones) with high caps; the per-sweep "
+                         "coverage map is always recorded")
     ap.add_argument("--emf-mode", default="solver", choices=["solver", "hll"])
     ap.add_argument("--limiter", default="mc")
     ap.add_argument("--no-upwind-emf", action="store_true",
@@ -152,8 +156,11 @@ def main():
         from src.physics.exact_flux import exact_flux_batched
         if a.harvest:
             from src.physics.harvest import Harvester
-            harvester = Harvester(a.harvest, P["gamma"],
-                                  stride=a.harvest_stride)
+            hk = dict(stride=a.harvest_stride)
+            if a.harvest_all:
+                hk.update(only_retried=False, max_solved=5_000_000,
+                          max_unsolved=5_000_000)
+            harvester = Harvester(a.harvest, P["gamma"], **hk)
         flux_fn = functools.partial(exact_flux_batched,
                                     tau_weak=a.tau_weak,
                                     tau_bt=a.tau_bt,
@@ -211,6 +218,9 @@ def main():
 
     save("fin", t)
     log.close()
+    if harvester is not None:
+        # the final partial buffers were never written before this call
+        print("harvest:", harvester.close(), flush=True)
     if rec is not None:
         os.makedirs(os.path.dirname(a.envelope) or ".", exist_ok=True)
         summ = rec.save(a.envelope, problem=a.problem, n=a.n,

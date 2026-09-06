@@ -86,6 +86,12 @@ class Harvester:
 
         self._solved = []          # list of (U_L, U_R, zones, speeds, attempts)
         self._unsolved = []        # list of (U_L, U_R, reason, attempts, cls)
+        # per-sweep coverage: which interfaces were attempted and which came
+        # out exact.  Everything else kept the HLLD flux by the gates; an
+        # attempted-but-not-exact interface kept it by fallback (its reason is
+        # in the unsolved shards).  Packed bits, ~1 KB per sweep at 64^2.
+        self._coverage = []        # list of dict(idir, n, attempted, exact)
+        self.n_sweeps = 0
         self.n_solved = 0
         self.n_unsolved = 0
         self._seen = 0             # eligible lanes seen, for the stride
@@ -188,6 +194,19 @@ class Harvester:
         return dict(U_L=U_L, U_R=U_R, zones=Z, speeds=S,
                     attempts=att[idx].astype(np.int16))
 
+    def record_coverage(self, idir, n_interfaces, attempted_idx, exact_idx):
+        """One sweep's coverage: flat interface indices that were attempted
+        and that came out exact (``exact_idx`` is a subset of ``attempted_idx``).
+        Not subject to the stride or the caps -- it is the complete map."""
+        att = np.zeros(int(n_interfaces), dtype=np.bool_)
+        ex = np.zeros(int(n_interfaces), dtype=np.bool_)
+        att[np.asarray(attempted_idx, dtype=np.int64)] = True
+        ex[np.asarray(exact_idx, dtype=np.int64)] = True
+        self._coverage.append(dict(sweep=self.n_sweeps, idir=int(idir),
+                                   n=int(n_interfaces),
+                                   attempted=np.packbits(att), exact=np.packbits(ex)))
+        self.n_sweeps += 1
+
     # ── output ───────────────────────────────────────────────────────────
     def flush(self):
         stamp = f"r{self.rank:03d}_{self._shard:05d}"
@@ -201,11 +220,22 @@ class Harvester:
             path = os.path.join(self.out_dir, f"{name}_{stamp}.npz")
             np.savez_compressed(path, **merged)
             buf.clear()
+        if self._coverage:
+            c = self._coverage
+            np.savez_compressed(
+                os.path.join(self.out_dir, f"coverage_{stamp}.npz"),
+                sweep=np.array([d["sweep"] for d in c], dtype=np.int64),
+                idir=np.array([d["idir"] for d in c], dtype=np.int8),
+                n=np.array([d["n"] for d in c], dtype=np.int64),
+                attempted=np.stack([d["attempted"] for d in c], axis=0),
+                exact=np.stack([d["exact"] for d in c], axis=0))
+            c.clear()
         self._shard += 1
 
     def summary(self):
         return dict(harvest_solved=self.n_solved,
                     harvest_unsolved=self.n_unsolved,
+                    harvest_sweeps=self.n_sweeps,
                     harvest_dir=self.out_dir)
 
     def close(self):

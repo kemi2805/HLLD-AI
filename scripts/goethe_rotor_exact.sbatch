@@ -25,7 +25,8 @@
 #  Usage:   sbatch scripts/goethe_rotor_exact.sbatch              # 64^2
 #           N=128 sbatch scripts/goethe_rotor_exact.sbatch        # 128^2
 #           N=32 TEND=0.02 NUMBA_THREADS=8 sbatch -p test -t 1:00:00 scripts/goethe_rotor_exact.sbatch   # pilot
-#  Knobs:   RETRIES (default 2), TEND (0.4), NSNAP (8), OUT, RMHD_ML_CKPT
+#  Knobs:   RETRIES (default 2), TEND (0.4), NSNAP (8), OUT, HARVEST_ALL (1),
+#           RMHD_ML_CKPT
 #           (primary seed), RMHD_ML_CKPTS (comma-separated extra checkpoints
 #           whose predictions seed retries 1, 2, ... -- the ensemble
 #           multistart; measured paired on identical inputs 2026-09-06:
@@ -44,7 +45,10 @@ OUT=${OUT:-results/rotor_${N}_exact}
 
 export RMHD_ROOT=${RMHD_ROOT:-/work/astro/miler/codes/rmhd_final}
 export RMHD_ML_CKPT=${RMHD_ML_CKPT:-data/ml_guess_rotor_ft.pt}
-export RMHD_ML_CKPTS=${RMHD_ML_CKPTS-data/ml_guess_rotor_big_s42.pt,data/ml_guess_rotor_big_s47.pt}
+# the run-1 snapshots (epoch 150 of job 1767483): fixed files, unlike the
+# live checkpoints the 72 h continuation keeps overwriting
+export RMHD_ML_CKPTS=${RMHD_ML_CKPTS-data/ml_guess_rotor_big_run1_s42.pt,data/ml_guess_rotor_big_run1_s47.pt}
+HARVEST_ALL=${HARVEST_ALL:-1}     # 1: every solved lane + the per-sweep coverage map
 # the four compiled kernels: fan integrators, Alfven pinned solve, slow shock,
 # fast/slow shock chain -- each measured against its numpy twin (bitwise for
 # the last two) and on the rotor step-1 configuration
@@ -70,5 +74,6 @@ $PY -c "import numpy, numba, torch; print('numpy', numpy.__version__, 'numba', n
 
 $PY -u scripts/run_2d.py --problem rotor --n "$N" --solver exact --tend "$TEND" \
     --nsnap "$NSNAP" --tau-weak 1e-2 --tau-bt 1e-9 --exact-retries "$RETRIES" \
-    --exact-max-iter 40 --out "$OUT" --harvest "$OUT/harvest"
+    --exact-max-iter 40 --out "$OUT" --harvest "$OUT/harvest" \
+    $( [ "$HARVEST_ALL" = 1 ] && echo --harvest-all )
 echo "== $(date)  exit $?"

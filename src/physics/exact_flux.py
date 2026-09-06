@@ -449,6 +449,8 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
         LAST_DIAG.update(**diag, n_attempted=0, n_exact=0,
                          n_hlld_fallback=N, frac_hlld_fallback=1.0,
                          frac_exact=0.0)
+        if harvester is not None:
+            harvester.record_coverage(idir, N, np.zeros(0, dtype=int), np.zeros(0, dtype=int))
         return F, U, p_star
 
     subL = [c[sel] for c in left]
@@ -564,6 +566,8 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
             seven_wave=np.isin(cls, (C.FULL7, C.COPLANAR)))
 
     g = sel[take]
+    if harvester is not None:
+        harvester.record_coverage(idir, N, sel, g)
     if g.size:
         tt = lambda a: torch.tensor(a[take], dtype=dt)
         one = {k: v[g] for k, v in sL.items()}
