@@ -47,7 +47,10 @@ import torch
 
 from .hlld import LAST_DIAG, compute_srmhd_fluxes, hlld_flux
 
-_RMHD_ROOT = "/Users/miler/Codes/rmhd_final"
+# Overridable: the cluster checkouts live elsewhere (Goethe:
+# /work/astro/miler/codes/rmhd_final), and a git worktree of rmhd_final is how
+# a bit-identity reference is isolated from edits on main.
+_RMHD_ROOT = os.environ.get("RMHD_ROOT", "/Users/miler/Codes/rmhd_final")
 
 # Which warm-start checkpoint to auto-load.  Override with RMHD_ML_CKPT.
 #
