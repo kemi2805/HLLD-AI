@@ -48,7 +48,7 @@ export RMHD_ML_CKPTS=${RMHD_ML_CKPTS-data/ml_guess_rotor_big_s42.pt,data/ml_gues
 # the four compiled kernels: fan integrators, Alfven pinned solve, slow shock,
 # fast/slow shock chain -- each measured against its numpy twin (bitwise for
 # the last two) and on the rotor step-1 configuration
-export RMHD_FAN=njit RMHD_ALFVEN=njit RMHD_SLOWSHOCK=njit RMHD_SHOCK=njit
+export RMHD_FAN=njit RMHD_ALFVEN=${RMHD_ALFVEN:-fused} RMHD_SLOWSHOCK=njit RMHD_SHOCK=njit
 # numpy/BLAS single-threaded (its dispatch is the cost, not its arithmetic);
 # torch (the CT/HLLD part) a few threads.  numba's thread count is a KNOB
 # (NUMBA_THREADS), not the node: the kernels are launched ~50,000 times per
