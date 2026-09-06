@@ -24,7 +24,7 @@
 #
 #  Usage:   sbatch scripts/goethe_rotor_exact.sbatch              # 64^2
 #           N=128 sbatch scripts/goethe_rotor_exact.sbatch        # 128^2
-#           N=32 TEND=0.02 sbatch -p gpu_test --gres=gpu:1 -t 0:30:00 scripts/goethe_rotor_exact.sbatch   # pilot
+#           N=32 TEND=0.02 NUMBA_THREADS=8 sbatch -p test -t 1:00:00 scripts/goethe_rotor_exact.sbatch   # pilot
 #  Knobs:   RETRIES (default 2), TEND (0.4), NSNAP (8), OUT, RMHD_ML_CKPT
 #           (primary seed), RMHD_ML_CKPTS (comma-separated extra checkpoints
 #           whose predictions seed retries 1, 2, ... -- the ensemble
@@ -50,9 +50,13 @@ export RMHD_ML_CKPTS=${RMHD_ML_CKPTS-data/ml_guess_rotor_big_s42.pt,data/ml_gues
 # the last two) and on the rotor step-1 configuration
 export RMHD_FAN=njit RMHD_ALFVEN=njit RMHD_SLOWSHOCK=njit RMHD_SHOCK=njit
 # numpy/BLAS single-threaded (its dispatch is the cost, not its arithmetic);
-# numba's thread pool gets the node; torch (the CT/HLLD part) a few threads
+# torch (the CT/HLLD part) a few threads.  numba's thread count is a KNOB
+# (NUMBA_THREADS), not the node: the kernels are launched ~50,000 times per
+# sweep on batches of ~50 lanes, and with 64 threads the pool spends its time
+# spinning at the launches -- the first pilot burned 58 cores for 24 minutes
+# without finishing a step (2026-09-06).  Pilot 8 / 16 before trusting more.
 export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1
-export NUMBA_NUM_THREADS=${SLURM_CPUS_PER_TASK:-64}
+export NUMBA_NUM_THREADS=${NUMBA_THREADS:-16}
 export TORCH_THREADS=${TORCH_THREADS:-8}
 
 PY=/work/astro/miler/python-env/rmhd-cpu/bin/python
