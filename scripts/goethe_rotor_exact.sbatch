@@ -25,7 +25,11 @@
 #  Usage:   sbatch scripts/goethe_rotor_exact.sbatch              # 64^2
 #           N=128 sbatch scripts/goethe_rotor_exact.sbatch        # 128^2
 #           N=32 TEND=0.02 sbatch -p gpu_test --gres=gpu:1 -t 0:30:00 scripts/goethe_rotor_exact.sbatch   # pilot
-#  Knobs:   RETRIES (default 0), TEND (0.4), NSNAP (8), OUT, RMHD_ML_CKPT.
+#  Knobs:   RETRIES (default 2), TEND (0.4), NSNAP (8), OUT, RMHD_ML_CKPT
+#           (primary seed), RMHD_ML_CKPTS (comma-separated extra checkpoints
+#           whose predictions seed retries 1, 2, ... -- the ensemble
+#           multistart; measured paired on identical inputs 2026-09-06:
+#           2 ensemble retries 141/295 vs 2 jitter retries 135 vs none 130).
 #
 #  Judge the result with scripts/rotor_compare.py against results/rotor_64_hlld
 #  and results/rotor_128_hlld (the claim under test: exact at N matches HLLD
@@ -35,11 +39,12 @@ set -u
 N=${N:-64}
 TEND=${TEND:-0.4}
 NSNAP=${NSNAP:-8}
-RETRIES=${RETRIES:-0}
+RETRIES=${RETRIES:-2}
 OUT=${OUT:-results/rotor_${N}_exact}
 
 export RMHD_ROOT=${RMHD_ROOT:-/work/astro/miler/codes/rmhd_final}
 export RMHD_ML_CKPT=${RMHD_ML_CKPT:-data/ml_guess_rotor_ft.pt}
+export RMHD_ML_CKPTS=${RMHD_ML_CKPTS-data/ml_guess_rotor_big_s42.pt,data/ml_guess_rotor_big_s47.pt}
 # the four compiled kernels: fan integrators, Alfven pinned solve, slow shock,
 # fast/slow shock chain -- each measured against its numpy twin (bitwise for
 # the last two) and on the rotor step-1 configuration
@@ -56,7 +61,7 @@ mkdir -p logs "$OUT"
 
 echo "== $(date)  host=$(hostname)  N=$N  tend=$TEND  retries=$RETRIES  out=$OUT"
 echo "== HLLD $(git rev-parse --short HEAD)   rmhd_final $(git -C $RMHD_ROOT rev-parse --short HEAD)"
-echo "== ckpt=$RMHD_ML_CKPT  kernels: FAN=$RMHD_FAN ALFVEN=$RMHD_ALFVEN SLOWSHOCK=$RMHD_SLOWSHOCK SHOCK=$RMHD_SHOCK  numba threads=$NUMBA_NUM_THREADS"
+echo "== ckpt=$RMHD_ML_CKPT  extra=$RMHD_ML_CKPTS  kernels: FAN=$RMHD_FAN ALFVEN=$RMHD_ALFVEN SLOWSHOCK=$RMHD_SLOWSHOCK SHOCK=$RMHD_SHOCK  numba threads=$NUMBA_NUM_THREADS"
 $PY -c "import numpy, numba, torch; print('numpy', numpy.__version__, 'numba', numba.__version__, 'torch', torch.__version__)"
 
 $PY -u scripts/run_2d.py --problem rotor --n "$N" --solver exact --tend "$TEND" \

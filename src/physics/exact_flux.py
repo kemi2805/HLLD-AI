@@ -78,6 +78,11 @@ _RMHD_ROOT = os.environ.get("RMHD_ROOT", "/Users/miler/Codes/rmhd_final")
 # interfaces the Newton cannot resolve fall back to HLLD and are counted in
 # LAST_DIAG.
 _DEFAULT_CKPT = os.environ.get("RMHD_ML_CKPT", "data/ml_guess_gamma53_v5.pt")
+# Ensemble multistart: extra checkpoints (comma-separated, relative to
+# RMHD_ROOT) whose predictions seed retries 1, 2, ... in turn instead of the
+# Gaussian jitter of the primary seed.  Only used when n_retries > 0.
+_EXTRA_CKPTS = [c.strip() for c in os.environ.get("RMHD_ML_CKPTS", "").split(",")
+                if c.strip()]
 if _RMHD_ROOT not in sys.path:
     # APPEND, never insert: rmhd_final uses flat top-level module names
     # (eos, solver, contact, hlle) and must never shadow this package's own.
@@ -472,6 +477,17 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
     # per-lane RNG keys folded from each lane's own canonical features, so a
     # retry jitter cannot depend on where the interface sits in the batch
     keys = MB.lane_keys(feats) if n_retries else None
+    # the ensemble: one clamped seed per extra checkpoint, retry k from the
+    # k-th (per-lane predictions, so batch-independence is untouched)
+    seeds_extra = None
+    if n_retries and _EXTRA_CKPTS:
+        seeds_extra = []
+        for ck in _EXTRA_CKPTS:
+            m_k, s_k = _load_model_cached(os.path.join(_RMHD_ROOT, ck))
+            u_k, _ = MB.predict_unk6(m_k, s_k, np.stack(subL, axis=1),
+                                     np.stack(subR, axis=1), subBn)
+            u_k, _ = MB.clamp_seed_physical(u_k, subL, subR, subBn)
+            seeds_extra.append(u_k)
 
     # tau_bt is applied INSIDE solve_batch rather than here: it must only
     # skip the seven-wave classes.  The reduced three-wave solver carries no
@@ -480,9 +496,10 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
     # have thrown those answers away along with the unrepresentable ones.
     res, d = P["solve"](subL, subR, subBn, seed6=seed6, accuracy=accuracy,
                         max_iter=max_iter, n_retries=n_retries, keys=keys,
-                        tau_bt=tau_bt)
+                        seeds_extra=seeds_extra, tau_bt=tau_bt)
     diag.update(d)
     diag["n_seed_clamped"] = n_seed_clamped
+    diag["n_ensemble_seeds"] = 0 if seeds_extra is None else len(seeds_extra)
 
     from batched import classify as C
     cls = res["cls"]
