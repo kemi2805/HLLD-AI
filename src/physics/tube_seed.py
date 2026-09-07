@@ -140,11 +140,18 @@ def _wrap(a):
     return (a + np.pi) % (2.0 * np.pi) - np.pi
 
 
-def read_zones(prof, Bn, gamma, *, sep=None):
+def read_zones(prof, Bn, gamma, *, sep=None, full=False, dx=None, t=None):
     """Six unknowns per column, read off the profiles.
 
     Returns ``(unk6, ok)``: a 6-list of ``(N,)`` arrays and a mask of columns
     whose eight segments were all non-empty.
+
+    With ``full=True`` also returns ``zones`` ``(N, 8, 7)`` and ``speeds``
+    ``(N, 7)`` -- the complete wave structure in the same schema the harvest
+    and the trainer use, so a tube answer can stand in for a solved one where
+    the Newton has no root to find.  The speeds come free: the solution is
+    self-similar, so a wave sitting at ``x`` at time ``t`` has speed ``x / t``
+    (``dx`` and ``t`` must then be given).
     """
     rho = prof["rho"].numpy()
     p = prof["p"].numpy()
@@ -229,4 +236,28 @@ def read_zones(prof, Bn, gamma, *, sep=None):
             _wrap(psi(6) - psi(5))]
     for u in unk6:
         ok &= np.isfinite(u)
-    return unk6, ok
+    if not full:
+        return unk6, ok
+
+    # the complete structure, in the harvest/trainer schema
+    comps = (rho, Ptot, vx, vy, vz, By, Bz)
+    zones = np.empty((n, 8, 7))
+    for z in range(8):
+        lo, hi = edges[z], edges[z + 1]
+        w = (hi - lo).astype(float)
+        cut = np.maximum(np.floor(0.25 * w), 0.0).astype(int)
+        a2 = lo + cut
+        b2 = np.maximum(hi - cut, a2 + 1)
+        mm = np.where((idx >= a2[None, :]) & (idx < b2[None, :]), 1.0, np.nan)
+        for j, q in enumerate(comps):
+            zones[:, z, j] = np.nanmedian(q * mm, axis=0)
+    # R4 and R5 share the tangential field exactly; the contact only jumps rho
+    for j in (5, 6):
+        zones[:, 3, j] = zones[:, 4, j] = cd["By" if j == 5 else "Bz"]
+    speeds = np.full((n, 7), np.nan)
+    if dx is not None and t is not None and t > 0:
+        # cell centre of the jump, measured from the middle of the domain
+        x = (pos.astype(float) + 1.0) * dx - 0.5 * (nc * dx)
+        speeds = (x / t).T
+    ok &= np.isfinite(zones).all(axis=(1, 2))
+    return unk6, ok, zones, speeds
