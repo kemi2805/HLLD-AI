@@ -395,6 +395,72 @@ def _batched_parts(gamma):
     return parts
 
 
+def _solve_and_ray(P, gamma, subL, subR, subBn, seed6, keys, seeds_extra, *,
+                   accuracy, max_iter, n_retries, tau_bt):
+    """The per-lane numerical pipeline of one sweep, on solver-frame arrays.
+
+    Solve (seven-/three-wave, with the retry ladder), then resolve the state
+    at xi = 0 per structure class.  Pure numpy/numba on per-lane inputs, so
+    it runs unchanged on a slice of the sweep -- which is what
+    `exact_pool` does with it on a many-core node.
+
+    Returns ``(res, diag, star, region, ray_ok, n_fan)``.
+    """
+    np = P["np"]
+    RAY = P["ray"]
+    n = int(np.asarray(subBn).shape[0])
+    res, d = P["solve"](subL, subR, subBn, seed6=seed6, accuracy=accuracy,
+                        max_iter=max_iter, n_retries=n_retries, keys=keys,
+                        seeds_extra=seeds_extra, tau_bt=tau_bt)
+    from batched import classify as C
+    cls = res["cls"]
+    conv = res["converged"]
+
+    # ── xi = 0, by structure class ────────────────────────────────────────
+    star = [np.zeros(n) for _ in range(7)]
+    ray_ok = np.zeros(n, dtype=bool)
+    region = np.full(n, -1, dtype=int)
+    n_fan = 0
+
+    m7 = np.flatnonzero(conv & np.isin(cls, (C.FULL7, C.COPLANAR)))
+    if m7.size:
+        st, reg, e = RAY.state_at_xi(
+            [c[m7] for c in subL], [c[m7] for c in subR],
+            [[z[j][m7] for j in range(7)] for z in res["zones"]],
+            [v[m7] for v in res["VsLv"]], [v[m7] for v in res["VsRv"]],
+            subBn[m7], gamma, P["xi"], P["fan_p"], P["fan_n"])
+        for j in range(7):
+            star[j][m7] = st[j]
+        region[m7] = reg
+        ray_ok[m7] = ~e
+        n_fan += int(np.isin(reg, RAY.FAN_REGIONS).sum())
+
+    m3 = np.flatnonzero(conv & ~np.isin(cls, (C.FULL7, C.COPLANAR)))
+    if m3.size:
+        st, reg, e = RAY.state_at_xi_3wave(
+            [c[m3] for c in subL], [c[m3] for c in subR],
+            [z[m3] for z in res["zones"][2]], [z[m3] for z in res["zones"][3]],
+            res["VsL"][m3], res["VsR"][m3], subBn[m3], gamma, P["xi"],
+            P["fan_p"])
+        for j in range(7):
+            star[j][m3] = st[j]
+        region[m3] = reg
+        ray_ok[m3] = ~e
+        n_fan += int(np.isin(reg, RAY.FAN_REGIONS_3).sum())
+    return res, d, star, region, ray_ok, n_fan
+
+
+def _run_pipeline(P, gamma, subL, subR, subBn, seed6, keys, seeds_extra, **kw):
+    """In-process, or over the worker pool when RMHD_POOL asks for one."""
+    from . import exact_pool
+    cfg = exact_pool.config()
+    if cfg is None or int(subBn.shape[0]) < cfg["min_lanes"]:
+        return _solve_and_ray(P, gamma, subL, subR, subBn, seed6, keys,
+                              seeds_extra, **kw)
+    return exact_pool.solve_and_ray(gamma, subL, subR, subBn, seed6, keys,
+                                    seeds_extra, **kw)
+
+
 def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
                        fallback=hlld_flux, tau_weak: float = 1e-6,
                        tau_bt: float = 1e-9,
@@ -500,9 +566,10 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
     # rotation unknowns and handles Bt = 0 correctly -- 8 of the rotor's 12
     # degenerate x-sweep lanes converge on it at t=0 -- so a tier-0 gate would
     # have thrown those answers away along with the unrepresentable ones.
-    res, d = P["solve"](subL, subR, subBn, seed6=seed6, accuracy=accuracy,
-                        max_iter=max_iter, n_retries=n_retries, keys=keys,
-                        seeds_extra=seeds_extra, tau_bt=tau_bt)
+    res, d, star, region, ray_ok, n_fan = _run_pipeline(
+        P, gamma, subL, subR, subBn, seed6, keys, seeds_extra,
+        accuracy=accuracy, max_iter=max_iter, n_retries=n_retries,
+        tau_bt=tau_bt)
     diag.update(d)
     diag["n_seed_clamped"] = n_seed_clamped
     diag["n_ensemble_seeds"] = 0 if seeds_extra is None else len(seeds_extra)
@@ -510,38 +577,6 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
     from batched import classify as C
     cls = res["cls"]
     conv = res["converged"]
-
-    # ── xi = 0, by structure class ────────────────────────────────────────
-    star = [np.zeros(sel.size) for _ in range(7)]
-    ray_ok = np.zeros(sel.size, dtype=bool)
-    region = np.full(sel.size, -1, dtype=int)
-    n_fan = 0
-
-    m7 = np.flatnonzero(conv & np.isin(cls, (C.FULL7, C.COPLANAR)))
-    if m7.size:
-        st, reg, e = RAY.state_at_xi(
-            [c[m7] for c in subL], [c[m7] for c in subR],
-            [[z[j][m7] for j in range(7)] for z in res["zones"]],
-            [v[m7] for v in res["VsLv"]], [v[m7] for v in res["VsRv"]],
-            subBn[m7], gamma, P["xi"], P["fan_p"], P["fan_n"])
-        for j in range(7):
-            star[j][m7] = st[j]
-        region[m7] = reg
-        ray_ok[m7] = ~e
-        n_fan += int(np.isin(reg, RAY.FAN_REGIONS).sum())
-
-    m3 = np.flatnonzero(conv & ~np.isin(cls, (C.FULL7, C.COPLANAR)))
-    if m3.size:
-        st, reg, e = RAY.state_at_xi_3wave(
-            [c[m3] for c in subL], [c[m3] for c in subR],
-            [z[m3] for z in res["zones"][2]], [z[m3] for z in res["zones"][3]],
-            res["VsL"][m3], res["VsR"][m3], subBn[m3], gamma, P["xi"],
-            P["fan_p"])
-        for j in range(7):
-            star[j][m3] = st[j]
-        region[m3] = reg
-        ray_ok[m3] = ~e
-        n_fan += int(np.isin(reg, RAY.FAN_REGIONS_3).sum())
 
     # ── the resolved state must itself be physical ────────────────────────
     rho, P_tot, vn, vt1, vt2, Bt1, Bt2 = star

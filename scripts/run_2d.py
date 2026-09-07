@@ -95,6 +95,14 @@ def main():
                     help="use plain flux-CT (Balsara-Spicer) instead of "
                          "Gardiner-Stone upwinding")
     ap.add_argument("--out", default=None)
+    ap.add_argument("--restart", default=None,
+                    help="resume from this restart file (the run writes "
+                         "<out>/restart.npz every --restart-every steps)")
+    ap.add_argument("--restart-every", type=int, default=10,
+                    help="steps between restart files (0: never)")
+    ap.add_argument("--max-steps", type=int, default=None,
+                    help="stop after this many steps of THIS invocation, "
+                         "after writing a restart file")
     ap.add_argument("--nsnap", type=int, default=5)
     ap.add_argument("--envelope", default=None,
                     help="record the interface states fed to the Riemann "
@@ -127,6 +135,23 @@ def main():
                  prims=prims)
     st = sync_state(st, g, eos, bc_x, bc_y)
 
+    # A restart file holds the complete solver state -- the cell-centred
+    # conserved variables and the staggered field, ghosts included -- so the
+    # continuation is the same arithmetic as the uninterrupted run
+    # (`sync_state` rebuilds the primitives from exactly those arrays, as it
+    # does after every step).  `gen` counts restarts: the harvester's shard
+    # names carry it, so a continuation never overwrites an earlier shard.
+    gen, harvest_sweeps = 0, 0
+    if a.restart:
+        R = np.load(a.restart)
+        st = State2D(cons={k: torch.from_numpy(R["cons_" + k].copy())
+                           for k in EVOLVED_KEYS},
+                     Bxf=torch.from_numpy(R["Bxf"].copy()),
+                     Byf=torch.from_numpy(R["Byf"].copy()))
+        st = sync_state(st, g, eos, bc_x, bc_y)
+        gen = int(R["gen"]) + 1
+        harvest_sweeps = int(R["harvest_sweeps"])
+
     def save(tag, t):
         ph = g.phys
         np.savez_compressed(
@@ -140,10 +165,15 @@ def main():
           f"{' (flux-CT)' if a.no_upwind_emf else ''}  limiter={a.limiter}  "
           f"cfl={a.cfl}  gamma={P['gamma']:.4f}  bc=({bc_x},{bc_y})  "
           f"t_end={tend}", flush=True)
-    save("000", 0.0)
-    log = open(os.path.join(out, "diag.csv"), "w")
-    log.write("step,t,dt,divB_max,divB_l2,sym_err,rho_max,rho_min,p_min,W_max,"
-              "hlle_frac_x,hlle_frac_y,mean_iters,c2p_bad\n")
+    if a.restart:
+        print(f"  restart from {a.restart}: t={float(R['t']):.6f} "
+              f"step={int(R['step'])} generation={gen}", flush=True)
+        log = open(os.path.join(out, "diag.csv"), "a")
+    else:
+        save("000", 0.0)
+        log = open(os.path.join(out, "diag.csv"), "w")
+        log.write("step,t,dt,divB_max,divB_l2,sym_err,rho_max,rho_min,p_min,"
+                  "W_max,hlle_frac_x,hlle_frac_y,mean_iters,c2p_bad\n")
 
     rec = (EnvelopeRecorder(n_per_call=a.envelope_samples,
                             every=a.envelope_every)
@@ -160,7 +190,8 @@ def main():
             if a.harvest_all:
                 hk.update(only_retried=False, max_solved=5_000_000,
                           max_unsolved=5_000_000)
-            harvester = Harvester(a.harvest, P["gamma"], **hk)
+            harvester = Harvester(a.harvest, P["gamma"], rank=gen, **hk)
+            harvester.n_sweeps = harvest_sweeps
         flux_fn = functools.partial(exact_flux_batched,
                                     tau_weak=a.tau_weak,
                                     tau_bt=a.tau_bt,
@@ -173,6 +204,24 @@ def main():
 
     t, step, t0 = 0.0, 0, time.time()
     next_snap = 1
+    if a.restart:
+        t, step, next_snap = float(R["t"]), int(R["step"]), int(R["next_snap"])
+
+    def save_restart():
+        # flush the harvest first, so the shards on disk end where the
+        # restart file begins and a continuation loses nothing
+        if harvester is not None:
+            harvester.flush()
+        path = os.path.join(out, "restart.npz")
+        tmp = path + ".tmp.npz"
+        np.savez(tmp, t=t, step=step, next_snap=next_snap, gen=gen,
+                 harvest_sweeps=(harvester.n_sweeps if harvester is not None
+                                 else 0),
+                 Bxf=st.Bxf.numpy(), Byf=st.Byf.numpy(),
+                 **{"cons_" + k: st.cons[k].numpy() for k in EVOLVED_KEYS})
+        os.replace(tmp, path)
+
+    steps_here = 0
     while t < tend - 1e-14:
         dt = min(compute_dt_2d(st.prims, g, eos, a.cfl), tend - t)
         st, diag = rk_step_ct(st, g, eos, dt, scheme="rk3",
@@ -182,6 +231,7 @@ def main():
                               upwind=not a.no_upwind_emf, recorder=rec)
         t += dt
         step += 1
+        steps_here += 1
 
         if step % 10 == 0 or t >= tend - 1e-14:
             ph = g.phys
@@ -215,6 +265,17 @@ def main():
         if t >= next_snap * tend / a.nsnap - 1e-14 and next_snap <= a.nsnap:
             save(f"{next_snap:03d}", t)
             next_snap += 1
+
+        done = t >= tend - 1e-14
+        if a.restart_every and step % a.restart_every == 0 and not done:
+            save_restart()
+        if a.max_steps is not None and steps_here >= a.max_steps and not done:
+            save_restart()
+            log.close()
+            print(f"stopped after {steps_here} steps at t={t:.6f} "
+                  f"(step {step}); restart file written "
+                  f"({time.time()-t0:.0f}s)", flush=True)
+            return
 
     save("fin", t)
     log.close()

@@ -62,6 +62,12 @@ export RMHD_FAN=njit RMHD_ALFVEN=${RMHD_ALFVEN:-fused} RMHD_SLOWSHOCK=njit RMHD_
 export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1
 export NUMBA_NUM_THREADS=${NUMBA_THREADS:-16}
 export TORCH_THREADS=${TORCH_THREADS:-8}
+# the worker pool (src/physics/exact_pool.py): POOL processes, each with
+# POOL_THREADS numba threads, sharing the sweep's lanes.  Off (in-process)
+# unless POOL >= 2.  On a 40-core node: POOL=20 POOL_THREADS=2.
+export RMHD_POOL=${POOL:-0} RMHD_POOL_THREADS=${POOL_THREADS:-2}
+export RMHD_POOL_CHUNKS=${POOL_CHUNKS:-${POOL:-0}}
+RESUME=${RESUME:-1}     # continue from $OUT/restart.npz when it exists
 
 PY=/work/astro/miler/python-env/rmhd-cpu/bin/python
 cd /work/astro/miler/codes/HLLD
@@ -69,11 +75,16 @@ mkdir -p logs "$OUT"
 
 echo "== $(date)  host=$(hostname)  N=$N  tend=$TEND  retries=$RETRIES  out=$OUT"
 echo "== HLLD $(git rev-parse --short HEAD)   rmhd_final $(git -C $RMHD_ROOT rev-parse --short HEAD)"
-echo "== ckpt=$RMHD_ML_CKPT  extra=$RMHD_ML_CKPTS  kernels: FAN=$RMHD_FAN ALFVEN=$RMHD_ALFVEN SLOWSHOCK=$RMHD_SLOWSHOCK SHOCK=$RMHD_SHOCK  numba threads=$NUMBA_NUM_THREADS"
+echo "== ckpt=$RMHD_ML_CKPT  extra=$RMHD_ML_CKPTS  kernels: FAN=$RMHD_FAN ALFVEN=$RMHD_ALFVEN SLOWSHOCK=$RMHD_SLOWSHOCK SHOCK=$RMHD_SHOCK  numba threads=$NUMBA_NUM_THREADS  pool=${RMHD_POOL}x${RMHD_POOL_THREADS}"
+RESTART=""
+if [ "$RESUME" = 1 ] && [ -f "$OUT/restart.npz" ]; then
+    RESTART="--restart $OUT/restart.npz"; echo "== resuming from $OUT/restart.npz"
+fi
 $PY -c "import numpy, numba, torch; print('numpy', numpy.__version__, 'numba', numba.__version__, 'torch', torch.__version__)"
 
 $PY -u scripts/run_2d.py --problem rotor --n "$N" --solver exact --tend "$TEND" \
     --nsnap "$NSNAP" --tau-weak 1e-2 --tau-bt 1e-9 --exact-retries "$RETRIES" \
     --exact-max-iter 40 --out "$OUT" --harvest "$OUT/harvest" \
+    --restart-every 10 $RESTART \
     $( [ "$HARVEST_ALL" = 1 ] && echo --harvest-all )
 echo "== $(date)  exit $?"
