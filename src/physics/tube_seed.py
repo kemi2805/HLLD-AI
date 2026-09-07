@@ -140,7 +140,8 @@ def _wrap(a):
     return (a + np.pi) % (2.0 * np.pi) - np.pi
 
 
-def read_zones(prof, Bn, gamma, *, sep=None, full=False, dx=None, t=None):
+def read_zones(prof, Bn, gamma, *, sep=None, full=False, dx=None, t=None,
+               mode="segments"):
     """Six unknowns per column, read off the profiles.
 
     Returns ``(unk6, ok)``: a 6-list of ``(N,)`` arrays and a mask of columns
@@ -174,18 +175,69 @@ def read_zones(prof, Bn, gamma, *, sep=None, full=False, dx=None, t=None):
 
     d = jump(rho) + jump(Ptot) + jump(vx) + jump(vy) + jump(vz) + jump(By) + jump(Bz)
 
-    # seven strongest jumps, kept apart so one wave is not counted twice
-    sep = sep if sep is not None else max(2, nc // 24)
-    work = d.copy()
-    pos = np.zeros((7, n), dtype=int)
+    # Seven strongest jumps, kept apart so one wave is not counted twice --
+    # located on a COARSE-GRAINED indicator, then mapped back to the fine
+    # grid.  Peak-finding directly on the fine profile is resolution-fragile:
+    # refining sharpens post-shock oscillations and contact ringing faster
+    # than it sharpens weak waves, so at 768 cells the detector started
+    # picking numerical features over real ones and the read of |Bt_CD|
+    # degraded from 4.8e-2 to 3.2e-1 (measured against known answers at 192,
+    # 384 and 768 cells).  Binning the indicator to a fixed count makes the
+    # SEGMENTATION independent of resolution while the zone medians are still
+    # taken on the fine grid, so refinement buys accuracy instead of noise.
+    NB = 128
+    fac = max(1, int(np.ceil((nc - 1) / NB)))
+    nb = int(np.ceil((nc - 1) / fac))
+    pad = nb * fac - (nc - 1)
+    db = np.concatenate([d, np.zeros((pad, n))]) if pad else d
+    db = db.reshape(nb, fac, n).sum(axis=1)          # coarse indicator
+
+    sep = sep if sep is not None else max(1, nb // 24)
+    work = db.copy()
+    pos_b = np.zeros((7, n), dtype=int)
     cols = np.arange(n)
     for w in range(7):
         i = np.argmax(work, axis=0)
-        pos[w] = i
+        pos_b[w] = i
         for off in range(-sep, sep + 1):
-            j = np.clip(i + off, 0, work.shape[0] - 1)
+            j = np.clip(i + off, 0, nb - 1)
             work[j, cols] = -1.0
+    # refine each coarse peak to the strongest fine cell inside its bin
+    pos = np.zeros((7, n), dtype=int)
+    for w in range(7):
+        lo = pos_b[w] * fac
+        sub = np.stack([d[np.clip(lo + k, 0, nc - 2), cols] for k in range(fac)])
+        pos[w] = np.clip(lo + np.argmax(sub, axis=0), 0, nc - 2)
     pos = np.sort(pos, axis=0)
+
+    # ── landmarks, not a fixed segment count ─────────────────────────────
+    # The rotor's interfaces show a MEDIAN OF FOUR waves, not seven (counted
+    # on the tube profiles: 3-5 waves on ~90% of them, seven on ~1%).  A
+    # planar flow has no rotational discontinuities and its slow waves are
+    # often too weak to see, so forcing seven segments splits real plateaus
+    # and mislabels the zones -- which is why |Bt_CD| and p_LF stopped
+    # converging under refinement (6.1e-2 -> 4.2e-2 -> 6.9e-2 at 192/384/768
+    # cells) while p_RF, read from a segment that happened to be right,
+    # converged normally (1.2e-3 -> 4.0e-4 -> 3.0e-4).
+    #
+    # So read from three landmarks that exist whatever the wave count:
+    #   * the OUTERMOST jumps are the two fast waves, and the plateau just
+    #     inside each is R2 and R7, whose total pressures are the two
+    #     unknowns p_LF and p_RF;
+    #   * the CONTACT is the jump that moves density without moving total
+    #     pressure, and the tangential field is continuous across it, so the
+    #     plateaus on either side are one sample of |Bt_CD| and psi_CD.
+    # Anything between them may be a slow wave, an Alfven wave, or nothing;
+    # the reader no longer has to know which.
+    strong = db.max(axis=0)[None, :] * 0.02
+    dj_rho = jump(rho); dj_P = jump(Ptot)
+    lm = {}
+    for name, take in (("first", 0), ("last", -1)):
+        lm[name] = pos[take]
+    # contact: density moves, total pressure does not
+    score = (dj_rho[pos, np.arange(n)[None, :]]
+             - 3.0 * dj_P[pos, np.arange(n)[None, :]])
+    lm["cd"] = pos[np.argmax(score, axis=0), np.arange(n)]
 
     # eight segment medians (segment z runs between wave z-1 and wave z)
     edges = np.concatenate([np.zeros((1, n), dtype=int), pos + 1,
@@ -224,14 +276,57 @@ def read_zones(prof, Bn, gamma, *, sep=None, full=False, dx=None, t=None):
     # the profile.  The post-fast pressures are already read from a clean
     # plateau, and widening them across the rotational discontinuity dragged
     # p_RF from 1.2e-3 to 7.1e-3, so those stay on their own zone.
-    cd, ok_cd = merged(3, 4, {"By": By, "Bz": Bz})
-    ok &= ok_cd
-    BtCD = np.hypot(cd["By"], cd["Bz"])
+    def between(lo, hi, keys, trim=0.25):
+        """Median of each key over the cells strictly between two landmarks."""
+        w = np.maximum(hi - lo, 1).astype(float)
+        cut = np.maximum(np.floor(trim * w), 1.0).astype(int)
+        a2 = np.minimum(lo + cut, nc - 1)
+        b2 = np.maximum(np.minimum(hi - cut + 1, nc), a2 + 1)
+        m = (idx >= a2[None, :]) & (idx < b2[None, :])
+        wm = np.where(m, 1.0, np.nan)
+        return {k: np.nanmedian(q * wm, axis=0) for k, q in keys.items()}, m.any(axis=0)
 
-    unk6 = [np.log(np.maximum(seg[1]["P"], 1e-30)),
+    # R2: just inside the left fast wave.  R7: just inside the right fast.
+    # R4/R5: the two plateaus flanking the contact, which share By and Bz.
+    # MEASURED, 120 interfaces with known answers, tube to t = 0.18:
+    #
+    #                   ln p_LF          ln|Bt_CD|          ln p_RF
+    #   cells      seg   landmark     seg  landmark      seg  landmark
+    #     192   1.9e-2    1.9e-2   6.1e-2   1.9e-1   1.2e-3    2.6e-3
+    #     384   1.9e-2    2.0e-2   4.2e-2   1.0e-1   4.0e-4    1.2e-3
+    #     768   1.8e-2    1.8e-2   6.9e-2   8.7e-2   3.0e-4    1.3e-3
+    #
+    # The landmark reader CONVERGES where the fixed segmentation does not
+    # (|Bt_CD| falls monotonically instead of wandering) but it is less
+    # accurate at every resolution we can afford, so the segments stay the
+    # default and the landmarks are kept for the record and for profiles
+    # where the wave count is known to be small.  Neither reaches the ~1e-3
+    # a training target wants: for the interfaces the seven-wave solver
+    # cannot answer, the REDUCED three-wave solver is the better tool
+    # (converges on 100% of them, star pressure exact to 1e-4 for
+    # |B_n| < 0.03 and 6e-4 below 0.1 -- batched/contact_b).
+    if mode == "landmarks":
+        lo2 = lm["first"]; hi2 = np.maximum(lm["cd"] - 1, lo2 + 1)
+        lo7 = np.minimum(lm["cd"] + 1, lm["last"] - 1); hi7 = lm["last"]
+        r2, okA = between(lo2, hi2, {"P": Ptot})
+        r7, okB = between(lo7, hi7, {"P": Ptot})
+        cdz, okC = between(np.maximum(lm["cd"] - max(2, nc // 40), 0),
+                           np.minimum(lm["cd"] + max(2, nc // 40), nc - 1),
+                           {"By": By, "Bz": Bz}, trim=0.0)
+        ok &= okA & okB & okC
+        pLF, pRF = r2["P"], r7["P"]
+        Byc, Bzc = cdz["By"], cdz["Bz"]
+    else:
+        cdz, ok_cd = merged(3, 4, {"By": By, "Bz": Bz})
+        ok &= ok_cd
+        pLF, pRF = seg[1]["P"], seg[5]["P"]
+        Byc, Bzc = cdz["By"], cdz["Bz"]
+    BtCD = np.hypot(Byc, Bzc)
+
+    unk6 = [np.log(np.maximum(pLF, 1e-30)),
             np.log(np.maximum(BtCD, 1e-30)),
-            np.arctan2(cd["Bz"], cd["By"]),
-            np.log(np.maximum(seg[5]["P"], 1e-30)),
+            np.arctan2(Bzc, Byc),
+            np.log(np.maximum(pRF, 1e-30)),
             _wrap(psi(2) - psi(1)),
             _wrap(psi(6) - psi(5))]
     for u in unk6:
@@ -252,8 +347,8 @@ def read_zones(prof, Bn, gamma, *, sep=None, full=False, dx=None, t=None):
         for j, q in enumerate(comps):
             zones[:, z, j] = np.nanmedian(q * mm, axis=0)
     # R4 and R5 share the tangential field exactly; the contact only jumps rho
-    for j in (5, 6):
-        zones[:, 3, j] = zones[:, 4, j] = cd["By" if j == 5 else "Bz"]
+    zones[:, 3, 5] = zones[:, 4, 5] = Byc
+    zones[:, 3, 6] = zones[:, 4, 6] = Bzc
     speeds = np.full((n, 7), np.nan)
     if dx is not None and t is not None and t > 0:
         # cell centre of the jump, measured from the middle of the domain
