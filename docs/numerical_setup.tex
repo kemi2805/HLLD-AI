@@ -23,16 +23,40 @@ state, $p = (\Gamma - 1)\rho\epsilon$, with $\Gamma = 5/3$ for the rotor and
 $\Gamma = 4/3$ for the Orszag--Tang vortex.
 
 \paragraph{Reconstruction.}
-Primitive variables are reconstructed to the cell interfaces with a
-piecewise-linear method using the monotonised-central limiter; the minmod
-limiter and piecewise-constant reconstruction are available as alternatives
-and are used for comparison. The scheme is second order in smooth regions
-and requires two ghost zones. Reconstruction is performed on
-$W v^i$ rather than on $v^i$, since limiting the three velocity components
-independently can produce a superluminal interface state wherever the limiter
-is active near a strong shear; density and pressure are additionally floored
-by a piecewise-constant fallback wherever the linear reconstruction would make
-them non-positive.
+The primitive variables $(\rho, p, v^i, B^i)$ are reconstructed to the cell
+interfaces by a piecewise-linear method (PLM). The cell slope is the
+monotonised-central limit of the two one-sided differences,
+%
+\begin{equation}
+  \sigma_i = \mathrm{mc}\bigl(Q_i - Q_{i-1},\; Q_{i+1} - Q_i\bigr),
+  \qquad
+  \mathrm{mc}(a,b) =
+  \begin{cases}
+    \mathrm{sgn}(c)\,\min\bigl(2\lvert a\rvert,\, 2\lvert b\rvert,\,
+                               \lvert c\rvert\bigr), & ab > 0,\\[2pt]
+    0, & \text{otherwise},
+  \end{cases}
+  \label{eq:mc}
+\end{equation}
+%
+with $c = (a+b)/2$, and the interface states are $Q_i \pm \sigma_i/2$. The
+method is second order where the solution is smooth and reduces to first order
+at extrema, and it needs two ghost zones. The minmod limiter and
+piecewise-constant reconstruction are available and are used for comparison.
+
+Two departures from a naive variable-by-variable PLM are needed in the
+relativistic case. First, the reconstructed velocity variable is the spatial
+part of the four-velocity, $z^i = W v^i$, from which
+$v^i = z^i / \sqrt{1 + \lvert \mathbf{z} \rvert^2}$ is recovered; this makes
+$\lvert \mathbf{v} \rvert < 1$ true at every interface by construction, whereas
+limiting the three components of $v^i$ independently can produce a superluminal
+interface state wherever the limiter is active near a steep velocity gradient.
+That is not a hypothetical failure for the rotor, whose initial data already
+reach $W \simeq 10$. Second, the specific internal energy is recomputed from
+the reconstructed $(p, \rho)$ rather than reconstructed on its own, so that the
+interface state lies on the equation-of-state surface. Finally, on any face
+where the limited state would violate the density or pressure floor, that face
+falls back to piecewise-constant reconstruction.
 
 \paragraph{Riemann solver.}
 The interface flux is computed by one of four solvers, selected at run time:

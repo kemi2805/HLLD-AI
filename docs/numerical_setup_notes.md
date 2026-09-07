@@ -11,6 +11,12 @@ that anything the code does NOT do is listed rather than quietly written in.
 | evolved variables `D, Sx, Sy, Sz, tau, Bz`; in-plane B on faces | `src/physics/state.py:41` (`EVOLVED_KEYS`), `State2D.Bxf/Byf` |
 | ideal gas, gamma 5/3 rotor, 4/3 Orszag-Tang | `scripts/run_2d.py:28` (`PROBLEMS`), `src/physics/eos.py` |
 | piecewise-linear reconstruction, MC limiter (minmod, PCM available) | `src/physics/reconstruction.py:47` (`_LIMITERS`), `:73` |
+| MC formula, slopes from the two one-sided differences | `src/physics/reconstruction.py:36-45` (`mc_limiter`), `:59-70` (`cell_slopes`) |
+| interface states `Q +- sigma/2`, face i between cells i-1 and i | `src/physics/reconstruction.py:73-95` |
+| variables reconstructed: rho, p, vx, vy, vz, Bx, By, Bz | `src/physics/reconstruction.py:100` (`_RECON_KEYS`) |
+| reconstruct `z = W v`, recover `v = z / sqrt(1+z^2)` | `src/physics/reconstruction.py:113-125, 160-165` |
+| eps recomputed from reconstructed (p, rho) | `src/physics/reconstruction.py:168` |
+| per-face PCM fallback on the rho/p floors | `src/physics/reconstruction.py:146-158` |
 | two ghost zones | `src/physics/grid.py:166` ("PPM or WENO would need ng = 3") |
 | reconstruct `W v` not `v`; PCM floor on rho and p | `src/physics/reconstruction.py:103-151` |
 | four flux functions selectable | `scripts/run_2d.py` `SOLVERS`, `src/physics/hlld.py` |
@@ -48,10 +54,10 @@ omega = 9.95, p = 1, B = (1,0,0), sharp edge. Box and end time from
 
 ## Deliberately NOT written into the section
 
-- **WENO5.** The draft mentioned it; this code has no WENO. Reconstruction is
-  piecewise-linear (MC / minmod) or piecewise-constant, and the grid carries
-  only two ghost zones, which WENO5 could not use. Either the section means a
-  different code, or the sentence has to go.
+- **WENO5.** RESOLVED 2026-09-07: the user confirms it belongs to a different
+  code, and it is out of this section. This code has no WENO. Reconstruction
+  is piecewise-linear with the MC limiter (minmod and PCM selectable), and the
+  grid carries two ghost zones, which WENO5 could not use.
 - **HLLC.** Present in the code and listed as selectable, but not used for any
   result in this work so far.
 - Numbers that belong to Results, not Setup: the exact fraction per sweep, the
