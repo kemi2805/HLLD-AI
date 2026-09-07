@@ -192,7 +192,16 @@ def test_batch_independence(eos, problems):
         b = {k: v[sl] for k, v in sR.items()}
         Fp, _, pp = exact_flux_batched(a, b, eos, idir=0,
                                        max_iter=MAX_ITER)
-        assert torch.equal(pp, p[sl]), "splitting the batch changed p*"
+        ex = LAST_DIAG["exact_mask"]
+        # exact lanes: bitwise.  Fallback lanes carry HLLD's OWN p*, and
+        # torch's CPU kernels pick different vectorisation paths for
+        # different batch sizes -- measured 2026-09-07: one fallback lane
+        # moved by exactly one ulp (rel 1.4e-16) with every flux bitwise
+        # equal.  That is HLLD's batch dependence, not the exact solver's,
+        # so it is held to a few ulp rather than to equality.
+        assert torch.equal(pp[ex], p[sl][ex]), "splitting the batch changed p*"
+        assert torch.allclose(pp[~ex], p[sl][~ex], rtol=4e-16, atol=0.0), (
+            "splitting the batch moved a fallback p* by more than a few ulp")
         for k in F:
             assert torch.equal(Fp[k], F[k][sl]), (
                 f"splitting the batch changed the flux in {k}")
