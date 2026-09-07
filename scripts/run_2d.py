@@ -233,6 +233,13 @@ def main():
         step += 1
         steps_here += 1
 
+        if a.max_steps is not None:          # a pilot: every step is timed
+            dx_ = diag["x"]["diag"]
+            print(f"  step {step:5d} t={t:.4f} dt={dt:.2e} "
+                  f"x-sweep exact={dx_.get('n_exact', -1)}/"
+                  f"{dx_.get('n_attempted', -1)} "
+                  f"({time.time()-t0:.0f}s)", flush=True)
+
         if step % 10 == 0 or t >= tend - 1e-14:
             ph = g.phys
             d = div_b(st.Bxf, st.Byf, g.dx, g.dy)[ph]
