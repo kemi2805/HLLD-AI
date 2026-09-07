@@ -68,6 +68,7 @@ export TORCH_THREADS=${TORCH_THREADS:-8}
 export RMHD_POOL=${POOL:-0} RMHD_POOL_THREADS=${POOL_THREADS:-2}
 export RMHD_POOL_CHUNKS=${POOL_CHUNKS:-${POOL:-0}}
 RESUME=${RESUME:-1}     # continue from $OUT/restart.npz when it exists
+MAX_STEPS=${MAX_STEPS:-} # a pilot: stop after this many steps (restart file written)
 
 PY=/work/astro/miler/python-env/rmhd-cpu/bin/python
 cd /work/astro/miler/codes/HLLD
@@ -86,5 +87,6 @@ $PY -u scripts/run_2d.py --problem rotor --n "$N" --solver exact --tend "$TEND" 
     --nsnap "$NSNAP" --tau-weak 1e-2 --tau-bt 1e-9 --exact-retries "$RETRIES" \
     --exact-max-iter 40 --out "$OUT" --harvest "$OUT/harvest" \
     --restart-every 10 $RESTART \
+    $( [ -n "$MAX_STEPS" ] && echo --max-steps "$MAX_STEPS" ) \
     $( [ "$HARVEST_ALL" = 1 ] && echo --harvest-all )
 echo "== $(date)  exit $?"
