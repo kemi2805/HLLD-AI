@@ -81,6 +81,34 @@ _DEFAULT_CKPT = os.environ.get("RMHD_ML_CKPT", "data/ml_guess_gamma53_v5.pt")
 # Ensemble multistart: extra checkpoints (comma-separated, relative to
 # RMHD_ROOT) whose predictions seed retries 1, 2, ... in turn instead of the
 # Gaussian jitter of the primary seed.  Only used when n_retries > 0.
+# The reduced three-wave fallback (plan Track 5 B2), off by default.
+#
+# MEASURED 2026-09-07 on the 64^2 run's harvest, which is what motivates it:
+# the Alfven and slow waves of a rotor interface are nearly COINCIDENT --
+# |Vs_LA - Vs_LS| has median 3.5e-3 and 5th percentile 3.0e-6 -- so the
+# seven-wave system has two almost parallel wave families and is
+# ill-conditioned exactly there.  That is why 56% of attempted interfaces go
+# unsolved, and why no starting guess rescues them: an exhaustive scan over
+# the eight planar angle choices crossed with a 7^3 magnitude grid still
+# converges 8.5%.
+#
+# The reduced fast-contact-fast solver has no such pair and converges on
+# 100% of them.  Its price is neglecting the slow waves, measured against
+# 4000 interfaces whose exact answer is known:
+#
+#     |B_n|        star pressure, median error   p90
+#     < 0.03                     9.8e-05         8.2e-04
+#     0.03 - 0.1                 5.9e-04         3.2e-03
+#     0.1  - 0.3                 2.2e-03         1.1e-02
+#     > 0.3                      3.8e-03         3.4e-02
+#
+# so the gate is on |B_n|, defaulting to 0.1 where the error is still below
+# one part in a thousand.  This is the regime of the rotor's y-sweeps, which
+# is where coverage is worst (24.7% of attempted resolved, against 64.0% on
+# the x-sweeps).
+_3WAVE_FALLBACK = os.environ.get("RMHD_3WAVE_FALLBACK", "0") not in ("0", "", "off")
+_BN_3WX_MAX = float(os.environ.get("RMHD_BN_3WX_MAX", "0.1"))
+
 _EXTRA_CKPTS = [c.strip() for c in os.environ.get("RMHD_ML_CKPTS", "").split(",")
                 if c.strip()]
 if _RMHD_ROOT not in sys.path:
@@ -389,8 +417,10 @@ def _batched_parts(gamma):
 
     fan_p, fan_n = RB.make_integrators(gamma, lambda s, sw, B, g:
                                        xi_fn(s, sw, B, g))
+    from batched import contact_b as CB
     parts = dict(solve=API.make_solver(gamma), ray=RAY, xi=xi_fn,
-                 fan_p=fan_p, fan_n=fan_n, np=np)
+                 fan_p=fan_p, fan_n=fan_n, np=np,
+                 reduced=CB.make_solver(gamma))
     _SOLVER_CACHE[gamma] = parts
     return parts
 
@@ -604,11 +634,50 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
             accepted=take,
             seven_wave=np.isin(cls, (C.FULL7, C.COPLANAR)))
 
-    g = sel[take]
+    # ── reduced three-wave rescue (opt-in) ────────────────────────────────
+    # Only lanes the seven-wave solver did NOT win, and only where the
+    # normal field is weak enough for the neglected slow waves to cost less
+    # than a part in a thousand.  Runs after the harvest so the harvester's
+    # `accepted` stays strictly seven-wave -- the reduced solution has no
+    # Alfven or slow zones and would not fit the solved-shard schema -- but
+    # before the flux assembly, so the run gets the better flux.
+    take3 = np.zeros(sel.size, dtype=bool)
+    n3_att = 0
+    if _3WAVE_FALLBACK:
+        cand = np.flatnonzero(~take & (np.abs(subBn) <= _BN_3WX_MAX))
+        n3_att = int(cand.size)
+        if cand.size:
+            r3 = P["reduced"]([c[cand] for c in subL], [c[cand] for c in subR],
+                              subBn[cand], 0, accuracy=accuracy)
+            c3 = r3["converged"].astype(bool)
+            st3, reg3, e3 = RAY.state_at_xi_3wave(
+                [c[cand] for c in subL], [c[cand] for c in subR],
+                r3["solutionL"], r3["solutionR"], r3["VsL"], r3["VsR"],
+                subBn[cand], gamma, P["xi"], P["fan_p"])
+            good = c3 & ~e3
+            if good.any():
+                rho3, P3, vn3, vt13, vt23, Bt13, Bt23 = st3
+                v2_ = vn3 * vn3 + vt13 * vt13 + vt23 * vt23
+                W2_ = 1.0 / np.maximum(1.0 - v2_, 1e-300)
+                eta_ = subBn[cand] * vn3 + Bt13 * vt13 + Bt23 * vt23
+                b2_ = (subBn[cand] ** 2 + Bt13 ** 2 + Bt23 ** 2) / W2_ + eta_ ** 2
+                phys3 = (rho3 > 0.0) & (v2_ < 1.0) & (P3 - 0.5 * b2_ > 0.0)
+                for c_ in st3:
+                    phys3 &= np.isfinite(c_)
+                good &= phys3
+            if good.any():
+                w = cand[good]
+                for j in range(7):
+                    star[j][w] = st3[j][good]
+                region[w] = reg3[good]
+                take3[w] = True
+
+    take_all = take | take3
+    g = sel[take_all]
     if harvester is not None:
         harvester.record_coverage(idir, N, sel, g)
     if g.size:
-        tt = lambda a: torch.tensor(a[take], dtype=dt)
+        tt = lambda a: torch.tensor(a[take_all], dtype=dt)
         one = {k: v[g] for k, v in sL.items()}
         star_t = from_solver_frame([tt(c) for c in star], tt(subBn),
                                    eos, idir, one)
@@ -616,7 +685,7 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
         for k in F:
             F[k][g] = fS[k]
             U[k][g] = uS[k]
-        p_star[g] = torch.tensor(P_tot[take], dtype=dt)
+        p_star[g] = torch.tensor(P_tot[take_all], dtype=dt)
 
     n_exact = int(g.size)
     fell_back = N - n_exact
@@ -631,6 +700,9 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
         n_fan_interior=n_fan,
         n_unphysical_star=n_unphys,
         n_ray_failed=int((conv & ~ray_ok).sum()),
+        n_3wave_attempted=n3_att,
+        n_3wave_exact=int(take3.sum()),
+        three_wave_mask=take3,
         n_hlld_fallback=fell_back,
         frac_hlld_fallback=fell_back / max(N, 1),
         frac_exact=n_exact / max(N, 1),
