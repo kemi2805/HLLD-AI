@@ -24,6 +24,7 @@ POOL_CHUNKS=${POOL_CHUNKS:-$POOL}
 RESUME=${RESUME:-1}
 MAX_STEPS=${MAX_STEPS:-}
 RESTART_EVERY=${RESTART_EVERY:-10}
+LOG_EVERY=${LOG_EVERY:-1}
 
 BASE=/mnt/rafast/miler/codes/rotor2d
 export RMHD_ROOT=${RMHD_ROOT:-$BASE/rmhd_final}
@@ -55,7 +56,7 @@ $PY -c "import numpy, numba, torch; print('numpy', numpy.__version__, 'numba', n
 $PY -u scripts/run_2d.py --problem rotor --n "$N" --solver exact --tend "$TEND" \
     --nsnap "$NSNAP" --tau-weak 1e-2 --tau-bt 1e-9 --exact-retries "$RETRIES" \
     --exact-max-iter 40 --out "$OUT" --harvest "$OUT/harvest" \
-    --restart-every "$RESTART_EVERY" $RESTART \
+    --restart-every "$RESTART_EVERY" --log-every "$LOG_EVERY" $RESTART \
     $( [ -n "$MAX_STEPS" ] && echo --max-steps "$MAX_STEPS" ) \
     $( [ "$HARVEST_ALL" = 1 ] && echo --harvest-all )
 echo "== $(date)  exit $?"

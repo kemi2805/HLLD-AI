@@ -100,6 +100,8 @@ def main():
                          "<out>/restart.npz every --restart-every steps)")
     ap.add_argument("--restart-every", type=int, default=10,
                     help="steps between restart files (0: never)")
+    ap.add_argument("--log-every", type=int, default=10,
+                    help="steps between diag.csv rows / progress lines")
     ap.add_argument("--max-steps", type=int, default=None,
                     help="stop after this many steps of THIS invocation, "
                          "after writing a restart file")
@@ -240,7 +242,7 @@ def main():
                   f"{dx_.get('n_attempted', -1)} "
                   f"({time.time()-t0:.0f}s)", flush=True)
 
-        if step % 10 == 0 or t >= tend - 1e-14:
+        if step % max(1, a.log_every) == 0 or t >= tend - 1e-14:
             ph = g.phys
             d = div_b(st.Bxf, st.Byf, g.dx, g.dy)[ph]
             v2 = (st.prims["vx"][ph]**2 + st.prims["vy"][ph]**2
