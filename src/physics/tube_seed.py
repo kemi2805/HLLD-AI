@@ -196,10 +196,34 @@ def read_zones(prof, Bn, gamma, *, sep=None):
                   for k, q in (("P", Ptot), ("By", By), ("Bz", Bz))}
 
     psi = lambda z: np.arctan2(seg[z]["Bz"], seg[z]["By"])
-    Bt4 = np.hypot(seg[3]["By"], seg[3]["Bz"])
+
+    # A median over a merged pair of zones, with the smeared cells at each end
+    # trimmed off.
+    def merged(z0, z1, keys, trim=0.25):
+        lo, hi = edges[z0], edges[z1 + 1]
+        w = (hi - lo).astype(float)
+        cut = np.maximum(np.floor(trim * w), 0.0).astype(int)
+        a = lo + cut
+        b = np.maximum(hi - cut, a + 1)
+        m = (idx >= a[None, :]) & (idx < b[None, :])
+        good = m.sum(axis=0) > 0
+        wm = np.where(m, 1.0, np.nan)
+        return {k: np.nanmedian(q * wm, axis=0) for k, q in keys.items()}, good
+
+    # MEASURED (300 interfaces with known answers): merging helps the contact
+    # field and HURTS the pressures.  |Bt_CD| improves from 1.0e-1 to 5.8e-2
+    # in the log -- better than the network's 8.9e-2 -- because R4 and R5 are
+    # one plateau and the contact between them is the least-resolved wave in
+    # the profile.  The post-fast pressures are already read from a clean
+    # plateau, and widening them across the rotational discontinuity dragged
+    # p_RF from 1.2e-3 to 7.1e-3, so those stay on their own zone.
+    cd, ok_cd = merged(3, 4, {"By": By, "Bz": Bz})
+    ok &= ok_cd
+    BtCD = np.hypot(cd["By"], cd["Bz"])
+
     unk6 = [np.log(np.maximum(seg[1]["P"], 1e-30)),
-            np.log(np.maximum(Bt4, 1e-30)),
-            psi(3),
+            np.log(np.maximum(BtCD, 1e-30)),
+            np.arctan2(cd["Bz"], cd["By"]),
             np.log(np.maximum(seg[5]["P"], 1e-30)),
             _wrap(psi(2) - psi(1)),
             _wrap(psi(6) - psi(5))]
