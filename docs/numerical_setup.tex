@@ -1,0 +1,199 @@
+% Numerical setup.  Written 2026-09-07 from the code as it stands
+% (HLLD @ 43bc6c2, rmhd_final @ a2451c7).  Every number here is taken from
+% the source, not from memory; see docs/numerical_setup_notes.md for the
+% file and line each statement comes from.
+\section{Numerical Setup}
+\label{sec:setup}
+
+Two codes are used, and they answer different questions. The first is a
+special-relativistic magnetohydrodynamics (SRMHD) code that evolves the fluid
+on a grid; the second is an exact Riemann solver, which the first can call as
+its flux function. The exact solver is also used on its own, as the reference
+against which the approximate fluxes are measured.
+
+\subsection{The evolution code}
+\label{sec:setup:evolution}
+
+The fluid is evolved with a finite-volume Godunov scheme in conservative
+form. The evolved variables are the conserved density $D$, the momentum
+density $S_i$, the energy density $\tau$, and, in two dimensions, the
+out-of-plane field $B^z$; the in-plane field is carried on the cell faces
+(Sect.~\ref{sec:setup:ct}). We close the system with an ideal-gas equation of
+state, $p = (\Gamma - 1)\rho\epsilon$, with $\Gamma = 5/3$ for the rotor and
+$\Gamma = 4/3$ for the Orszag--Tang vortex.
+
+\paragraph{Reconstruction.}
+Primitive variables are reconstructed to the cell interfaces with a
+piecewise-linear method using the monotonised-central limiter; the minmod
+limiter and piecewise-constant reconstruction are available as alternatives
+and are used for comparison. The scheme is second order in smooth regions
+and requires two ghost zones. Reconstruction is performed on
+$W v^i$ rather than on $v^i$, since limiting the three velocity components
+independently can produce a superluminal interface state wherever the limiter
+is active near a strong shear; density and pressure are additionally floored
+by a piecewise-constant fallback wherever the linear reconstruction would make
+them non-positive.
+
+\paragraph{Riemann solver.}
+The interface flux is computed by one of four solvers, selected at run time:
+HLLE, HLLC, HLLD, or the exact solver of Sect.~\ref{sec:setup:exact}. This is
+the only difference between the runs compared in this work; the grid, the
+reconstruction, the time integrator, the constrained transport and the
+conservative-to-primitive inversion are held fixed, so that any difference in
+the solution is attributable to the flux function alone.
+
+\paragraph{Time integration.}
+Time is advanced with the strong-stability-preserving Runge--Kutta method of
+Shu \& Osher, third order by default and second order optionally. The time
+step is set by the unsplit Courant condition on the fast magnetosonic speed
+in both directions, with a Courant factor of $0.25$.
+
+\paragraph{Conservative-to-primitive inversion.}
+The primitive variables are recovered with the vectorised scheme of
+Kastaun et al., which reduces the inversion to a one-dimensional root find of
+a master function with a bracketed root, and is therefore robust in the
+magnetically dominated and highly relativistic regimes that the rotor reaches.
+The inversion is applied to every cell after every Runge--Kutta stage.
+
+\paragraph{Constrained transport.}
+\label{sec:setup:ct}
+In two dimensions the magnetic field is kept solenoidal by constrained
+transport: the in-plane field is stored on cell faces, and the corner
+electromotive force is built from the interface fluxes by the upwinded
+averaging of Gardiner \& Stone. The cell-centred and face-centred variables
+are combined with identical Runge--Kutta coefficients at every stage, which is
+what keeps each stage divergence-free without dedicated machinery. The
+resulting $\lvert\nabla\cdot\mathbf{B}\rvert$ remains at the level of
+round-off, and is reported with the results.
+
+\subsection{The exact Riemann solver}
+\label{sec:setup:exact}
+
+The second code solves the SRMHD Riemann problem exactly, in the sense that
+every wave is represented by its own jump or integral relation rather than by
+an approximate average. We follow the formulation of Giacomazzo \& Rezzolla
+for the case $B^x \neq 0$, in which the solution consists of seven waves
+separating eight uniform states: two fast waves, two rotational (Alfv\'en)
+discontinuities, two slow waves, and the contact discontinuity.
+
+\paragraph{Extension to six unknowns.}
+The original formulation carries four unknowns, the total pressure behind each
+fast wave and the two tangential field components at the contact, and closes
+the system by requiring the normal and tangential velocities and the total
+pressure to be continuous across the contact. The rotational discontinuities
+are then left to an inner iteration with case-dependent starting values. That
+inner iteration is the weak point: a rotational discontinuity admits more than
+one branch, and the outer Newton has no control over which branch the inner
+solve selects, so the outer iteration can converge to a structure that is not
+the solution of the problem posed.
+
+We therefore promote the two rotation angles to unknowns of the outer system.
+The unknown vector becomes
+%
+\begin{equation}
+  \mathbf{u} = \bigl[\,\ln p^\ast_{\mathrm{LF}},\;
+                      \ln \lvert \mathbf{B}_t^\ast \rvert,\;
+                      \psi^\ast,\;
+                      \ln p^\ast_{\mathrm{RF}},\;
+                      \varphi_L,\; \varphi_R \,\bigr],
+  \label{eq:unk6}
+\end{equation}
+%
+where $p^\ast_{\mathrm{LF}}$ and $p^\ast_{\mathrm{RF}}$ are the total
+pressures behind the left and right fast waves, $\lvert\mathbf{B}_t^\ast\rvert$
+and $\psi^\ast$ are the magnitude and orientation of the tangential field at
+the contact, and $\varphi_L$, $\varphi_R$ are the angles through which each
+rotational discontinuity turns the tangential field. Writing the magnitudes as
+logarithms and the orientations as angles makes every unknown of order unity
+and positivity automatic, so a single absolute step size is well conditioned
+for the whole vector.
+
+Each Alfv\'en wave is then solved with its rotation \emph{pinned} to the
+corresponding angle unknown, which makes the wave deterministic and moves the
+branch choice into the outer Newton, where it belongs. The system is closed by
+six residuals: continuity of the three velocity components and of the total
+pressure across the contact,
+%
+\begin{equation}
+  \llbracket v^x \rrbracket = \llbracket v^y \rrbracket =
+  \llbracket v^z \rrbracket = \llbracket p_{\rm tot} \rrbracket = 0 ,
+  \label{eq:cd}
+\end{equation}
+%
+together with one consistency condition per slow wave. The slow waves are
+parameterised by the tangential field they must produce at the contact, which
+in general over-determines them; the slack is the residual of the transverse
+momentum jump condition for a slow shock, and the mismatch in field
+orientation for a slow rarefaction.
+
+\paragraph{Wave solvers.}
+Each wave is solved by its own routine. Fast and slow shocks are obtained from
+the Rankine--Hugoniot conditions by a pressure-parameterised root find over
+the admissible speed window, bracketed by a scan of the residual so that the
+correct branch is selected rather than the nearest root. Rarefactions are
+obtained by integrating the self-similar ordinary differential equations
+through the fan with a fourth-order Runge--Kutta scheme. Rotational
+discontinuities are solved for the pinned rotation angle. Where a wave family
+degenerates, for instance where the Alfv\'en speed coincides with a
+magnetosonic speed, the corresponding reduced three-wave problem is solved
+instead; the structure of each interface is classified from its eigenvalues
+before the solve.
+
+\paragraph{Outer iteration.}
+The six-dimensional system is solved by a damped Newton method with a
+forward-difference Jacobian. The step is taken through a singular-value
+decomposition with truncation of directions below the finite-difference noise
+level, which is necessary because the Jacobian is genuinely rank-deficient
+whenever the problem is coplanar and the rotation angles are unobservable. A
+trust region caps the step, and a backtracking line search accepts a step only
+if it reduces the residual; the best iterate is retained. Convergence is
+declared at $\lVert \mathbf{f} \rVert_\infty < 10^{-8}$.
+
+\paragraph{Initial guess and multistart.}
+The Newton iteration converges only from a starting point inside the basin of
+the solution, and that basin shrinks as the magnetisation grows. The starting
+point is therefore supplied by a neural network, a feed-forward
+multilayer perceptron trained on forward-constructed solutions: it maps
+thirteen scale- and rotation-invariant features of the state pair to the nine
+numbers from which Eq.~(\ref{eq:unk6}) is assembled, with the three angles
+represented by their sine and cosine so that the training loss is continuous
+across the branch cut. Interfaces that fail to converge from the first guess
+are retried from further starting points, drawn either from other trained
+checkpoints or by perturbing the first. Retries recover a substantial fraction
+of the failures, which is the expected behaviour when the failures are basin
+misses rather than an insufficient iteration budget.
+
+\paragraph{Use as a flux function and fallback.}
+When the exact solver provides the flux for a grid run, all interfaces of a
+sweep are solved in one batched call. An interface is given the exact flux
+only if the Newton converged, the state on the ray $\xi = x/t = 0$ could be
+resolved, and that state is physical; otherwise the interface keeps the HLLD
+flux, and the fraction of interfaces resolved exactly is reported with every
+run. Interfaces whose left and right states differ by less than a
+relative threshold are not attempted at all, since there the difference
+between any two consistent solvers is below the truncation error of the
+scheme.
+
+\subsection{Test problem}
+\label{sec:setup:rotor}
+
+The two-dimensional magnetic rotor is used throughout. A dense cylinder of
+radius $r_0 = 0.1$ and density $\rho = 10$ rotates rigidly with angular
+velocity $\omega = 9.95$, so that its rim moves at $v = 0.995$ and reaches a
+Lorentz factor of about ten, inside a static ambient medium of density
+$\rho = 1$. Pressure is uniform, $p = 1$, the field is uniform,
+$\mathbf{B} = (1, 0, 0)$, and the adiabatic index is $\Gamma = 5/3$. The
+cylinder edge is sharp, with no taper, which is the harder and the standard
+form of the test. The domain is $[-0.5, 0.5]^2$ with outflow boundaries, and
+the solution is evolved to $t = 0.4$.
+
+Because the initial data are invariant under a rotation by $\pi$ about the
+axis, the continuum solution satisfies
+$\rho(-\mathbf{r}) = \rho(\mathbf{r})$,
+$\mathbf{v}(-\mathbf{r}) = -\mathbf{v}(\mathbf{r})$ and
+$\mathbf{B}(-\mathbf{r}) = \mathbf{B}(\mathbf{r})$ at all times. We monitor
+the violation of this symmetry as a diagnostic. It is reported rather than
+bounded: where the exact solver owns some interfaces and not others, the
+fallback pattern need not respect the symmetry, so the measured violation is
+of the order of the truncation error and is informative rather than a test of
+correctness.
