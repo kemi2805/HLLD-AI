@@ -1,0 +1,189 @@
+% The five-wave planar Riemann solver.  Written 2026-09-08 from the code and
+% the measurements as they stand (HLLD @ 954046b, rmhd_final @ add9f70).
+% Every number here is measured; docs/planar_solver_notes.md gives the file,
+% line, or script behind each one.
+\section{A Planar Riemann Solver}
+\label{sec:planar}
+
+The seven-wave solver of Sect.~\ref{sec:setup:exact} resolves only a minority
+of the interfaces a two-dimensional run presents. This section explains why,
+and describes the reduced solver that follows from the explanation. The
+reduction is not an approximation: a converged answer is verified against the
+complete seven-wave jump conditions before it is accepted.
+
+\subsection{Why the seven-wave form fails on a planar flow}
+\label{sec:planar:why}
+
+A two-dimensional flow keeps the magnetic field and the velocity in a single
+plane. On a magnetic rotor this is not approximate: measured over all
+interfaces of a $64^2$ run, the coplanarity of the two tangential fields,
+%
+\begin{equation}
+  \chi \;=\;
+  \frac{\lvert \mathbf{B}_t^L \times \mathbf{B}_t^R \rvert}
+       {\lvert \mathbf{B}_t^L \rvert \, \lvert \mathbf{B}_t^R \rvert},
+  \label{eq:coplanarity}
+\end{equation}
+%
+has median $3.5 \times 10^{-11}$ and lies below $10^{-6}$ on every interface.
+For comparison, a forward-constructed dataset drawn from the same envelope has
+0.01\% of samples below $10^{-4}$ and a median of $0.65$: the geometry of a two-dimensional run is not a
+sampling corner, it is a different population.
+
+In that geometry the seven-wave parameterisation is ill-posed in three
+separate ways, each measured on the $481\,837$ interfaces the run solved
+exactly.
+
+\paragraph{An unknown that no wave determines.}
+A planar slow wave cannot rotate the tangential field; it can only reverse it.
+Measured, the left slow wave turns the field by a median of $6 \times 10^{-12}$
+radians, which is zero to eleven digits. The orientation $\psi^\ast$ is
+therefore fixed by the geometry, while the solver still treats it as an
+unknown and differences the residual with respect to it. That column of the
+Jacobian is finite-difference noise. Freezing the three angles at their true
+values raises the converged fraction from $79.5\%$ to $90.5\%$, which is the
+size of the damage.
+
+\paragraph{A wave asked for two numbers that can supply one.}
+Each slow wave is parameterised by the tangential field it must produce at the
+contact, which is two components, while the wave family has one parameter.
+This is why the formulation carries a slack residual per slow wave. The
+over-determination would be harmless if the waves were strong, but they are
+not: the left slow wave changes $\lvert\mathbf{B}_t\rvert$ by a median of only
+$3.3\%$, so the set of contact fields it can reach is small and most trial
+values of the unknowns lie outside it. The wave construction then fails
+outright rather than returning a large residual. This is visible in the
+failure pattern: only about half of the failed interfaces can be constructed
+at all from a given starting point, while $99.5\%$ can be constructed
+somewhere inside a wide grid. The search is landing outside a feasible
+region, not climbing a hill.
+
+\paragraph{Two nearly parallel wave families.}
+The Alfv\'en and slow speeds differ by a median of $5.5 \times 10^{-3}$, with
+a fifth percentile of $9.4 \times 10^{-6}$, against $2.8 \times 10^{-1}$
+separating the fast wave from the Alfv\'en wave. The seven-wave system therefore
+carries two almost coincident characteristic fields wherever the rotor is
+concerned.
+
+The consequence is that no starting point rescues these interfaces. Since a
+planar flow admits only eight discrete choices for the three angles, the
+orientation being the common line or its reverse and each rotation being
+nothing or a reversal, that space can be searched exhaustively. Crossing all
+eight with a $7^3$ grid over the three remaining unknowns, $2744$ points per
+interface, converges on $8.5\%$; a grid a hundred times denser than $3^3$
+gains $1.5$ percentage points and does not lower the best residual at all.
+
+\subsection{The reduced system}
+\label{sec:planar:system}
+
+In the plane the state is $(\rho,\,p_{\rm tot},\,v^x,\,v^t,\,B^t)$ with $B^n$
+fixed and $B^t$ a \emph{signed} scalar. The system has five characteristic
+fields, so the Riemann fan has five waves: two fast, two slow, and the
+contact. There are no rotational discontinuities, and therefore no angles and
+no nearly parallel pair. Reading forward from each side,
+%
+\begin{equation}
+  \mathbf{u} = \bigl[\, \ln p^\ast_{\mathrm{LF}},\;
+                        B^{t\ast},\;
+                        \ln p^\ast_{\mathrm{RF}} \,\bigr],
+  \qquad
+  \mathbf{f} = \bigl[\, \llbracket v^x \rrbracket,\;
+                        \llbracket v^t \rrbracket,\;
+                        \llbracket p_{\rm tot} \rrbracket \,\bigr],
+  \label{eq:planar-system}
+\end{equation}
+%
+a square $3 \times 3$ system. Each slow wave is given exactly one number to
+reach, which is its family's dimension, so the slack equations disappear;
+they are retained only as a diagnostic, and come out at $10^{-11}$.
+
+Two properties of this parameterisation matter in practice. Because
+$B^{t\ast}$ is signed and enters linearly, a reversal of the tangential field
+is an ordinary sign change through zero rather than a discrete branch the
+solver must be told about, so the eight-way enumeration of angle choices
+disappears. And because the system is well conditioned, it needs no warm
+start: the results below are obtained from the trivial guess of the mean
+pressure on the two sides and the mean tangential field, with no neural
+network and no retries.
+
+The solve is performed in the frame rotated about the normal so that the left
+tangential field lies along $+\hat{y}$. The out-of-plane residue that this
+rotation leaves behind is reported, so an interface that was not planar
+enough can be refused; on real interfaces that residue has median $1.5 \times 10^{-10}$ and $0.2\%$ exceed the
+tolerance.
+
+\subsection{Verification, and why it is required}
+\label{sec:planar:verify}
+
+A five-wave solution is a seven-wave solution whose two rotational
+discontinuities have zero strength. It can therefore be written in the
+seven-wave unknowns, with both rotations zero and the contact orientation
+equal to $0$ or $\pi$ according to the sign of $B^{t\ast}$, and the complete
+six-component residual evaluated there. The solver performs this check on
+every answer and accepts only those below $10^{-8}$; the median achieved on
+real interfaces is $1.1 \times 10^{-10}$.
+
+The check is not a formality. Where the true solution contains a genuine
+rotational discontinuity of angle $\pi$, the five-wave family does not contain
+it, and the solver may still converge on its own reduced system to a different
+state. On the rotor this affects $2.3\%$ of interfaces; both rotations vanish
+identically on the remaining $97.7\%$. The verification is what separates the
+two cases.
+
+The same test distinguishes this reduction from a cruder one. A three-wave
+solver, retaining only the two fast waves and the contact, converges on
+essentially every interface, including all of those the seven-wave solver
+fails, but not one of its answers reaches $10^{-6}$ on the full residual; the
+median is $1.2 \times 10^{-2}$. It is a reliable approximation, not a solution,
+and it is not used.
+
+One caveat applies to any such check. The seven-wave residual is
+\emph{frame-sensitive} at this tolerance. The orientation of the solver frame
+is set arbitrarily by the sweep direction, and the formulation carries the
+tangential field as a magnitude and an angle, so rotating a solution changes
+how well it appears to satisfy its own equations. Measured on solutions
+produced by the planar solver, the fraction satisfying $10^{-8}$ falls from
+$100\%$ in the rotated frame to $51\%$ in the raw frame, a tenth of them
+failing to construct at all. The effect is present for solutions produced by
+the seven-wave solver too, at tens of percent, though its direction there was
+not consistent between two harvests and we do not claim one. The safe
+practice, and what the solver does internally, is to verify in the frame the
+answer was produced in.
+
+\subsection{Measured behaviour}
+\label{sec:planar:results}
+
+The planar solver is used as a fallback: an interface is offered to it only
+when the seven-wave solver has not already resolved it. Table~\ref{tab:planar}
+collects the measurements, all on interfaces harvested from a $64^2$ rotor
+run.
+
+\begin{table}
+\centering
+\caption{The three solvers on the same interfaces. ``Full residual'' is the
+complete seven-wave residual evaluated at the solver's own answer.}
+\label{tab:planar}
+\begin{tabular}{lccc}
+\hline
+ & seven-wave & three-wave & five-wave planar \\
+\hline
+converged, interfaces the run resolves & 79.5\% & 99.9\% & 91.2\% \\
+converged, interfaces the run fails    & 0.25\% & 99.8\% & 65.8\% \\
+full residual below $10^{-8}$          & ---    & 0.0\%  & 96--99.5\% \\
+contact pressure vs.\ known solution   & exact  & $10^{-4}$--$4\times10^{-3}$ & $1.6\times10^{-10}$ \\
+cost per interface                     & $\sim$30\,ms & $\sim$1\,ms & $\sim$8\,ms \\
+warm start required                    & yes    & no     & no \\
+\hline
+\end{tabular}
+\end{table}
+
+Enabling the fallback is strictly additive. On eighteen recorded sweeps
+replayed with identical inputs, the number of interfaces receiving an exact
+flux rises from $471$ to $763$: $292$ gained, none lost, and on the $471$
+resolved by both configurations the star pressure is bitwise identical. In a
+$64^2$ run the fraction of attempted interfaces resolved exactly rises from
+$43.9\%$ to $69.9\%$, and the improvement is concentrated where the geometry
+predicts: the sweeps along which the normal field is small, previously the
+weakest at $24.7\%$, reach $83.9\%$. The cost is roughly a factor of two in
+wall time per step, since a second solver runs on every interface the first
+one leaves.
