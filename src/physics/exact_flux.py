@@ -109,6 +109,35 @@ _DEFAULT_CKPT = os.environ.get("RMHD_ML_CKPT", "data/ml_guess_gamma53_v5.pt")
 _3WAVE_FALLBACK = os.environ.get("RMHD_3WAVE_FALLBACK", "0") not in ("0", "", "off")
 _BN_3WX_MAX = float(os.environ.get("RMHD_BN_3WX_MAX", "0.1"))
 
+# The five-wave PLANAR rescue (2026-09-08), off by default.
+#
+# A 2D flow is planar, and in the plane the seven-wave formulation is badly
+# parameterised: `psi_CD` is fixed by geometry (a planar slow wave turns the
+# field by a median of 4e-11 radians -- it can only reverse it), and each slow
+# wave is asked for BOTH tangential components when its family has one
+# parameter, so most trial unknowns fall outside the reachable set and the
+# construction fails outright.  Hence 56% of attempted interfaces go unsolved
+# and no seed fixes it (an exhaustive angle enumeration crossed with a 7^3
+# magnitude grid converges 8.5%).
+#
+# The planar solver has three unknowns [ln p_LF, signed Bt_CD, ln p_RF]
+# against the three contact jumps -- square, no angles, no slacks -- and from
+# a TRIVIAL seed it converges on 65.8% of the interfaces the seven-wave solver
+# fails and 91.2% of the ones it solves.
+#
+# It is admitted here because its answer is EXACT, not close: `planar5_b.solve`
+# verifies every answer against the FULL seven-wave residual before reporting
+# it converged, and on real interfaces that residual has median 1.1e-10.  The
+# check is not a formality -- where the true solution has a genuine pi
+# rotational discontinuity (4.1% of rotor interfaces) the five-wave family does
+# not contain it and the solver can converge to something else; the
+# verification is what keeps those out.  Contrast the three-wave fallback
+# above, whose answers never reach 1e-6 on the same test, which is why that one
+# stays off and this one is worth having.
+_PLANAR5_FALLBACK = os.environ.get("RMHD_PLANAR5_FALLBACK", "0") not in ("0", "", "off")
+_PLANAR_TOL = float(os.environ.get("RMHD_PLANAR_TOL", "1e-6"))
+_PLANAR5_VERIFY = float(os.environ.get("RMHD_PLANAR5_VERIFY", "1e-8"))
+
 _EXTRA_CKPTS = [c.strip() for c in os.environ.get("RMHD_ML_CKPTS", "").split(",")
                 if c.strip()]
 if _RMHD_ROOT not in sys.path:
@@ -418,9 +447,11 @@ def _batched_parts(gamma):
     fan_p, fan_n = RB.make_integrators(gamma, lambda s, sw, B, g:
                                        xi_fn(s, sw, B, g))
     from batched import contact_b as CB
+    from batched import planar5_b as P5
     parts = dict(solve=API.make_solver(gamma), ray=RAY, xi=xi_fn,
                  fan_p=fan_p, fan_n=fan_n, np=np,
-                 reduced=CB.make_solver(gamma))
+                 reduced=CB.make_solver(gamma),
+                 planar5=P5.make_solver(gamma))
     _SOLVER_CACHE[gamma] = parts
     return parts
 
@@ -672,7 +703,55 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
                 region[w] = reg3[good]
                 take3[w] = True
 
-    take_all = take | take3
+    # ── five-wave PLANAR rescue (opt-in) ──────────────────────────────────
+    # Same placement as the three-wave block: after the harvest, so the
+    # harvested rows stay exactly what they were, and before the flux
+    # assembly, so the run gets the better flux.  The answers are mapped into
+    # the seven-wave zone layout -- R2 == R3 and R6 == R7, the two rotational
+    # discontinuities having zero strength -- so the EXISTING ray sampler
+    # resolves xi = 0 with no new code.  That mapping is exact, not a
+    # convenience: a five-wave solution IS a seven-wave solution whose
+    # rotations vanish, which is what `planar5_b.solve` has already verified.
+    take5 = np.zeros(sel.size, dtype=bool)
+    n5_att = 0
+    if _PLANAR5_FALLBACK:
+        cand = np.flatnonzero(~take & ~take3)
+        n5_att = int(cand.size)
+        if cand.size:
+            sL5 = [c[cand] for c in subL]
+            sR5 = [c[cand] for c in subR]
+            B5 = subBn[cand]
+            r5 = P["planar5"]["solve"](sL5, sR5, B5, accuracy=accuracy,
+                                       max_iter=max_iter,
+                                       planar_tol=_PLANAR_TOL,
+                                       verify_tol=_PLANAR5_VERIFY)
+            good = r5["converged"].astype(bool)
+            if good.any():
+                A, B_, C_, D = r5["zones"]
+                aspd = P["planar5"]["waves"]["alfven_speed"]
+                VsLv5 = [r5["speeds"][0], aspd(A, B5, "L"), r5["speeds"][1]]
+                VsRv5 = [r5["speeds"][4], aspd(D, B5, "R"), r5["speeds"][3]]
+                st5, reg5, e5 = RAY.state_at_xi(
+                    sL5, sR5, [A, A, B_, C_, D, D], VsLv5, VsRv5,
+                    B5, gamma, P["xi"], P["fan_p"], P["fan_n"])
+                good &= ~e5
+                rho5, P5_, vn5, vt15, vt25, Bt15, Bt25 = st5
+                v2_ = vn5 * vn5 + vt15 * vt15 + vt25 * vt25
+                W2_ = 1.0 / np.maximum(1.0 - v2_, 1e-300)
+                eta_ = B5 * vn5 + Bt15 * vt15 + Bt25 * vt25
+                b2_ = (B5 ** 2 + Bt15 ** 2 + Bt25 ** 2) / W2_ + eta_ ** 2
+                phys5 = (rho5 > 0.0) & (v2_ < 1.0) & (P5_ - 0.5 * b2_ > 0.0)
+                for c_ in st5:
+                    phys5 &= np.isfinite(c_)
+                good &= phys5
+                if good.any():
+                    w = cand[good]
+                    for j in range(7):
+                        star[j][w] = st5[j][good]
+                    region[w] = reg5[good]
+                    take5[w] = True
+
+    take_all = take | take3 | take5
     g = sel[take_all]
     if harvester is not None:
         harvester.record_coverage(idir, N, sel, g)
@@ -703,6 +782,9 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
         n_3wave_attempted=n3_att,
         n_3wave_exact=int(take3.sum()),
         three_wave_mask=take3,
+        n_planar5_attempted=n5_att,
+        n_planar5_exact=int(take5.sum()),
+        planar5_mask=take5,
         n_hlld_fallback=fell_back,
         frac_hlld_fallback=fell_back / max(N, 1),
         frac_exact=n_exact / max(N, 1),
