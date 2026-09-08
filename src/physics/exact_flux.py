@@ -137,6 +137,13 @@ _BN_3WX_MAX = float(os.environ.get("RMHD_BN_3WX_MAX", "0.1"))
 _PLANAR5_FALLBACK = os.environ.get("RMHD_PLANAR5_FALLBACK", "0") not in ("0", "", "off")
 _PLANAR_TOL = float(os.environ.get("RMHD_PLANAR_TOL", "1e-6"))
 _PLANAR5_VERIFY = float(os.environ.get("RMHD_PLANAR5_VERIFY", "1e-8"))
+# Harvest the planar answers as solved rows.  On by default WITH the rescue:
+# they are exact solutions of interfaces the seven-wave solver cannot reach,
+# which is precisely the population the warm-start network has no training
+# data for.  `attempts` is set to 2 so they survive a harvester left at its
+# `only_retried` default -- these lanes did fail the seven-wave attempt first,
+# so that is a description rather than a fiction.
+_HARVEST_PLANAR5 = os.environ.get("RMHD_HARVEST_PLANAR5", "1") not in ("0", "", "off")
 
 _EXTRA_CKPTS = [c.strip() for c in os.environ.get("RMHD_ML_CKPTS", "").split(",")
                 if c.strip()]
@@ -662,7 +669,7 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
             subL, subR, subBn, cls=cls, converged=conv, zones=res["zones"],
             VsLv=res["VsLv"], VsRv=res["VsRv"],
             attempts=res.get("attempts", np.ones(sel.size, dtype=int)),
-            accepted=take,
+            accepted=take, ray_ok=ray_ok, source=0,
             seven_wave=np.isin(cls, (C.FULL7, C.COPLANAR)))
 
     # ── reduced three-wave rescue (opt-in) ────────────────────────────────
@@ -750,6 +757,32 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
                         star[j][w] = st5[j][good]
                     region[w] = reg5[good]
                     take5[w] = True
+                    # Harvest them as seven-wave rows -- which is what they
+                    # are, with two zero-strength rotational discontinuities
+                    # (R2 == R3, R6 == R7), already verified against the full
+                    # six-residual inside `solve`.  Tagged source=1 so a
+                    # trainer can weight or ablate rows whose rotations are
+                    # identically zero.  Restricted to `w`: `record`'s
+                    # unsolved branch fires on every call, so a second pass
+                    # over the whole sweep would re-record the seven-wave
+                    # successes as failures.
+                    if harvester is not None and _HARVEST_PLANAR5:
+                        k5 = int(good.sum())
+                        hL = [c[good] for c in sL5]
+                        hR = [c[good] for c in sR5]
+                        hz = [[c[good] for c in z]
+                              for z in (A, A, B_, C_, D, D)]
+                        harvester.record(
+                            hL, hR, B5[good],
+                            cls=np.full(k5, C.COPLANAR, dtype=np.int8),
+                            converged=np.ones(k5, dtype=bool),
+                            zones=hz,
+                            VsLv=[v[good] for v in VsLv5],
+                            VsRv=[v[good] for v in VsRv5],
+                            attempts=np.full(k5, 2, dtype=int),
+                            accepted=np.ones(k5, dtype=bool),
+                            seven_wave=np.ones(k5, dtype=bool),
+                            source=1)
 
     take_all = take | take3 | take5
     g = sel[take_all]

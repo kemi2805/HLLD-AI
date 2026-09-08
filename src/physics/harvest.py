@@ -114,15 +114,33 @@ class Harvester:
         return idx[(np.arange(idx.size) + off) % self.stride == 0]
 
     def record(self, left, right, Bn, *, cls, converged, zones, VsLv, VsRv,
-               attempts, accepted, seven_wave):
+               attempts, accepted, seven_wave, source=0, ray_ok=None):
         """Record one batch.
 
         ``left``/``right`` are 7-lists of per-lane arrays in the solver frame,
         ``zones`` the six R2..R7 zone states, ``accepted`` the lanes that
         passed every gate (converged, ray resolved, state physical).
+
+        ``source`` tags which solver produced the rows: 0 = the seven-wave
+        Newton, 1 = the five-wave planar solver.  Both write exactly the same
+        schema -- a planar answer IS a seven-wave solution whose two
+        rotational discontinuities have zero strength -- but the planar rows
+        all carry ``phi_L = phi_R = 0`` exactly, so a trainer may want to
+        weight or ablate them.  Scalar or per-lane.
+
+        ``ray_ok`` separates a lane that converged but produced no usable ray
+        from one whose state came out unphysical.  Without it both are
+        recorded as unphysical, which is what the code did before this
+        argument existed even though ``R_RAY_FAILED`` was defined.
+
+        MAY BE CALLED MORE THAN ONCE PER SWEEP, but only on DISJOINT lane
+        sets: the unsolved branch fires on every call, so a second call must
+        be restricted to the lanes it actually owns or it re-records the
+        first call's successes as failures.
         """
         n = Bn.shape[0]
         att = np.asarray(attempts)
+        src = np.broadcast_to(np.asarray(source, dtype=np.int8), (n,))
 
         # ── solved ───────────────────────────────────────────────────────
         if self.n_solved < self.max_solved:
@@ -134,18 +152,20 @@ class Harvester:
             idx = idx[:room]
             if idx.size:
                 self._solved.append(self._pack_solved(
-                    left, right, Bn, zones, VsLv, VsRv, att, idx))
+                    left, right, Bn, zones, VsLv, VsRv, att, idx, src))
                 self.n_solved += idx.size
 
         # ── unsolved ─────────────────────────────────────────────────────
         if self.n_unsolved < self.max_unsolved:
             bad = ~accepted
             if bad.any():
-                reason = np.full(n, R_UNPHYSICAL, dtype=np.int8)
-                reason[~converged] = R_NOT_CONVERGED
                 # a lane that converged but produced no usable ray is a
                 # different failure from one whose state came out unphysical;
                 # keeping them apart is what makes the failure plots readable
+                reason = np.full(n, R_UNPHYSICAL, dtype=np.int8)
+                if ray_ok is not None:
+                    reason[np.asarray(converged) & ~np.asarray(ray_ok)] = R_RAY_FAILED
+                reason[~np.asarray(converged)] = R_NOT_CONVERGED
                 idx = self._subsample(np.flatnonzero(bad))
                 idx = idx[:self.max_unsolved - self.n_unsolved]
                 if idx.size:
@@ -168,7 +188,8 @@ class Harvester:
         return np.stack([np.asarray(c)[idx] for c in state]
                         + [np.asarray(Bn)[idx]], axis=1)
 
-    def _pack_solved(self, left, right, Bn, zones, VsLv, VsRv, att, idx):
+    def _pack_solved(self, left, right, Bn, zones, VsLv, VsRv, att, idx,
+                     src=None):
         k = idx.size
         U_L = self._u8(left, Bn, idx)
         U_R = self._u8(right, Bn, idx)
@@ -191,8 +212,11 @@ class Harvester:
                       np.asarray(VsLv[2])[idx], vxc,
                       np.asarray(VsRv[2])[idx], np.asarray(VsRv[1])[idx],
                       np.asarray(VsRv[0])[idx]], axis=1)
+        if src is None:
+            src = np.zeros(len(att), dtype=np.int8)
         return dict(U_L=U_L, U_R=U_R, zones=Z, speeds=S,
-                    attempts=att[idx].astype(np.int16))
+                    attempts=att[idx].astype(np.int16),
+                    source=np.asarray(src)[idx].astype(np.int8))
 
     def record_coverage(self, idir, n_interfaces, attempted_idx, exact_idx):
         """One sweep's coverage: flat interface indices that were attempted
