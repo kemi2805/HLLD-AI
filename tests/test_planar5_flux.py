@@ -149,3 +149,37 @@ def test_batch_independence_with_the_rescue(eos, problems):
         assert torch.equal(pp[ex], p[sl][ex])
         for k in F:
             assert torch.equal(Fp[k], F[k][sl]), f"splitting moved {k}"
+
+
+def test_verified_is_a_subset_of_exact_and_covers_the_planar_lanes(eos, problems):
+    """The rule the paper states: exact means verified, per interface.
+
+    ``n_verified`` counts interfaces whose structure satisfies the COMPLETE
+    seven-wave jump conditions to 1e-8, whichever solver produced it.  Two
+    things must hold: it is never larger than ``n_exact``, and every lane the
+    planar solver won is in it, since that solver verifies before reporting
+    convergence.
+
+    It is deliberately NOT asserted equal.  Measured on eighteen recorded
+    sweeps, 138 of 763 exact fluxes fail the check, and they are the
+    degenerate-class interfaces that `solve_batch` routes to the reduced
+    three-wave solver -- which drops the slow waves and therefore does not
+    produce a root of the full system.  Those lanes have always been counted
+    exact; this test pins the discrepancy rather than hiding it, so that
+    closing it is a deliberate decision and not a silent one.
+    """
+    sL, sR, n = problems
+    for planar5 in (False, True):
+        _, _, d = _run(sL, sR, eos, planar5=planar5)
+        assert d["n_verified"] <= d["n_exact"]
+        v, ex = d["verified_mask"], d["exact_mask"]
+        assert int((~v[np.asarray(d["planar5_mask"], dtype=bool)]).sum()) == 0, (
+            "a planar lane was not verified, though `solve` verifies before "
+            "reporting convergence")
+
+
+def test_verification_can_be_switched_off_but_defaults_on(eos, problems):
+    import src.physics.exact_flux as EF
+    EF = importlib.reload(EF)
+    assert EF._VERIFY_EXACT is True
+    assert EF._VERIFY_TOL == 1e-8

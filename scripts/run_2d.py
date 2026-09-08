@@ -175,7 +175,8 @@ def main():
         save("000", 0.0)
         log = open(os.path.join(out, "diag.csv"), "w")
         log.write("step,t,dt,divB_max,divB_l2,sym_err,rho_max,rho_min,p_min,"
-                  "W_max,hlle_frac_x,hlle_frac_y,mean_iters,c2p_bad\n")
+                  "W_max,hlle_frac_x,hlle_frac_y,mean_iters,c2p_bad,"
+                  "n_exact_x,n_verified_x\n")
 
     rec = (EnvelopeRecorder(n_per_call=a.envelope_samples,
                             every=a.envelope_every)
@@ -262,7 +263,8 @@ def main():
                       f"{float(st.prims['p'][ph].min()):.4e},{W:.3f},"
                       f"{dx_.get('frac_hlle_fallback', float('nan')):.4f},"
                       f"{dy_.get('frac_hlle_fallback', float('nan')):.4f},"
-                      f"{dx_.get('mean_iters', float('nan')):.2f},{c2p_bad}\n")
+                      f"{dx_.get('mean_iters', float('nan')):.2f},{c2p_bad},"
+                      f"{dx_.get('n_exact', -1)},{dx_.get('n_verified', -1)}\n")
             log.flush()
             extra = f"sym={sym:.2e} " if P["sym"] else ""
             print(f"  step {step:5d} t={t:.4f} dt={dt:.2e} "

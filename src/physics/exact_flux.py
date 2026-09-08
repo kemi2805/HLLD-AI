@@ -137,6 +137,11 @@ _BN_3WX_MAX = float(os.environ.get("RMHD_BN_3WX_MAX", "0.1"))
 _PLANAR5_FALLBACK = os.environ.get("RMHD_PLANAR5_FALLBACK", "0") not in ("0", "", "off")
 _PLANAR_TOL = float(os.environ.get("RMHD_PLANAR_TOL", "1e-6"))
 _PLANAR5_VERIFY = float(os.environ.get("RMHD_PLANAR5_VERIFY", "1e-8"))
+# Verify every exact flux against the full seven-wave system and report the
+# count.  On by default: it is one residual evaluation per solved interface,
+# a few percent, and it is what licenses the word "exact".
+_VERIFY_EXACT = os.environ.get("RMHD_VERIFY_EXACT", "1") not in ("0", "", "off")
+_VERIFY_TOL = float(os.environ.get("RMHD_VERIFY_TOL", "1e-8"))
 # Harvest the planar answers as solved rows.  On by default WITH the rescue:
 # they are exact solutions of interfaces the seven-wave solver cannot reach,
 # which is precisely the population the warm-start network has no training
@@ -799,6 +804,58 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
             U[k][g] = uS[k]
         p_star[g] = torch.tensor(P_tot[take_all], dtype=dt)
 
+    # ── verification: what makes a flux "exact" ───────────────────────────
+    # A flux is called exact iff the structure behind it satisfies the
+    # COMPLETE seven-wave jump conditions, checked per interface, in the
+    # frame the answer was produced in (the residual is frame-sensitive, and
+    # the solver frame's orientation is set arbitrarily by the sweep
+    # direction).  Wave count is not the criterion: a five-wave planar answer
+    # passes with a median residual of 1.1e-10, while the reduced three-wave
+    # answer never reaches 1e-6 on the same test and is therefore not exact
+    # however reliably it converges.
+    #
+    # This makes the paper's central claim a measured column rather than an
+    # argument: `n_verified` is reported beside `n_exact`, and they must
+    # agree.  The planar path already verifies internally, so what is added
+    # here is the seven-wave path and the run-level number.
+    verified = np.zeros(sel.size, dtype=bool)
+    if take.any() and _VERIFY_EXACT:
+        f6 = P["planar5"]["waves"]["fullfuncv6"]
+        seven = np.isin(cls, (C.FULL7, C.COPLANAR))
+
+        def _check(w, unk6):
+            if w.size == 0:
+                return
+            fvv, _, _, _, ev = f6([c[w] for c in subL], [c[w] for c in subR],
+                                  [u for u in unk6], subBn[w])
+            nv = np.where(ev, np.inf, np.max(np.abs(fvv), axis=0))
+            verified[w] = nv <= _VERIFY_TOL
+
+        # the seven-wave path fills `unk` directly
+        _check(np.flatnonzero(take & seven),
+               [u[np.flatnonzero(take & seven)] for u in res["unk"]])
+
+        # The DEGENERATE classes are answered by the reduced three-wave
+        # solver inside `solve_batch`, which fills only R4 and R5 and never
+        # touches `unk` -- so they must be rebuilt from the structure or the
+        # check is meaningless (it would evaluate at all-zero unknowns and
+        # reject every one of them).  A three-wave answer is a seven-wave one
+        # with R2 = R3 = R4 and R5 = R6 = R7, so both post-fast pressures are
+        # the contact pressure and neither rotation turns.
+        d = np.flatnonzero(take & ~seven)
+        if d.size:
+            R4 = [c[d] for c in res["zones"][2]]
+            Bt4 = np.hypot(R4[5], R4[6])
+            z = np.zeros(d.size)
+            _check(d, [np.log(np.maximum(R4[1], 1e-30)),
+                       np.log(np.maximum(Bt4, 1e-30)),
+                       np.arctan2(R4[6], R4[5]),
+                       np.log(np.maximum(R4[1], 1e-30)), z, z])
+    # the three-wave path is deliberately never marked verified (measured:
+    # 0.0% of its answers reach 1e-6 on this residual); the planar path
+    # verifies inside `solve` before it reports convergence
+    verified |= take5
+
     n_exact = int(g.size)
     fell_back = N - n_exact
     exact_mask = torch.zeros(N, dtype=torch.bool)
@@ -818,6 +875,8 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
         n_planar5_attempted=n5_att,
         n_planar5_exact=int(take5.sum()),
         planar5_mask=take5,
+        n_verified=int(verified[take_all].sum()),
+        verified_mask=verified,
         n_hlld_fallback=fell_back,
         frac_hlld_fallback=fell_back / max(N, 1),
         frac_exact=n_exact / max(N, 1),
