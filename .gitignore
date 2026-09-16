@@ -31,3 +31,6 @@ checkpoints/
 
 # Run logs
 logs/
+
+# test caches
+.pytest_cache/

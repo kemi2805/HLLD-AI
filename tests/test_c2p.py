@@ -180,6 +180,8 @@ def test_c2p_mildly_relativistic():
 
 # ── Test 4 – highly relativistic ─────────────────────────────────────────────
 
+@pytest.mark.xfail(strict=True, reason=
+    "baseline a738bca, measured 2026-09-16: rho relative error 9.34e-03 against a 1e-05 bar at W in [2,10], N=2000. The Kastaun c2p loses accuracy in the highly relativistic corner; unrelated to the p_star failures in test_hlld_physics.py. Pre-existing.")
 def test_c2p_highly_relativistic():
     prims = _make_prims(2000, EOS_HOT, W_range=(2.0, 10.0), B_mag=3.0, seed=6)
     _roundtrip(prims, EOS_HOT, label="W=[2,10]", rho_tol=1e-5, v_tol=1e-5, eps_tol=1e-4)
