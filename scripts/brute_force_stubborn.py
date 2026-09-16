@@ -48,15 +48,10 @@ import numpy as np
 from scipy.optimize import least_squares
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-_RMHD = os.environ.get("RMHD_ROOT", "/Users/miler/Codes/rmhd_final")
-if _RMHD not in sys.path:
-    sys.path.append(_RMHD)
-from batched.ray_scalar import claim_rmhd_namespace          # noqa: E402
-claim_rmhd_namespace()
-from eos import set_eos                                       # noqa: E402
+from rmhd.eos import set_eos                                       # noqa: E402
 set_eos("ideal")
-from batched import fullcontact_b as FB                       # noqa: E402
-from batched import planar5_b as P5                           # noqa: E402
+from rmhd.batched import fullcontact_b as FB                       # noqa: E402
+from rmhd.batched import planar5_b as P5                           # noqa: E402
 import torch                                                  # noqa: E402
 from src.physics.eos import hybrid_eos                        # noqa: E402
 from src.physics.hlld import compute_srmhd_fluxes             # noqa: E402

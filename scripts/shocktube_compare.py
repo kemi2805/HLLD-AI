@@ -34,9 +34,6 @@ import torch
 import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-_RMHD = "/Users/miler/Codes/rmhd_final"
-if _RMHD not in sys.path:
-    sys.path.append(_RMHD)
 
 from src.physics.driver import run                      # noqa: E402
 from src.physics.eos import hybrid_eos                  # noqa: E402
@@ -51,16 +48,14 @@ def exact_profile(cfg, x, t):
     One Riemann problem, read along the ray.  Everything here runs in the
     solver's own frame (normal component first, TOTAL pressure).
     """
-    from batched.ray_scalar import claim_rmhd_namespace
-    claim_rmhd_namespace()
-    from eos import set_eos
+    from rmhd.eos import set_eos
     set_eos("ideal")
-    import ml_guess as mg
-    from batched import api as API
-    from batched import ml_b as MB
-    from batched import rarefaction_b as RB
-    from batched import ray_b as RAY
-    from batched import wave_speeds_b as WB
+    from rmhd import ml_guess as mg
+    from rmhd.batched import api as API
+    from rmhd.batched import ml_b as MB
+    from rmhd.batched import rarefaction_b as RB
+    from rmhd.batched import ray_b as RAY
+    from rmhd.batched import wave_speeds_b as WB
 
     rc = cfg["run"]
     g = float(cfg["eos"]["gamma"])

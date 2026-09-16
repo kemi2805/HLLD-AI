@@ -34,13 +34,9 @@ import warnings
 import numpy as np
 
 warnings.filterwarnings("ignore")
-_RMHD = os.environ.get("RMHD_ROOT", "/Users/miler/Codes/rmhd_final")
-sys.path.insert(0, _RMHD)
-from batched.ray_scalar import claim_rmhd_namespace     # noqa: E402
-claim_rmhd_namespace()
-from eos import set_eos                                  # noqa: E402
+from rmhd.eos import set_eos
 set_eos("ideal")
-from batched import fullcontact_b as FB                  # noqa: E402
+from rmhd.batched import fullcontact_b as FB                  # noqa: E402
 
 G = 5.0 / 3.0
 A = lambda *v: [np.array([float(x)]) for x in v]         # one-lane arrays

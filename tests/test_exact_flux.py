@@ -18,9 +18,6 @@ import pytest
 import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-_RMHD = "/Users/miler/Codes/rmhd_final"
-if _RMHD not in sys.path:
-    sys.path.append(_RMHD)
 
 from src.physics.eos import hybrid_eos
 from src.physics.hlld import LAST_DIAG, compute_srmhd_fluxes, hlld_flux
@@ -50,11 +47,9 @@ def _prim(state, Bn, eos):
 
 @pytest.fixture(scope="module")
 def cases():
-    from batched.ray_scalar import claim_rmhd_namespace
-    claim_rmhd_namespace()
-    from eos import set_eos
+    from rmhd.eos import set_eos
     set_eos("ideal")
-    from riemann_dataset import generate_dataset
+    from rmhd.riemann_dataset import generate_dataset
     return generate_dataset(6, gamma=GAMMA, Bx_range=(0.5, 3.0), seed=777,
                             xi_window=(0.0, 0.0), verbose=False)
 
@@ -129,7 +124,7 @@ def test_exact_flux_beats_hlld_against_constructed_truth(eos, cases):
     so the true Godunov flux is known.  Where the exact solver converges its
     flux must be far closer to that truth than HLLD's.
     """
-    from batched import ray_scalar as RS
+    from rmhd.batched import ray_scalar as RS
 
     n_exact, worst_exact, hlld_errs = 0, 0.0, []
     for s in cases:

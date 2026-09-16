@@ -44,9 +44,6 @@ import numpy as np
 import torch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-_RMHD = os.environ.get("RMHD_ROOT", "/Users/miler/Codes/rmhd_final")
-if _RMHD not in sys.path:
-    sys.path.append(_RMHD)
 
 np.seterr(all="ignore")
 
@@ -92,11 +89,9 @@ def main():
     torch.set_num_threads(a.threads)
     eos = hybrid_eos(K=0.0, gamma=a.gamma, gamma_th=a.gamma)
 
-    from batched.ray_scalar import claim_rmhd_namespace
-    claim_rmhd_namespace()
-    from eos import set_eos
+    from rmhd.eos import set_eos
     set_eos("ideal")
-    from batched import fullcontact_b as FB
+    from rmhd.batched import fullcontact_b as FB
     W = FB.make_solver(a.gamma)
     full6 = W["fullcontact6"]
 

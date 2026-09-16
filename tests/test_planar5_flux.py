@@ -21,9 +21,6 @@ import pytest
 import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-_RMHD = "/Users/miler/Codes/rmhd_final"
-if _RMHD not in sys.path:
-    sys.path.append(_RMHD)
 
 from src.physics.eos import hybrid_eos                       # noqa: E402
 from src.physics.hlld import LAST_DIAG                       # noqa: E402
@@ -42,11 +39,9 @@ def eos():
 def problems(eos):
     """COPLANAR problems -- what a 2D run presents, and the only population
     the planar solver claims."""
-    from batched.ray_scalar import claim_rmhd_namespace
-    claim_rmhd_namespace()
-    from eos import set_eos
+    from rmhd.eos import set_eos
     set_eos("ideal")
-    from riemann_dataset import generate_dataset
+    from rmhd.riemann_dataset import generate_dataset
 
     sols = generate_dataset(N_PROB, gamma=GAMMA, Bx_range=(0.01, 1.5), seed=77,
                             xi_window=(0.0, 0.0), coplanar_frac=1.0,

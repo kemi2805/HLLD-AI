@@ -50,7 +50,14 @@ from .hlld import LAST_DIAG, compute_srmhd_fluxes, hlld_flux
 # Overridable: the cluster checkouts live elsewhere (Goethe:
 # /work/astro/miler/codes/rmhd_final), and a git worktree of rmhd_final is how
 # a bit-identity reference is isolated from edits on main.
-_RMHD_ROOT = os.environ.get("RMHD_ROOT", "/Users/miler/Codes/rmhd_final")
+# The exact solver is an installed package now (pip install -e <rmhd_final>);
+# RMHD_ROOT and the sys.path.append that used to live here are gone.
+try:
+    import rmhd.paths as _rmhd_paths
+except ImportError as _e:                      # pragma: no cover
+    raise ImportError(
+        "exact_flux needs the rmhd package: pip install -e <rmhd_final checkout>"
+    ) from _e
 
 # Which warm-start checkpoint to auto-load.  Override with RMHD_ML_CKPT.
 #
@@ -182,10 +189,7 @@ _HARVEST_PLANAR5 = os.environ.get("RMHD_HARVEST_PLANAR5", "1") not in ("0", "", 
 
 _EXTRA_CKPTS = [c.strip() for c in os.environ.get("RMHD_ML_CKPTS", "").split(",")
                 if c.strip()]
-if _RMHD_ROOT not in sys.path:
-    # APPEND, never insert: rmhd_final uses flat top-level module names
-    # (eos, solver, contact, hlle) and must never shadow this package's own.
-    sys.path.append(_RMHD_ROOT)
+# (the append-never-insert dance is gone: `rmhd.eos` cannot shadow `src.physics.eos`)
 
 _V = ("vx", "vy", "vz")
 _B = ("Bx", "By", "Bz")
@@ -293,9 +297,9 @@ def exact_flux(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
                accuracy: float = 1e-8, max_iter: int = 40,
                n_retries: int = 0, nsamples: int = 400):
     """Godunov flux from the exact RMHD Riemann solution at ``xi = 0``."""
-    from batched import classify as C
-    from batched import ray as RAY
-    from batched import ray_scalar as RS
+    from rmhd.batched import classify as C
+    from rmhd.batched import ray as RAY
+    from rmhd.batched import ray_scalar as RS
 
     gamma = _check_eos(eos)
     N = sL["rho"].numel()
@@ -328,7 +332,7 @@ def exact_flux(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
                                  L7[5], L7[6], BnL, gamma)
     la_R, ra_R = C.alfven_speeds(R7[0], R7[1], R7[2], R7[3], R7[4],
                                  R7[5], R7[6], BnR, gamma)
-    from wave_speeds import xi as _xi_scalar
+    from rmhd.wave_speeds import xi as _xi_scalar
 
     def _eigs(st, Bn):
         out = torch.zeros(N, 4, dtype=st[0].dtype)
@@ -356,10 +360,10 @@ def exact_flux(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
     idx = torch.nonzero(solvable).reshape(-1).tolist()
 
     if idx:
-        import ml_guess as mg
-        from fullcontact import fullcontact6
+        from rmhd import ml_guess as mg
+        from rmhd.fullcontact import fullcontact6
         if model is None or scaler is None:
-            model, scaler = mg.load(os.path.join(_RMHD_ROOT, _DEFAULT_CKPT))
+            model, scaler = mg.load(_rmhd_paths.resolve(_DEFAULT_CKPT))
 
     for i in idx:
         left = [float(c[i]) for c in L7]
@@ -453,7 +457,7 @@ def _load_model_cached(path):
     weights.  Keyed by path so RMHD_ML_CKPT can still switch checkpoints.
     """
     if path not in _MODEL_CACHE:
-        import ml_guess as mg
+        from rmhd import ml_guess as mg
         _MODEL_CACHE[path] = mg.load(path)
     return _MODEL_CACHE[path]
 
@@ -466,10 +470,10 @@ def _batched_parts(gamma):
     """
     if gamma in _SOLVER_CACHE:
         return _SOLVER_CACHE[gamma]
-    from batched import api as API
-    from batched import rarefaction_b as RB
-    from batched import ray_b as RAY
-    from batched import wave_speeds_b as WB
+    from rmhd.batched import api as API
+    from rmhd.batched import rarefaction_b as RB
+    from rmhd.batched import ray_b as RAY
+    from rmhd.batched import wave_speeds_b as WB
     import numpy as np
 
     idx = {"LF": 0, "LS": 1, "RS": 2, "RF": 3}
@@ -488,8 +492,8 @@ def _batched_parts(gamma):
 
     fan_p, fan_n = RB.make_integrators(gamma, lambda s, sw, B, g:
                                        xi_fn(s, sw, B, g))
-    from batched import contact_b as CB
-    from batched import planar5_b as P5
+    from rmhd.batched import contact_b as CB
+    from rmhd.batched import planar5_b as P5
     parts = dict(solve=API.make_solver(gamma), ray=RAY, xi=xi_fn,
                  fan_p=fan_p, fan_n=fan_n, np=np,
                  reduced=CB.make_solver(gamma),
@@ -515,7 +519,7 @@ def _solve_and_ray(P, gamma, subL, subR, subBn, seed6, keys, seeds_extra, *,
     res, d = P["solve"](subL, subR, subBn, seed6=seed6, accuracy=accuracy,
                         max_iter=max_iter, n_retries=n_retries, keys=keys,
                         seeds_extra=seeds_extra, tau_bt=tau_bt)
-    from batched import classify as C
+    from rmhd.batched import classify as C
     cls = res["cls"]
     conv = res["converged"]
 
@@ -637,10 +641,10 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
     # same 40 interfaces, neutral seeding solved 23 and took 1896 s where the
     # warm start solved 30 in 383 s.  The scalar path auto-loads for the same
     # reason, so the batched one must too or the comparison is meaningless.
-    import ml_guess as mg
+    from rmhd import ml_guess as mg
     if model is None or scaler is None:
-        model, scaler = _load_model_cached(os.path.join(_RMHD_ROOT, _DEFAULT_CKPT))
-    from batched import ml_b as MB
+        model, scaler = _load_model_cached(_rmhd_paths.resolve(_DEFAULT_CKPT))
+    from rmhd.batched import ml_b as MB
     cands, feats = MB.predict_unk6_k(
         model, scaler, np.stack(subL, axis=1), np.stack(subR, axis=1), subBn)
     seed6 = cands[0]          # a best-of-K checkpoint: candidate 0 is the primary
@@ -664,7 +668,7 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
             u_k, _ = MB.clamp_seed_physical(u_k, subL, subR, subBn)
             seeds_extra.append(u_k)
         for ck in _EXTRA_CKPTS:
-            m_k, s_k = _load_model_cached(os.path.join(_RMHD_ROOT, ck))
+            m_k, s_k = _load_model_cached(_rmhd_paths.resolve(ck))
             u_k, _ = MB.predict_unk6(m_k, s_k, np.stack(subL, axis=1),
                                      np.stack(subR, axis=1), subBn)
             u_k, _ = MB.clamp_seed_physical(u_k, subL, subR, subBn)
@@ -683,7 +687,7 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
     diag["n_seed_clamped"] = n_seed_clamped
     diag["n_ensemble_seeds"] = 0 if seeds_extra is None else len(seeds_extra)
 
-    from batched import classify as C
+    from rmhd.batched import classify as C
     cls = res["cls"]
     conv = res["converged"]
 

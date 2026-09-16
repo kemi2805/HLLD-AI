@@ -28,9 +28,6 @@ import numpy as np
 import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-_RMHD = os.environ.get("RMHD_ROOT", "/Users/miler/Codes/rmhd_final")
-if _RMHD not in sys.path:
-    sys.path.append(_RMHD)
 
 from src.physics.driver import run                      # noqa: E402
 from src.physics.hlld import LAST_DIAG                  # noqa: E402
@@ -40,16 +37,14 @@ VARS = ("rho", "p", "vx", "vy", "vz", "By", "Bz")
 
 def exact_solution(cfg, x_cells, x_fine, t):
     """Solve the Riemann problem ONCE from the network seed; read it at rays."""
-    from batched.ray_scalar import claim_rmhd_namespace
-    claim_rmhd_namespace()
-    from eos import set_eos
+    from rmhd.eos import set_eos
     set_eos("ideal")
-    import ml_guess as mg
-    from batched import api as API
-    from batched import ml_b as MB
-    from batched import rarefaction_b as RB
-    from batched import ray_b as RAY
-    from batched import wave_speeds_b as WB
+    from rmhd import ml_guess as mg
+    from rmhd.batched import api as API
+    from rmhd.batched import ml_b as MB
+    from rmhd.batched import rarefaction_b as RB
+    from rmhd.batched import ray_b as RAY
+    from rmhd.batched import wave_speeds_b as WB
 
     rc = cfg["run"]
     g = float(cfg["eos"]["gamma"])

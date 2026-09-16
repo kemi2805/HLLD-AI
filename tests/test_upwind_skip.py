@@ -27,9 +27,6 @@ import pytest
 import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-_RMHD = "/Users/miler/Codes/rmhd_final"
-if _RMHD not in sys.path:
-    sys.path.append(_RMHD)
 
 from src.physics.eos import hybrid_eos                       # noqa: E402
 from src.physics.hlld import LAST_DIAG, compute_srmhd_fluxes  # noqa: E402
@@ -52,11 +49,9 @@ def problems(eos):
     normal velocity sweeps the whole fan to one side, which is exactly the
     population the skip targets.
     """
-    from batched.ray_scalar import claim_rmhd_namespace
-    claim_rmhd_namespace()
-    from eos import set_eos
+    from rmhd.eos import set_eos
     set_eos("ideal")
-    from riemann_dataset import generate_dataset
+    from rmhd.riemann_dataset import generate_dataset
 
     sols = generate_dataset(N_PROB, gamma=GAMMA, Bx_range=(0.05, 1.5), seed=91,
                             xi_window=(0.0, 0.0), verbose=False)

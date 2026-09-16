@@ -15,16 +15,13 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-sys.path.insert(0, "/Users/miler/Codes/rmhd_final")
-from batched.ray_scalar import claim_rmhd_namespace
-claim_rmhd_namespace()
-from eos import set_eos
+from rmhd.eos import set_eos
 set_eos("ideal")
-from batched import fullcontact_b as FB
-from batched import planar5_b as P5
-from batched import ray_b as RAY
-from batched import rarefaction_b as RB
-from batched import wave_speeds_b as WB
+from rmhd.batched import fullcontact_b as FB
+from rmhd.batched import planar5_b as P5
+from rmhd.batched import ray_b as RAY
+from rmhd.batched import rarefaction_b as RB
+from rmhd.batched import wave_speeds_b as WB
 
 np.seterr(all="ignore")
 G = 5.0 / 3.0

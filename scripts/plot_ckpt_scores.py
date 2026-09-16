@@ -8,7 +8,8 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-f = sys.argv[1] if len(sys.argv) > 1 else "/Users/miler/Codes/rmhd_final/data/scores_all8.npz"
+import rmhd.paths as _rp
+f = sys.argv[1] if len(sys.argv) > 1 else _rp.resolve("data/scores_all8.npz")
 d = np.load(f, allow_pickle=True)
 names = [str(s) for s in d["names"]]
 conv = d["converged"]          # (n_ckpt, n_lane) bool

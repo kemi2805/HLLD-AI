@@ -34,3 +34,6 @@ logs/
 
 # test caches
 .pytest_cache/
+
+# generated figure data (figs/*.png already covered by *.png)
+figs/

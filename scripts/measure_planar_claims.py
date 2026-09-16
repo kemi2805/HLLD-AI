@@ -1,7 +1,7 @@
 """Re-derive every measured number in docs/planar_solver.tex from a harvest.
 
     python scripts/measure_planar_claims.py results/rotor_64_exact/harvest \
-        [--max 4000] [--dataset /Users/miler/Codes/rmhd_final/data/dataset_rotor_train.npz]
+        [--max 4000] [--dataset <rmhd_final>/data/dataset_rotor_train.npz]
 
 The paper section quotes measurements, not estimates, so they have to be
 reproducible from data that outlives the session that produced them.  Each
@@ -23,9 +23,6 @@ import sys
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-_RMHD = os.environ.get("RMHD_ROOT", "/Users/miler/Codes/rmhd_final")
-if _RMHD not in sys.path:
-    sys.path.append(_RMHD)
 
 np.seterr(all="ignore")
 GAMMA = 5.0 / 3.0
@@ -118,11 +115,9 @@ def main():
     print(f"     at least one genuine rotation:        {100 * (1 - both0):.1f}%")
 
     # ── 6. the planar solver, and the verification ───────────────────────
-    from batched.ray_scalar import claim_rmhd_namespace
-    claim_rmhd_namespace()
-    from eos import set_eos
+    from rmhd.eos import set_eos
     set_eos("ideal")
-    from batched import planar5_b as P5, contact_b as CB, fullcontact_b as FB
+    from rmhd.batched import planar5_b as P5, contact_b as CB, fullcontact_b as FB
 
     m = min(a.max, n)
     i = np.sort(np.random.default_rng(3).choice(n, m, replace=False))
