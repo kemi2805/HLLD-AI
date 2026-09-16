@@ -113,10 +113,18 @@ if __name__ == "__main__":   # guarded: RMHD_POOL workers import this module
             saved[f"rescued_{k}"] = d.get("n_retry_rescued", 0)
             both = m1 & m2
             only_rec, only_now = int((m1 & ~m2).sum()), int((~m1 & m2).sum())
+            # Scale by the flux's OWN physical size, not each component's.
+            # In a 2D planar sweep Sz and Bz are the out-of-plane components:
+            # identically zero up to roundoff (|Sz| ~ 9e-9 against |Sx| ~ 38).
+            # Dividing those by their own max turns a 2e-8 difference into a
+            # reported "2.11 relative", which is how this diagnostic cried
+            # wolf on 2026-09-16.  The old `or 1.0` guard only fired on an
+            # exact 0.0, so roundoff-level components slipped through.
+            gsc = max(float(rec["F"][k2].abs().max()) for k2 in F) or 1.0
             worst, wkey = 0.0, None
             for key in F:
                 a = rec["F"][key].reshape(-1); b = F[key].reshape(-1)
-                sc = float(a.abs().max()) or 1.0
+                sc = max(float(a.abs().max()), 1e-6 * gsc)
                 dd = ((a - b).abs() / sc)[both]
                 if dd.numel() and float(dd.max()) > worst:
                     worst, wkey = float(dd.max()), key
