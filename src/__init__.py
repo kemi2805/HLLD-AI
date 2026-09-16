@@ -12,8 +12,8 @@ ML pipeline
 
 Run a shocktube simulation
 --------------------------
-    python -m src.physics.driver          # reads configs/shocktube.yaml by default
-    python src/physics/run_shocktube.py   # legacy script entry-point
+    python -m src.physics.driver          # 1D; pass a config path
+    python scripts/run_2d.py --problem rotor    # 2D production driver
 
 Generate training data
 ----------------------
