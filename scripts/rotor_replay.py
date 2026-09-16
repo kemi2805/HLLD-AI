@@ -21,7 +21,10 @@ marginal lanes in one x-sweep -- what a whole-run comparison had shown as
 
 Env: RMHD_ROOT, RMHD_ML_CKPT, RMHD_FAN/ALFVEN/SLOWSHOCK/SHOCK as for a run."""
 import sys, os, time, functools
-sys.path.insert(0, '/Users/miler/Codes/HLLD')
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# ^ the repo root, derived from this file -- not a hardcoded laptop path.
+# The clusters run this too, and a literal /Users/... here means the cluster
+# checkout silently loses `src` from sys.path after every `git pull`.
 for v in ('OMP_NUM_THREADS', 'MKL_NUM_THREADS', 'OPENBLAS_NUM_THREADS', 'VECLIB_MAXIMUM_THREADS'):
     os.environ[v] = '1'
 import numpy as np, torch
