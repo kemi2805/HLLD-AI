@@ -123,12 +123,25 @@ six-component residual evaluated there. The solver performs this check on
 every answer and accepts only those below $10^{-8}$; the median achieved on
 real interfaces is $1.1 \times 10^{-10}$.
 
-The check is not a formality. Where the true solution contains a genuine
-rotational discontinuity of angle $\pi$, the five-wave family does not contain
-it, and the solver may still converge on its own reduced system to a different
-state. On the rotor this affects $2.3\%$ of interfaces; both rotations vanish
-identically on the remaining $97.7\%$. The verification is what separates the
-two cases.
+The check is not a formality. The five-wave family assumes both rotational
+discontinuities have zero strength, and a coplanar flow almost enforces that:
+a rotation in the plane can only be nothing or a reversal, since those are the
+only two rotations carrying the common line to itself. Measured over
+$142\,554$ rotations (both sides of $71\,277$ solved interfaces), $97.3\%$
+lie below $10^{-6}$ and $0.375\%$ within $10^{-3}$ of $\pi$.
+
+The remaining $2.3\%$ are neither, and they are the informative ones. They sit
+on interfaces that are measurably less coplanar: $\chi$ has median
+$4.3\times10^{-9}$ there against $7.6\times10^{-11}$ over all interfaces, a
+factor of $57$. A departure from coplanarity of one part in $10^{9}$ is
+therefore enough to unpin the angle, and $0.27\%$ of rotations exceed $0.1$
+radians --- an $O(1)$ response to an $O(10^{-9})$ perturbation. The
+restriction to $\{0,\pi\}$ is exact only in the exact coplanar limit; at
+finite precision it is a strong tendency with a measurable tail. Where the
+true solution does carry a rotation, of $\pi$ or otherwise, the five-wave
+family does not contain it and the solver may still converge on its own
+reduced system to a different state. The verification is what separates the
+cases.
 
 The same test distinguishes this reduction from a cruder one. A three-wave
 solver, retaining only the two fast waves and the contact, converges on
@@ -149,6 +162,43 @@ the seven-wave solver too, at tens of percent, though its direction there was
 not consistent between two harvests and we do not claim one. The safe
 practice, and what the solver does internally, is to verify in the frame the
 answer was produced in.
+
+\subsection{Uniqueness, and what the tolerance pins}
+\label{sec:planar:unique}
+
+A vanishing residual establishes that the answer is \emph{an} admissible
+elementary-wave solution, not that it is the only one, and magnetohydrodynamic
+Riemann problems are not guaranteed a unique one. We therefore compared full
+answers --- every intermediate state and every wave speed, not the star
+pressure alone --- from independent routes.
+
+The two seeds of the planar solver have largely disjoint basins: the
+$\sqrt{2\bar{p}}$ seed resolves lanes the default cannot and loses $1749$ of
+$3619$ that it can, so where both converge they are independent. On $2525$
+such interfaces the two answers agree to a median of $7.7\times10^{-12}$ and a
+maximum of $9.3\times10^{-10}$, with \emph{no} interface above $10^{-8}$.
+
+Comparing the seven-wave solver with the planar one is more interesting. On
+$5095$ interfaces whose harvested solution carries no rotation, the two agree
+to a median of $4.3\times10^{-10}$, but $2.0\%$ differ by more than $10^{-6}$
+while \emph{both} satisfy the complete jump conditions to $10^{-8}$. This is
+not non-uniqueness but conditioning: on precisely those interfaces the
+seven-wave Jacobian has condition number $7.9\times10^{3}$ against $32$ where
+the two agree, and the product of that condition number with the achieved
+residual predicts a state discrepancy of $1.8\times10^{-5}$ against
+$1.1\times10^{-5}$ observed. The planar Jacobian's condition number is
+$\approx 10$ on both groups and predicts $1.3\times10^{-7}$, two orders too
+small. The two solvers find the same solution; the seven-wave
+parameterisation localises it some $250$ times less well.
+
+The practical consequence is that a residual tolerance is not a state
+tolerance, and the factor between them is the condition number of whichever
+parameterisation produced the answer. In the reduced form $10^{-8}$ in the
+residual pins the state to $\sim\!10^{-7}$; in the seven-wave form, on the
+coplanar interfaces a two-dimensional run supplies, it pins it only to
+$\sim\!10^{-4}$ on a small fraction. This is a further reason to prefer the
+reduced formulation where it applies: it is not only better conditioned for
+\emph{finding} the answer, but for \emph{certifying} it.
 
 \subsection{Measured behaviour}
 \label{sec:planar:results}
@@ -181,9 +231,15 @@ Enabling the fallback is strictly additive. On eighteen recorded sweeps
 replayed with identical inputs, the number of interfaces receiving an exact
 flux rises from $471$ to $763$: $292$ gained, none lost, and on the $471$
 resolved by both configurations the star pressure is bitwise identical. In a
-$64^2$ run the fraction of attempted interfaces resolved exactly rises from
-$43.9\%$ to $69.9\%$, and the improvement is concentrated where the geometry
-predicts: the sweeps along which the normal field is small, previously the
-weakest at $24.7\%$, reach $83.9\%$. The cost is roughly a factor of two in
-wall time per step, since a second solver runs on every interface the first
-one leaves.
+$64^2$ run carried to $t = 0.4$ the fraction of attempted interfaces resolved
+exactly rises from $43.9\%$ to $78.0\%$, and the improvement is concentrated
+where the geometry predicts: the sweeps along which the normal field is
+small, previously the weakest at $24.7\%$, reach $65.7\%$. The cost is
+roughly a factor of two in wall time per step, since a second solver runs on
+every interface the first one leaves.
+
+These are run-level figures, and it is worth stating what they are fractions
+of. The weak-jump gate admits $14.1\%$ of interfaces; the exact flux
+therefore reaches $11.0\%$ of all interfaces in the run, and HLLD supplies
+the rest. Coverage percentages quoted here and elsewhere are of
+\emph{attempted} interfaces unless said otherwise.

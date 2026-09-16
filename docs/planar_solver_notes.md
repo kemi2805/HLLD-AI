@@ -48,7 +48,7 @@ module docstring of `rmhd_final/batched/planar5_b.py`.
 |---|---|
 | the answer is written in the seven-wave unknowns and checked | `planar5_b.verify_full`, called by `solve` before setting `converged` |
 | accepted only below 1e-8; median 1.1e-10 | `RMHD_PLANAR5_VERIFY` default in `src/physics/exact_flux.py`; MEASURED, block 6 |
-| pi rotations: 2.3% affected, 97.7% have both zero | MEASURED, block 5 |
+| rotation census: 97.3% below 1e-6, 0.375% within 1e-3 of pi, 2.3% intermediate; chi 4.3e-9 on the intermediate ones vs 7.6e-11 overall | MEASURED 2026-09-09 on `results/rotor_64_exact/harvest`, 142,554 rotations. **Supersedes the earlier "2.3% carry a pi"**, which conflated any nonzero rotation with a pi one: only 0.375% are near pi, the bulk of the tail is small angles produced by roundoff-level non-coplanarity |
 | a pi rotation is outside the family and must be rejected | `batched/test_planar5.py::test_pi_rotations_are_rejected_not_faked` |
 | three-wave solver: converges ~100%, never reaches 1e-6, median 1.2e-2 | MEASURED, block 7 |
 | the residual is frame-sensitive | MEASURED, block 8 |
@@ -83,8 +83,15 @@ strengthen this without a third, larger measurement. See
 - **That the planar solver should be the primary path.** It needs no warm
   start and is well conditioned, so this is worth measuring, but it would
   change every run's answer.
-- **Any claim that the exact flux improves the solution.** It does not, at the
-  coverage measured so far: the flux changed the 64² solution by 0.37% and the
-  128² solution by 0.82% while the resolution gaps are 33% and 27%. Whether
-  ~80% coverage changes that is the open question the rescue was built to
-  answer, and the run is in progress.
+- **Any claim that the exact flux improves the solution.** It does not, and
+  as of 2026-09-08 this is settled rather than pending. The 64² collection run
+  finished at **78.0% of attempted interfaces** (against 43.9%), and the
+  distance to the 128² HLLD reference went from 32.84% (no exact flux) to
+  32.78% (43.9%) to **32.75%** (78.0%) in L1(ρ) at t = 0.4 — 0.09 points out of
+  32.8. Doubling the coverage bought 0.03 points, and the fast-front radius is
+  identical in every same-resolution pair. At 128² the exact flux is marginally
+  worse against the 256² reference (26.82% vs 26.75%).
+  The exact flux owns 22.0% of all interfaces (28.2% attempted × 78% resolved)
+  and changes the solution there by ~0.5%, so a factor 68 separates it from the
+  resolution gap. Reproduce with
+  `scripts/rotor_compare.py results/rotor_64_p5 results/rotor_128_hlld`.

@@ -191,33 +191,27 @@ misses rather than an insufficient iteration budget.
 When the exact solver provides the flux for a grid run, all interfaces of a
 sweep are solved in one batched call. An interface is given the exact flux
 only if the Newton converged, the state on the ray $\xi = x/t = 0$ could be
-resolved, and that state is physical; otherwise the interface keeps the HLLD
-flux, and the fraction of interfaces resolved exactly is reported with every
-run. Interfaces whose left and right states differ by less than a
-relative threshold are not attempted at all, since there the difference
-between any two consistent solvers is below the truncation error of the
-scheme.
+resolved, that state is physical, and the structure behind it satisfies the
+complete seven-wave jump conditions to $10^{-8}$; otherwise the interface
+keeps the HLLD flux. The number of interfaces attempted and the number
+verified exact are reported with every run.
 
-\subsection{Test problem}
-\label{sec:setup:rotor}
+Two classes of interface are not attempted. The first is those whose left and
+right states differ by less than a relative threshold $\tau_{\rm weak} =
+10^{-2}$, measured by a scale-free rotation-invariant jump that compares
+$\rho$ and $p$ relatively and $\mathbf{v}$ and $\mathbf{B}$ as vector
+differences. This is where the choice of solver cannot matter: taking real
+interfaces and shrinking the discontinuity about the mean state, the relative
+difference between the exact and HLLD fluxes falls very nearly linearly with
+the jump, reaching a median of $2.5 \times 10^{-5}$ at the threshold and
+$8 \times 10^{-8}$ two decades below it, with no floor. The gate excludes
+$85.9\%$ of interfaces at a cost estimated at $0.02\%$ of the solution.
 
-The two-dimensional magnetic rotor is used throughout. A dense cylinder of
-radius $r_0 = 0.1$ and density $\rho = 10$ rotates rigidly with angular
-velocity $\omega = 9.95$, so that its rim moves at $v = 0.995$ and reaches a
-Lorentz factor of about ten, inside a static ambient medium of density
-$\rho = 1$. Pressure is uniform, $p = 1$, the field is uniform,
-$\mathbf{B} = (1, 0, 0)$, and the adiabatic index is $\Gamma = 5/3$. The
-cylinder edge is sharp, with no taper, which is the harder and the standard
-form of the test. The domain is $[-0.5, 0.5]^2$ with outflow boundaries, and
-the solution is evolved to $t = 0.4$.
-
-Because the initial data are invariant under a rotation by $\pi$ about the
-axis, the continuum solution satisfies
-$\rho(-\mathbf{r}) = \rho(\mathbf{r})$,
-$\mathbf{v}(-\mathbf{r}) = -\mathbf{v}(\mathbf{r})$ and
-$\mathbf{B}(-\mathbf{r}) = \mathbf{B}(\mathbf{r})$ at all times. We monitor
-the violation of this symmetry as a diagnostic. It is reported rather than
-bounded: where the exact solver owns some interfaces and not others, the
-fallback pattern need not respect the symmetry, so the measured violation is
-of the order of the truncation error and is informative rather than a test of
-correctness.
+The second class is interfaces whose fan lies entirely on one side of the
+ray. HLLD's signal speeds are clamped at zero, so a vanishing left speed
+makes its flux exactly $\mathbf{F}_L$, which is also the exact solution
+there. Measured over $45\,650$ interfaces this branch fires on $29\%$ of
+those attempted, and on every one of them the two fluxes agree to at worst
+$1.9 \times 10^{-16}$, while on the complement not one agrees to better than
+$10^{-14}$. Skipping them costs $1.59$ times less work in the solver stage
+and changes no answer.
