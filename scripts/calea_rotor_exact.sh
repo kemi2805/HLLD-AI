@@ -1,12 +1,28 @@
 #!/bin/bash
-# The 2D rotor with the exact RMHD Riemann solver on calea01 (ITP): one
-# 64-core Ice Lake node, no scheduler.  Same run as goethe_rotor_exact.sbatch,
+#SBATCH --job-name=rotor-exact
+#SBATCH --partition=calea
+#SBATCH --nodes=1
+#SBATCH --exclusive
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=64
+#SBATCH --time=7-00:00:00
+#SBATCH --output=/mnt/rafast/miler/codes/rotor2d/HLLD/logs/slurm_%x_%j.out
+# The 2D rotor with the exact RMHD Riemann solver on one 64-core calea node
+# (ITP, Ice Lake).  Same run as goethe_rotor_exact.sbatch,
 # with the solver's per-lane pipeline spread over RMHD_POOL worker processes
 # (src/physics/exact_pool.py) so the node's cores are used -- one process
 # uses one core for its Python orchestration, however many numba threads it
 # has.
 #
-#   nohup scripts/calea_rotor_exact.sh > /dev/null 2>&1 &     (log: see LOG)
+#   ssh iota; cd /mnt/rafast/miler/codes/rotor2d/HLLD
+#   sbatch scripts/calea_rotor_exact.sh                        (log: see LOG)
+#   N=32 MAX_STEPS=2 sbatch --time=0:30:00 scripts/calea_rotor_exact.sh   # pilot
+#
+# Through Slurm from iota since 2026-09-17 -- never ssh/nohup on calea01/02.
+# The job is --exclusive: the pool is sized for the whole node.  RESUME=1
+# makes a resubmission continue from $OUT/restart.npz.  DRYRUN=1 cannot run
+# on iota (~/venv/rmhd needs the nodes' Python 3.14); the preflight runs on
+# the node instead, seconds into the job.
 #
 # Knobs (env): N (64), TEND (0.4), NSNAP (8), RETRIES (2), OUT, POOL (32
 # workers), POOL_THREADS (2 numba threads each), POOL_CHUNKS (= POOL),

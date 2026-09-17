@@ -1,5 +1,15 @@
 #!/usr/bin/env bash
-# Rescue stubborn rotor interfaces across all 64 cores of calea01.
+#SBATCH --job-name=rescue
+#SBATCH --partition=calea
+#SBATCH --nodes=1
+#SBATCH --exclusive
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=64
+#SBATCH --time=2-00:00:00
+#SBATCH --output=/mnt/rafast/miler/codes/rotor2d/HLLD/logs/slurm_%x_%j.out
+# Rescue stubborn rotor interfaces across all 64 cores of one calea node.
+# Submit from iota (never ssh/nohup on calea01/02 since 2026-09-17):
+#   cd /mnt/rafast/miler/codes/rotor2d/HLLD && sbatch scripts/calea_rescue.sh
 #
 # Each worker takes every Nth interface, runs the verified planar-descent
 # rescue, and writes its own shard.  Measured yield 5.0% of the stubborn set

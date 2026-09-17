@@ -1,5 +1,15 @@
 #!/usr/bin/env bash
+#SBATCH --job-name=brute
+#SBATCH --partition=calea
+#SBATCH --nodes=1
+#SBATCH --exclusive
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=64
+#SBATCH --time=2-00:00:00
+#SBATCH --output=/mnt/rafast/miler/codes/rotor2d/HLLD/logs/slurm_%x_%j.out
 # Brute-force the stubborn interfaces across all 64 cores of one calea node.
+# Submit from iota (never ssh/nohup on calea01/02 since 2026-09-17):
+#   cd /mnt/rafast/miler/codes/rotor2d/HLLD && BOX=hlld sbatch scripts/calea_brute.sh
 #
 #   BOX=global      scripts/calea_brute.sh  # asymmetric global field box
 #   BOX=hlld        scripts/calea_brute.sh  # per-interface, centred on HLLD
