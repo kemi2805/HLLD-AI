@@ -2,13 +2,14 @@
 
     python scripts/plot_ckpt_scores.py data/scores_all8.npz
 """
-import sys, math
+import sys
 import numpy as np
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 import rmhd.paths as _rp
+from rmhd.util.stats import mcnemar_masks
 f = sys.argv[1] if len(sys.argv) > 1 else _rp.resolve("data/scores_all8.npz")
 d = np.load(f, allow_pickle=True)
 names = [str(s) for s in d["names"]]
@@ -16,15 +17,8 @@ conv = d["converged"]          # (n_ckpt, n_lane) bool
 Bx = np.abs(d["Bx"])
 base = conv[0]                 # first checkpoint is the baseline
 
-def mcnemar(b, o):
-    r, k = int((~b & o).sum()), int((b & ~o).sum())
-    n = r + k
-    if n == 0: return 1.0, r, k
-    t = sum(math.comb(n, j) for j in range(min(r, k) + 1)) / 2.0 ** n
-    return min(1.0, 2 * t), r, k
-
 rate = conv.mean(axis=1) * 100
-p = [mcnemar(base, conv[i])[0] for i in range(len(names))]
+p = [mcnemar_masks(base, conv[i])[2] for i in range(len(names))]
 new = [i for i, n in enumerate(names) if n.startswith("all_s")]
 inc = [i for i, n in enumerate(names) if not n.startswith("all_s")]
 

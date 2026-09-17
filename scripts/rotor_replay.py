@@ -36,6 +36,7 @@ from src.physics.driver2d import prims_to_cons_2d, sync_state, rk_step_ct, compu
 from src.physics.state import EVOLVED_KEYS, State2D
 from src.physics.hlld import LAST_DIAG
 from src.physics.exact_flux import exact_flux_batched
+from rmhd.util.stats import mcnemar_exact
 
 
 if __name__ == "__main__":   # guarded: RMHD_POOL workers import this module
@@ -51,17 +52,6 @@ if __name__ == "__main__":   # guarded: RMHD_POOL workers import this module
     kern["ckpts_extra"] = os.environ.get("RMHD_ML_CKPTS", "")
 
 
-    def _mcnemar(b, c):
-        """Exact two-sided McNemar p-value from the discordant counts."""
-        import math
-        n = b + c
-        if n == 0:
-            return 1.0
-        k = min(b, c)
-        tail = sum(math.comb(n, j) for j in range(0, k + 1)) / 2.0 ** n
-        return min(1.0, 2.0 * tail)
-
-
     if MODE == "compare":
         # compare <A.npz> <B.npz>: paired per-lane convergence of two replays of
         # the SAME recorded inputs (McNemar on the discordant lanes)
@@ -74,7 +64,7 @@ if __name__ == "__main__":   # guarded: RMHD_POOL workers import this module
             both, ao, bo = int((ma & mb).sum()), int((ma & ~mb).sum()), int((~ma & mb).sum())
             tb += ao; tc += bo; ta += int(ma.sum())
             print(f"{k:>5} {int(ma.sum()):>4} {int(mb.sum()):>4} {both:>5} {ao:>6} {bo:>6}")
-        print(f"total A={ta}  B={ta - tb + tc}  A-only={tb}  B-only={tc}  McNemar p={_mcnemar(tb, tc):.3g}")
+        print(f"total A={ta}  B={ta - tb + tc}  A-only={tb}  B-only={tc}  McNemar p={mcnemar_exact(tb, tc):.3g}")
         sys.exit(0)
 
     print(MODE, TAG, kern, flush=True)
