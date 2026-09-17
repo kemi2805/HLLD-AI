@@ -22,14 +22,12 @@ import sys
 
 import numpy as np
 
+from rmhd.util.angles import wrap as _wrap
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 np.seterr(all="ignore")
 GAMMA = 5.0 / 3.0
-
-
-def _wrap(a):
-    return (a + np.pi) % (2.0 * np.pi) - np.pi
 
 
 def _load(d, kind, cap=None, seed=0):

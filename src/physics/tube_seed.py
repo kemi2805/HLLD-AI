@@ -137,6 +137,7 @@ def run_tubes(UL, UR, Bn, eos, *, ncells=192, tend=0.18, cfl=0.3,
 
 
 def _wrap(a):
+    # = rmhd.util.angles.wrap; a local copy so this module does not import rmhd
     return (a + np.pi) % (2.0 * np.pi) - np.pi
 
 
