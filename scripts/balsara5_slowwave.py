@@ -39,7 +39,7 @@ def exact_solution(cfg, x_cells, x_fine, t):
     """Solve the Riemann problem ONCE from the network seed; read it at rays."""
     from rmhd.eos import set_eos
     set_eos("ideal")
-    from rmhd import ml_guess as mg
+    from rmhd import ml_guess as mg, paths as rmhd_paths
     from rmhd.batched import api as API
     from rmhd.batched import ml_b as MB
     from rmhd.batched import rarefaction_b as RB
@@ -62,7 +62,7 @@ def exact_solution(cfg, x_cells, x_fine, t):
     r7, _ = seven(rc["primR"])
 
     ck = os.environ.get("RMHD_ML_CKPT", "data/ml_guess_gamma53_v5.pt")
-    model, scaler = mg.load(os.path.join(_RMHD, ck))
+    model, scaler = mg.load(rmhd_paths.resolve(ck))
     L1 = [np.array([c]) for c in l7]
     R1 = [np.array([c]) for c in r7]
     B1 = np.array([Bn])

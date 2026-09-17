@@ -50,7 +50,7 @@ def exact_profile(cfg, x, t):
     """
     from rmhd.eos import set_eos
     set_eos("ideal")
-    from rmhd import ml_guess as mg
+    from rmhd import ml_guess as mg, paths as rmhd_paths
     from rmhd.batched import api as API
     from rmhd.batched import ml_b as MB
     from rmhd.batched import rarefaction_b as RB
@@ -93,7 +93,7 @@ def exact_profile(cfg, x, t):
     # for what is fundamentally ONE Riemann problem.  Cheap rungs first, and
     # stop the moment any start lands -- the same first-convergent-wins ladder
     # the rest of this project uses.
-    model, scaler = mg.load(f"{_RMHD}/data/ml_guess_gamma53.pt")
+    model, scaler = mg.load(rmhd_paths.resolve("data/ml_guess_gamma53.pt"))
     rng = np.random.default_rng(0)
     res1 = None
     diag = {}
