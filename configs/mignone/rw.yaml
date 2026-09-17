@@ -30,7 +30,7 @@ run:
   t_end:    1.0
   cfl:      0.8
   atmo_rho: 1.0e-10
-  solver:   hlld_ai     # hlld | hlle | hllc
+  solver:   hlld        # hlld | hlle | hllc | exact
   device:   cpu      # cpu | cuda | mps
 
   Only used when problem: generic

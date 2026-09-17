@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "srmhd-hlld"
 version = "0.1.0"
-description = "1D Special-Relativistic MHD solver with HLLD Riemann solver and ML pressure prediction"
+description = "1D and 2D special-relativistic MHD: HLLD, HLLE, HLLC and exact (rmhd) fluxes, constrained transport"
 requires-python = ">=3.10"
 dependencies = [
     "numpy>=1.24",

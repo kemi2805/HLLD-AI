@@ -9,10 +9,6 @@ hlld_flux                 — HLLD Riemann solver (main interface)
 conservative_to_primitive — Kastaun (2021) vectorised C2P for SR-MHD
 get_interface_states      — PLM reconstruction (MC / minmod limiters)
 init_shocktube            — grid initialisation from left/right primitive states
-
-Legacy (ML training pipeline)
-------------------------------
-physics_utils functions (W__z, rho__z, …) — pure-hydro C2P used by src.data.generate
 """
 
 from .eos import hybrid_eos
@@ -36,14 +32,6 @@ from .hlld import (
 )
 from .c2p import conservative_to_primitive, KastaunC2P
 
-# Legacy ML-era pure-hydro C2P utilities — kept for src.data.generate compatibility
-from .physics_utils import (
-    W__z, rho__z, eps__z, h__z, a__z,
-    sanity_check, compute_primitives,
-    conservative_to_primitive_exact,
-    validate_conservative_variables,
-)
-
 __all__ = [
     # EOS & metric
     'hybrid_eos', 'metric',
@@ -59,8 +47,4 @@ __all__ = [
     'compute_b2', 'compute_smallb', 'safe_secant_bisection',
     # Conservative-to-primitive
     'conservative_to_primitive', 'KastaunC2P',
-    # Legacy ML-era utilities
-    'W__z', 'rho__z', 'eps__z', 'h__z', 'a__z',
-    'sanity_check', 'compute_primitives',
-    'conservative_to_primitive_exact', 'validate_conservative_variables',
 ]

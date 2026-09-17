@@ -12,8 +12,8 @@ Primitive variables output (dict keys):
 
 The scheme reduces the inversion to a 1-D root-find in mu ∈ (0, mu_+],
 where mu = 1 / (rho * h * W).  A bracketed Illinois / Brent-style
-secant+bisection is used, identical in spirit to the hydro solver already
-present in physics_utils.py but extended for MHD.
+secant+bisection is used, identical in spirit to the pure-hydro solver of
+the deleted physics_utils.py, extended for MHD.
 """
 
 import torch

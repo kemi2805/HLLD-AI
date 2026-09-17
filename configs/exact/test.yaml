@@ -46,16 +46,6 @@ run:
     Bz: 0.0
   x_interface: 0.5
 
-ml:
-  n_input: 15
-  dropout: 0.00
-  #hidden: [256, 256, 256, 128, 64]
-  #activation: tanh
-  hidden: [256, 256, 256, 256, 128, 64]
-  activation: silu # or gelu — smoother gradient than tanh for regression
-  checkpoint: checkpoints/default-mignone.pt
-  norm_stats: data/processed/splits_mignone_rankine/norm_stats.npz
-
 output:
   dir: test_exact
   every_n_steps: 100

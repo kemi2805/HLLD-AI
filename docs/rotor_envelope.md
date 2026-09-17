@@ -80,7 +80,8 @@ magnitudes `|v_t|` and `|B_t|`, not their relative orientation, so two
 states with identical features can have different `p*`. On this problem that
 is a **real irreducible error floor, not a theoretical concern** — which
 promotes the complete-rotational-invariant feature set from "optional" to
-probably necessary. See `src/physics/ai_features.py`.
+probably necessary. (The feature code, `src/physics/ai_features.py`, was deleted
+with the p\*-surrogate stack on 2026-09-17; see the git history.)
 
 **2. Near-degenerate normal field persists for the whole run.** `|B_n|` has
 its 0.1st percentile at 0.015 and a minimum of 0. The rotor starts fully

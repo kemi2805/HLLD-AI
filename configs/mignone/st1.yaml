@@ -22,7 +22,7 @@ run:
   t_end: 0.8
   cfl: 0.8
   atmo_rho: 1.0e-10
-  solver: hlld_ai
+  solver: hlld
   device: cpu
 
   # Initial left/right states (Mattia & Mignone 2021, Table 1, ST1)
@@ -45,16 +45,6 @@ run:
     By: -1.0
     Bz: 0.0
   x_interface: 0.5
-
-ml:
-  n_input: 15
-  dropout: 0.00
-  #hidden: [256, 256, 256, 128, 64]
-  #activation: tanh
-  hidden: [256, 256, 256, 256, 128, 64]
-  activation: silu # or gelu — smoother gradient than tanh for regression
-  checkpoint: checkpoints/default-mignone.pt
-  norm_stats: data/processed/splits_mignone_rankine/norm_stats.npz
 
 output:
   dir: Self-Sim/ken_output_long

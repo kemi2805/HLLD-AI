@@ -17,7 +17,6 @@ from typing import Dict, Tuple
 import torch
 
 from .c2p import conservative_to_primitive
-from . import ai_features as _ai
 from .eos import hybrid_eos
 
 # ── type aliases ─────────────────────────────────────────────────────────────
@@ -348,7 +347,8 @@ def energy_form(u: Cons, f: Cons) -> Tuple[Cons, Cons]:
     Every other component is untouched.
 
     This replaces ~90 lines that were previously written out by hand in
-    three places (hlld_flux, hlld_ai_flux, data/generate.py), each of them
+    three places (hlld_flux and the since-deleted ML flux and its data
+    generator), each of them
     hardcoded to the x-direction.  Because ``compute_srmhd_fluxes`` is
     idir-generic, routing through it here makes the HLLD solvers correct
     for idir=1,2 as well — previously they silently returned x-fluxes.
@@ -919,7 +919,7 @@ _PSTAR_BRACKET = "legacy"
 # and warm-started p* would be dominated by the tolerance, not the method.
 _PSTAR_TOL = 1.0e-10
 
-# Diagnostics from the most recent hlld_flux / hlld_ai_flux call.  Populated
+# Diagnostics from the most recent solver call (hlld_flux, exact_flux).  Populated
 # unconditionally (the cost is a few reductions per sweep) so the driver can
 # log HLLE-fallback fractions and root-find iteration counts without changing
 # any call signature.  These are the robustness/cost numbers the 2D runs need.
@@ -1571,247 +1571,3 @@ def hllc_flux(
     p_hll = torch.clamp(0.5 * (pl + 0.5 * b2l + pr + 0.5 * b2r), min=1e-30)
 
     return fHLLC, uHLLC, p_hll
-
-
-# ── ML-assisted HLLD flux ─────────────────────────────────────────────────────
-
-
-def hlld_ai_flux(
-    sL: Prim,
-    sR: Prim,
-    eos: hybrid_eos,
-    model: torch.nn.Module,
-    norm_stats: dict,
-    idir: int = 0,
-    mode: str = "oneshot",
-    warmstart_tol: float = _PSTAR_TOL,
-    warmstart_max_iter: int = 30,
-) -> Tuple[Cons, Cons, torch.Tensor]:
-    """HLLD flux with the star pressure supplied by a neural network.
-
-    Two modes, both reported in the paper:
-
-    ``"oneshot"``
-        The network's p* is used directly.  Fastest, and the boldest claim,
-        but there is NO residual check: nothing verifies that the predicted
-        p* is a root.  That matters more than it sounds, because the HLLD
-        residual is multi-rooted -- a scan at the ST1 discontinuity finds
-        seven sign changes -- so an out-of-distribution prediction can land
-        near a *wrong* root and only the wave-ordering mask will notice.
-
-    ``"warmstart"``
-        The prediction seeds the same secant iteration ``hlld_flux`` uses.
-        Convergence is then guaranteed to the same tolerance as the
-        classical solver, and the speedup becomes a measurable reduction in
-        iteration count rather than an unverified shortcut.  This is the
-        arm that is robust to the rotor's out-of-distribution states.
-
-    The per-element iteration count is recorded in ``LAST_DIAG`` so the two
-    arms can be compared on cost as well as accuracy.
-    """
-    if mode not in ("oneshot", "warmstart"):
-        raise ValueError(f"unknown AI mode {mode!r}")
-    uL, uR, fL, fR, cmax, cmin = compute_srmhd_fluxes(sL, sR, eos, idir)
-    keys = list(uL.keys())
-
-    fH: Cons = {k: _hf(fL[k], fR[k], uL[k], uR[k], cmin, cmax) for k in keys}
-    uH: Cons = {k: _hu(fL[k], fR[k], uL[k], uR[k], cmin, cmax) for k in keys}
-
-    # ── Total-energy form + features (shared with the data generator) ────────
-    # Previously written out by hand here, hardcoded to x: the U_init/F_init
-    # block and the 15-feature vector both used literal "Sx"/"vx"/b^x, so
-    # hlld_ai_flux silently returned x-fluxes for idir != 0.  Both now route
-    # through the same code the generator uses.
-    U_init_L, F_init_L = energy_form(uL, fL)
-    U_init_R, F_init_R = energy_form(uR, fR)
-
-    press_L, _ = eos.press_and_cs2(sL["eps"], sL["rho"])
-    press_R, _ = eos.press_and_cs2(sR["eps"], sR["rho"])
-    lfacL, _ = lorentz(sL)
-    lfacR, _ = lorentz(sR)
-    b2L = compute_b2((sL["vx"], sL["vy"], sL["vz"]),
-                     (sL["Bx"], sL["By"], sL["Bz"]), lfacL)
-    b2R = compute_b2((sR["vx"], sR["vy"], sR["vz"]),
-                     (sR["Bx"], sR["By"], sR["Bz"]), lfacR)
-
-    RL, RR = _ai.r_vectors(U_init_L, F_init_L, U_init_R, F_init_R, cmin, cmax)
-    X_raw = _ai.build_pstar_features(sL, sR, uL, uR, RL, RR, cmin, cmax, idir)
-
-    # ── Normalize and run model ───────────────────────────────────────────────
-    mu = torch.tensor(norm_stats["mu"], dtype=X_raw.dtype, device=X_raw.device)
-    sigma = torch.tensor(norm_stats["sigma"], dtype=X_raw.dtype, device=X_raw.device)
-    X_norm = ((X_raw - mu) / sigma).float()
-
-    with torch.no_grad():
-        y_pred = model(X_norm).squeeze(-1)  # (N,)
-
-    y_mu = float(norm_stats["y_mu"])
-    y_sigma = float(norm_stats["y_sigma"])
-    p_nn = torch.clamp(10.0 ** (y_pred * y_sigma + y_mu), min=1e-30)
-
-    calc_pre = HLLDComputation(
-        F_init_L, F_init_R, U_init_L, U_init_R, sL, sR, cmin, cmax, idir
-    )
-    if mode == "warmstart":
-        # Same root-finder as hlld_flux, bracketed tightly around the
-        # network's estimate.  Cost is then directly comparable to the
-        # cold-start bracket, which is the headline number.
-        p_star, err_ws, n_iter = safe_secant_bisection(
-            calc_pre, p_nn * 0.99, p_nn * 1.01,
-            tol=warmstart_tol, max_iter=warmstart_max_iter)
-        p_star = torch.clamp(p_star, min=1e-30)
-    else:
-        p_star = p_nn
-        err_ws = torch.zeros(p_nn.shape, dtype=torch.int32, device=p_nn.device)
-        n_iter = torch.zeros(p_nn.shape, dtype=torch.int32, device=p_nn.device)
-
-    # residual of the prediction, in both modes: the honest measure of how
-    # far a one-shot p* actually is from satisfying the jump conditions
-    resid_nn = _t(calc_pre(p_nn)).abs()
-
-    # ── Everything below is identical to hlld_flux ────────────────────────────
-    # (a hardcoded-x BnL/BnR/Bn2 block stood here; Bn2 was never read -- the
-    #  network supplies p* directly, so there is no bracket to select -- and
-    #  BnL/BnR are recomputed with the correct idir a few lines down.)
-    calc = HLLDComputation(
-        F_init_L, F_init_R, U_init_L, U_init_R, sL, sR, cmin, cmax, idir
-    )
-    calc.compute_all_variables(p_star)
-
-    i = idir
-    t1 = calc.t1
-    t2 = calc.t2
-    S = calc._S
-    B = calc._B
-    BnL = _t(uL[B[i]])
-    BnR = _t(uR[B[i]])
-
-    uaL: Cons = {
-        B[i]: BnL,
-        B[t1]: calc.Bt1aL,
-        B[t2]: calc.Bt2aL,
-        "D": calc.DaL,
-        "tau": calc.TauaL,
-        S[i]: calc.SaL,
-        S[t1]: calc.St1aL,
-        S[t2]: calc.St2aL,
-    }
-    uaR: Cons = {
-        B[i]: BnR,
-        B[t1]: calc.Bt1aR,
-        B[t2]: calc.Bt2aR,
-        "D": calc.DaR,
-        "tau": calc.TauaR,
-        S[i]: calc.SaR,
-        S[t1]: calc.St1aR,
-        S[t2]: calc.St2aR,
-    }
-
-    faL: Cons = {k: fL[k] + (-cmin) * (uaL[k] - uL[k]) for k in keys}
-    faR: Cons = {k: fR[k] + (cmax) * (uaR[k] - uR[k]) for k in keys}
-
-    fac = _sdiv(1.0 - calc.KaL2, -calc.S_L * calc.sqL - calc.KaLBc)
-    vc = calc.laL - calc.Bic * fac
-    vt1 = calc.Kt1aL - calc.Bt1c * fac
-    vt2 = calc.Kt2aL - calc.Bt2c * fac
-
-    lC = vc
-    laL = calc.laL
-    laR = calc.laR
-
-    ucL: Cons = {B[i]: calc.Bic, B[t1]: calc.Bt1c, B[t2]: calc.Bt2c}
-    ucR: Cons = {B[i]: calc.Bic, B[t1]: calc.Bt1c, B[t2]: calc.Bt2c}
-
-    vBc = vc * ucL[B[i]] + vt1 * ucL[B[t1]] + vt2 * ucL[B[t2]]
-
-    ucL["D"] = uaL["D"] * _sdiv(laL - calc.vaL, laL - vc)
-    ucR["D"] = uaR["D"] * _sdiv(laR - calc.vaR, laR - vc)
-    ucL["tau"] = _sdiv(
-        laL * uaL["tau"] - faL["tau"] + p_star * vc - vBc * ucL[B[i]], laL - vc
-    )
-    ucR["tau"] = _sdiv(
-        laR * uaR["tau"] - faR["tau"] + p_star * vc - vBc * ucR[B[i]], laR - vc
-    )
-
-    for key, vi, Bi in zip(
-        [S[i], S[t1], S[t2]], [vc, vt1, vt2], [ucL[B[i]], ucL[B[t1]], ucL[B[t2]]]
-    ):
-        ucL[key] = (ucL["tau"] + p_star + ucL["D"]) * vi - vBc * Bi
-    for key, vi, Bi in zip(
-        [S[i], S[t1], S[t2]], [vc, vt1, vt2], [ucR[B[i]], ucR[B[t1]], ucR[B[t2]]]
-    ):
-        ucR[key] = (ucR["tau"] + p_star + ucR["D"]) * vi - vBc * Bi
-
-    vi = torch.zeros_like(cmin)
-    cL_mask = vi <= -cmin
-    caL_mask = (-cmin < vi) & (vi <= laL)
-    ccL_mask = (laL < vi) & (vi < lC)
-    ccR_mask = (lC <= vi) & (vi < laR)
-    caR_mask = (laR <= vi) & (vi < cmax)
-    cR_mask = vi >= cmax
-
-    fD: Cons = {k: fH[k].clone() for k in keys}
-    uD: Cons = {k: uH[k].clone() for k in keys}
-
-    for k in keys:
-        fcL = faL[k] + laL * (ucL[k] - uaL[k])
-        fcR = faR[k] + laR * (ucR[k] - uaR[k])
-        f = fD[k]
-        f = torch.where(cL_mask, fL[k], f)
-        f = torch.where(caL_mask, faL[k], f)
-        f = torch.where(ccL_mask, fcL, f)
-        f = torch.where(ccR_mask, fcR, f)
-        f = torch.where(caR_mask, faR[k], f)
-        f = torch.where(cR_mask, fR[k], f)
-        fD[k] = f
-
-        u = uD[k]
-        u = torch.where(cL_mask, uL[k], u)
-        u = torch.where(caL_mask, uaL[k], u)
-        u = torch.where(ccL_mask, ucL[k], u)
-        u = torch.where(ccR_mask, ucR[k], u)
-        u = torch.where(caR_mask, uaR[k], u)
-        u = torch.where(cR_mask, uR[k], u)
-        uD[k] = u
-
-    wave_order_bad = (
-        (calc.vaR > cmax) | (calc.vaL < -cmin) | (vc < calc.laL) | (vc > calc.laR)
-    )
-    # Same degenerate guard as hlld_flux: with B_n = 0 the Alfven waves
-    # collapse onto the contact and the star-state algebra overflows.  This
-    # matters MORE here than in hlld_flux, because the network predicts p*
-    # in one shot with no residual check, so the wave-ordering mask is the
-    # only remaining safety net.
-    Bi = ["Bx", "By", "Bz"]
-    BnL = _t(uL[Bi[idir]])
-    BnR = _t(uR[Bi[idir]])
-    bn_zero = (BnL.abs() < 1e-14) & (BnR.abs() < 1e-14)
-
-    failed = wave_order_bad | bn_zero | (err_ws > 0)
-    n = failed.numel()
-    conv = err_ws == 0
-    LAST_DIAG.update(
-        solver=f"hlld_ai:{mode}",
-        idir=idir,
-        n_interfaces=n,
-        n_not_converged=int((err_ws > 0).sum()),
-        n_wave_order_bad=int(wave_order_bad.sum()),
-        n_bn_zero=int(bn_zero.sum()),
-        n_hlle_fallback=int(failed.sum()),
-        frac_hlle_fallback=float(failed.sum()) / max(n, 1),
-        mean_iters=(float(n_iter[conv].double().mean())
-                    if bool(conv.any()) else float("nan")),
-        max_iters=int(n_iter.max()),
-        median_resid_nn=float(resid_nn.median()),
-        max_resid_nn=float(resid_nn.max()),
-    )
-    if torch.any(failed):
-        p_hll_fb = torch.clamp(
-            0.5 * (press_L + 0.5 * b2L + press_R + 0.5 * b2R), min=1e-30
-        )
-        p_star = torch.where(failed, -torch.abs(p_hll_fb) - 1e-10, p_star)
-        for k in keys:
-            fD[k] = torch.where(failed, fH[k], fD[k])
-            uD[k] = torch.where(failed, uH[k], uD[k])
-
-    return fD, uD, p_star

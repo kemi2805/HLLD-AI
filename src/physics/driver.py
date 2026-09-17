@@ -25,7 +25,6 @@ from .hlld import (
     LAST_DIAG,
     compute_srmhd_fluxes,
     hllc_flux,
-    hlld_ai_flux,
     hlld_flux,
     hlle_flux,
     primitive_to_conserved,
@@ -269,61 +268,6 @@ def save_snapshot(
     np.savez_compressed(path, **data)
 
 
-# ── Machine Learning ─────────────────────────────────────────────────────────────
-
-
-def _load_ai_solver(cfg: dict, device: str):
-    """Load ML model and norm stats for hlld_ai solver."""
-    import numpy as np
-
-    from src.models.network import PressureNet
-
-    ml_cfg = cfg.get("ml", {})
-    ckpt_path = ml_cfg.get("checkpoint", "checkpoints/default-mignone.pt")
-    stats_path = ml_cfg.get(
-        "norm_stats", "data/processed/default-mignone/norm_stats.npz"
-    )
-
-    from src.physics.ai_features import FEATURE_VERSION, N_FEATURES
-
-    model = PressureNet(
-        n_input=ml_cfg.get("n_input", N_FEATURES),
-        hidden=ml_cfg.get("hidden", [256, 256, 256, 128, 64]),
-        activation=ml_cfg.get("activation", "tanh"),
-    ).to(device)
-    model.load_state_dict(torch.load(ckpt_path, map_location=device))
-    model.eval()
-
-    norm_stats = dict(np.load(stats_path))
-
-    # Refuse a checkpoint whose features were built by a different
-    # definition.  A mismatch is invisible at run time -- the network happily
-    # consumes any 15 numbers and returns a plausible-looking p* -- so it has
-    # to be caught here rather than debugged later from bad physics.
-    stamped = norm_stats.get("feature_version")
-    stamped = (str(stamped) if stamped is not None
-               and not hasattr(stamped, "size") else
-               (str(stamped.item()) if stamped is not None else None))
-    if stamped is None:
-        print(f"  WARNING: {stats_path} predates feature versioning; assuming "
-              f"it matches {FEATURE_VERSION!r}. Regenerate to remove this "
-              f"warning.")
-    elif stamped != FEATURE_VERSION:
-        raise ValueError(
-            f"feature-version mismatch: checkpoint stats {stats_path} were "
-            f"built with {stamped!r} but this code produces "
-            f"{FEATURE_VERSION!r}. Retrain, or check out the matching commit."
-        )
-
-    n_in = int(norm_stats["mu"].shape[0]) if "mu" in norm_stats else N_FEATURES
-    if n_in != N_FEATURES:
-        raise ValueError(
-            f"{stats_path} has {n_in} features but ai_features defines "
-            f"{N_FEATURES}"
-        )
-    return model, norm_stats
-
-
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 
@@ -400,10 +344,7 @@ def run(cfg: dict):
 
     # ── Solver dispatch ───────────────────────────────────────────────────────
     harvester = None
-    if solver == "hlld_ai":
-        model, norm_stats = _load_ai_solver(cfg, device)
-        flux_fn = functools.partial(hlld_ai_flux, model=model, norm_stats=norm_stats)
-    elif solver in ("exact", "exact_batched"):
+    if solver in ("exact", "exact_batched"):
         # The exact Riemann solution evaluated on the ray xi = 0, ML
         # warm-started and batched over the whole sweep.  Interfaces it cannot
         # resolve fall back to HLLD and the fraction is reported in LAST_DIAG,

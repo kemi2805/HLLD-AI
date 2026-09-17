@@ -15,14 +15,14 @@ from src.physics.initial_data2d import (b_from_potential, magnetic_rotor,
                                         orszag_tang)
 from src.physics.state import EVOLVED_KEYS, State2D
 from src.physics.envelope import EnvelopeRecorder, format_summary
-from src.physics.hlld import (hlld_flux, hlle_flux, hllc_flux, hlld_ai_flux,
+from src.physics.hlld import (hlld_flux, hlle_flux, hllc_flux,
                               LAST_DIAG)
 
 # `exact` is built lazily in main(): it needs tau_weak / n_retries bound in,
 # and importing exact_flux drags in the rmhd_final solver, which should not
 # happen for an ordinary HLLD run.
 SOLVERS = {"hlld": hlld_flux, "hlle": hlle_flux, "hllc": hllc_flux,
-           "hlld_ai": hlld_ai_flux, "exact": None}
+           "exact": None}
 
 # problem -> (domain, gamma, default t_end, bc_x, bc_y, has pi-rotation symmetry)
 PROBLEMS = {
