@@ -19,10 +19,11 @@ N=${N:-1280}
 NW=${NW:-64}
 OUT=${OUT:-$ROOT/results/brute_$BOX}
 cd "$ROOT" || exit 1
-export RMHD_ROOT=${RMHD_ROOT:-/mnt/rafast/miler/codes/rotor2d/rmhd_final}
-export RMHD_FAN=njit RMHD_ALFVEN=fused RMHD_SLOWSHOCK=njit RMHD_SHOCK=njit
-export NUMBA_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1
 [ -x "$PY" ] || { echo "PREFLIGHT FAILED: no $PY"; exit 2; }
+RMHD=$("$PY" -c 'import rmhd.paths as p; print(p.repo_root())') ||
+    { echo "PREFLIGHT FAILED: $PY cannot import rmhd -- pip install -e <rmhd_final>"; exit 2; }
+. "$RMHD/scripts/kernels.env"
+export NUMBA_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1
 [ -d results/rotor_64_exact/harvest ] || { echo "PREFLIGHT FAILED: no harvest"; exit 2; }
 # rebal-*: the point budget moved off the pressures and onto the field.
 # Measured over 1280 known answers, ln|Bt| carries 91.6% of the squared

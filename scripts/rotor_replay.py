@@ -19,7 +19,7 @@ numpy fan + Alfven): five of six sweeps identical to machine precision, two
 marginal lanes in one x-sweep -- what a whole-run comparison had shown as
 5e-4 field differences and 128 vs 131 solved.
 
-Env: RMHD_ROOT, RMHD_ML_CKPT, RMHD_FAN/ALFVEN/SLOWSHOCK/SHOCK as for a run."""
+Env: RMHD_ML_CKPT, RMHD_FAN/ALFVEN/SLOWSHOCK/SHOCK as for a run."""
 import sys, os, time, functools
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # ^ the repo root, derived from this file -- not a hardcoded laptop path.

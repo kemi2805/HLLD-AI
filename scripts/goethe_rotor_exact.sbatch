@@ -22,11 +22,12 @@
 #  count with 1/dx: 1452 sweeps at 64^2, 2904 at 128^2.  Expect hours at
 #  64^2 and about a day at 128^2 on 80 cores; the 48 h limit is margin.
 #
-#  Usage:   sbatch scripts/goethe_rotor_exact.sbatch              # 64^2
-#           N=128 sbatch scripts/goethe_rotor_exact.sbatch        # 128^2
-#           N=32 TEND=0.02 NUMBA_THREADS=8 sbatch -p test -t 1:00:00 scripts/goethe_rotor_exact.sbatch   # pilot
+#  Usage:   S=/work/astro/miler/codes/rmhd_final/scripts/sbatch_checked.sh
+#           $S scripts/goethe_rotor_exact.sbatch                  # 64^2
+#           N=128 $S scripts/goethe_rotor_exact.sbatch            # 128^2
+#           N=32 TEND=0.02 NUMBA_THREADS=8 $S scripts/goethe_rotor_exact.sbatch -p test -t 1:00:00   # pilot
 #  Knobs:   RETRIES (default 2), TEND (0.4), NSNAP (8), OUT, HARVEST_ALL (1),
-#           RMHD_ML_CKPT
+#           PY, HLLD_DIR, MAX_STEPS (a pilot), POOL/POOL_THREADS, RMHD_ML_CKPT
 #           (primary seed), RMHD_ML_CKPTS (comma-separated extra checkpoints
 #           whose predictions seed retries 1, 2, ... -- the ensemble
 #           multistart; measured paired on identical inputs 2026-09-06:
@@ -43,22 +44,25 @@ NSNAP=${NSNAP:-8}
 RETRIES=${RETRIES:-2}
 OUT=${OUT:-results/rotor_${N}_exact}
 
-export RMHD_ROOT=${RMHD_ROOT:-/work/astro/miler/codes/rmhd_final}
+PY=${PY:-/work/astro/miler/python-env/rmhd-cpu/bin/python}
+cd "${HLLD_DIR:-/work/astro/miler/codes/HLLD}" || exit 1
+# The solver is the installed `rmhd` package.  Asking the interpreter where it
+# lives is both the preflight and the only path this script needs.
+RMHD=$("$PY" -c 'import rmhd.paths as p; print(p.repo_root())') ||
+    { echo "PREFLIGHT FAILED: $PY cannot import rmhd -- uv pip install -e <rmhd_final>"; exit 2; }
 export RMHD_ML_CKPT=${RMHD_ML_CKPT:-data/ml_guess_rotor_ft.pt}
 # the run-1 snapshots (epoch 150 of job 1767483): fixed files, unlike the
 # live checkpoints the 72 h continuation keeps overwriting
 export RMHD_ML_CKPTS=${RMHD_ML_CKPTS-data/ml_guess_rotor_big_run1_s42.pt,data/ml_guess_rotor_big_run1_s47.pt}
+for c in $RMHD_ML_CKPT ${RMHD_ML_CKPTS//,/ }; do       # relative = inside $RMHD, as exact_flux resolves them
+    case "$c" in /*) f=$c ;; *) f=$RMHD/$c ;; esac
+    [ -f "$f" ] || { echo "PREFLIGHT FAILED: no checkpoint $f"; exit 2; }
+done
 HARVEST_ALL=${HARVEST_ALL:-1}     # 1: every solved lane + the per-sweep coverage map
 # the four compiled kernels: fan integrators, Alfven pinned solve, slow shock,
 # fast/slow shock chain -- each measured against its numpy twin (bitwise for
 # the last two) and on the rotor step-1 configuration
-export RMHD_FAN=njit RMHD_ALFVEN=${RMHD_ALFVEN:-fused} RMHD_SLOWSHOCK=njit RMHD_SHOCK=njit
-# numpy/BLAS single-threaded (its dispatch is the cost, not its arithmetic);
-# torch (the CT/HLLD part) a few threads.  numba's thread count is a KNOB
-# (NUMBA_THREADS), not the node: the kernels are launched ~50,000 times per
-# sweep on batches of ~50 lanes, and with 64 threads the pool spends its time
-# spinning at the launches -- the first pilot burned 58 cores for 24 minutes
-# without finishing a step (2026-09-06).  Pilot 8 / 16 before trusting more.
+. "$RMHD/scripts/kernels.env"
 export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1
 export NUMBA_NUM_THREADS=${NUMBA_THREADS:-16}
 export TORCH_THREADS=${TORCH_THREADS:-8}
@@ -70,12 +74,13 @@ export RMHD_POOL_CHUNKS=${POOL_CHUNKS:-${POOL:-0}}
 RESUME=${RESUME:-1}     # continue from $OUT/restart.npz when it exists
 MAX_STEPS=${MAX_STEPS:-} # a pilot: stop after this many steps (restart file written)
 
-PY=/work/astro/miler/python-env/rmhd-cpu/bin/python
-cd /work/astro/miler/codes/HLLD
+# Submitted through scripts/sbatch_checked.sh this runs on the login node and
+# stops here, so a bad path costs a second instead of the queue wait.
+[ "${DRYRUN:-0}" = 1 ] && { echo "dry run ok: rmhd at $RMHD, N=$N, pool=${RMHD_POOL}x${RMHD_POOL_THREADS}"; exit 0; }
 mkdir -p logs "$OUT"
 
 echo "== $(date)  host=$(hostname)  N=$N  tend=$TEND  retries=$RETRIES  out=$OUT"
-echo "== HLLD $(git rev-parse --short HEAD)   rmhd_final $(git -C $RMHD_ROOT rev-parse --short HEAD)"
+echo "== HLLD $(git rev-parse --short HEAD)   rmhd_final $("$PY" -c 'import rmhd.paths as p; print(p.git_rev())')"
 echo "== ckpt=$RMHD_ML_CKPT  extra=$RMHD_ML_CKPTS  kernels: FAN=$RMHD_FAN ALFVEN=$RMHD_ALFVEN SLOWSHOCK=$RMHD_SLOWSHOCK SHOCK=$RMHD_SHOCK  numba threads=$NUMBA_NUM_THREADS  pool=${RMHD_POOL}x${RMHD_POOL_THREADS}"
 RESTART=""
 if [ "$RESUME" = 1 ] && [ -f "$OUT/restart.npz" ]; then

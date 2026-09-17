@@ -85,8 +85,8 @@ except ImportError as _e:                      # pragma: no cover
 # interfaces the Newton cannot resolve fall back to HLLD and are counted in
 # LAST_DIAG.
 _DEFAULT_CKPT = os.environ.get("RMHD_ML_CKPT", "data/ml_guess_gamma53_v5.pt")
-# Ensemble multistart: extra checkpoints (comma-separated, relative to
-# RMHD_ROOT) whose predictions seed retries 1, 2, ... in turn instead of the
+# Ensemble multistart: extra checkpoints (comma-separated, relative to the rmhd
+# checkout, via rmhd.paths.resolve) seed retries 1, 2, ... in turn instead of the
 # Gaussian jitter of the primary seed.  Only used when n_retries > 0.
 # The reduced three-wave fallback (plan Track 5 B2), off by default.
 #

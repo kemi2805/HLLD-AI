@@ -13,11 +13,14 @@ HARVEST=${HARVEST:-$ROOT/results/rotor_64_p5/harvest}
 OUT=${OUT:-$ROOT/results/rescued}
 MAX=${MAX:-2000000}
 N=${N:-64}
-mkdir -p "$OUT" "$OUT/logs"
 cd "$ROOT" || exit 1
-export RMHD_ROOT=${RMHD_ROOT:-/mnt/rafast/miler/codes/rotor2d/rmhd_final}
-export RMHD_FAN=njit RMHD_ALFVEN=fused RMHD_SLOWSHOCK=njit RMHD_SHOCK=njit
+RMHD=$("$PY" -c 'import rmhd.paths as p; print(p.repo_root())') ||
+    { echo "PREFLIGHT FAILED: $PY cannot import rmhd -- pip install -e <rmhd_final>"; exit 2; }
+. "$RMHD/scripts/kernels.env"
 export NUMBA_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1
+[ -d "$HARVEST" ] || { echo "PREFLIGHT FAILED: no harvest $HARVEST"; exit 2; }
+[ "${DRYRUN:-0}" = 1 ] && { echo "dry run ok: rmhd at $RMHD, $N workers on $HARVEST"; exit 0; }
+mkdir -p "$OUT" "$OUT/logs"
 echo "== $(date)  $N workers on $HARVEST"
 for ((i=0; i<N; i++)); do
     nohup "$PY" scripts/rescue_collect.py "$HARVEST" \
