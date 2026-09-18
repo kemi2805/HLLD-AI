@@ -25,7 +25,9 @@ Two pieces:
                 accurate, only inside the basin, so a reader that misplaces
                 a weak wave still helps.
 
-Everything here is per column; nothing couples the tubes.
+Everything here is per column except the time step: the CFL bound is the
+maximum over EVERY column, so a column's profile depends on its batch when a
+neighbour has faster waves (tests/test_tube_seed.py pins both directions).
 """
 from __future__ import annotations
 
