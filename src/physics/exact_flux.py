@@ -292,6 +292,33 @@ def relative_jump(sL, sR):
     return torch.maximum(worst, dB / (scale + tiny))
 
 
+def _self_crossing(Zc, VL, VR, tol):
+    """True where a seven-wave answer's fan crosses itself (see _WAVE_ORDER).
+
+    ``Zc`` is the six zones R2..R7, ``VL``/``VR`` the ``[LF, LA, LS]`` and
+    ``[RF, RA, RS]`` speeds: arrays on the batched path, floats on the scalar
+    one, which must apply the SAME rule or it is not the batched path's
+    reference.
+    """
+    import numpy as np
+    cd = 0.5 * (Zc[2][2] + Zc[3][2])        # contact speed, from R4/R5
+    order = [VL[0], VL[1], VL[2], cd, VR[2], VR[1], VR[0]]
+
+    def _rot_strength(A, B):
+        rho = np.maximum(np.abs(Zc[A][0]), 1e-30)
+        return np.maximum(
+            np.abs(Zc[A][0] - Zc[B][0]) / rho,
+            np.sqrt(sum((Zc[A][k] - Zc[B][k]) ** 2 for k in (2, 3, 4))))
+
+    # a rotation may sit out of order ONLY if it carries no jump
+    crossed = (order[2] - order[1] < -tol) & (_rot_strength(0, 1) > 1e-8)
+    crossed = crossed | ((order[5] - order[4] < -tol) & (_rot_strength(4, 5) > 1e-8))
+    # every other adjacent pair must be ordered unconditionally
+    for _k in (0, 2, 3, 5):
+        crossed = crossed | (order[_k + 1] - order[_k] < -tol)
+    return crossed
+
+
 def exact_flux(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
                fallback=hlld_flux, tau_weak: float = 1e-6,
                accuracy: float = 1e-8, max_iter: int = 40,
@@ -355,7 +382,7 @@ def exact_flux(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
     # they take the HLLD fallback, which is reported, not hidden.
     solvable = (~bad) & (~weak) & ((cls == C.FULL7) | (cls == C.COPLANAR))
 
-    n_conv = n_ray_fan = n_unphys = 0
+    n_conv = n_ray_fan = n_unphys = n_crossed = 0
     solved_idx: list[int] = []
     idx = torch.nonzero(solvable).reshape(-1).tolist()
 
@@ -379,6 +406,11 @@ def exact_flux(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
                 res = fullcontact6(left, right, u6, Bn, gamma,
                                    accuracy=accuracy, max_iter=max_iter)
             if res is None or not res["converged"]:
+                continue
+            # the batched path's admissibility gate, same rule, same tolerance
+            if _WAVE_ORDER and _self_crossing(res["zones"], res["VsLv"],
+                                              res["VsRv"], _WAVE_ORDER_TOL):
+                n_crossed += 1
                 continue
             st, reg = RS.state_at_xi(left, right, res["zones"], res["VsLv"],
                                      res["VsRv"], Bn, gamma, xi_target=0.0,
@@ -431,6 +463,7 @@ def exact_flux(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
         n_exact=n_conv,
         n_fan_interior=n_ray_fan,
         n_unphysical_star=n_unphys,
+        n_wave_order_rejected=n_crossed,
         n_hlld_fallback=fell_back,
         frac_hlld_fallback=fell_back / max(N, 1),
         frac_exact=n_conv / max(N, 1),
@@ -837,25 +870,8 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
     # strength by construction, so they cannot cross anything that matters.
     n_crossed = 0
     if _WAVE_ORDER and take.any():
-        Zc = res["zones"]                       # R2..R7
-        VL, VR = res["VsLv"], res["VsRv"]       # [LF, LA, LS], [RF, RA, RS]
-        cd = 0.5 * (Zc[2][2] + Zc[3][2])        # contact speed, from R4/R5
-        order = [VL[0], VL[1], VL[2], cd, VR[2], VR[1], VR[0]]
-
-        def _rot_strength(A, B):
-            rho = np.maximum(np.abs(Zc[A][0]), 1e-30)
-            return np.maximum(
-                np.abs(Zc[A][0] - Zc[B][0]) / rho,
-                np.sqrt(sum((Zc[A][k] - Zc[B][k]) ** 2 for k in (2, 3, 4))))
-
-        tol = _WAVE_ORDER_TOL
-        crossed = np.zeros(sel.size, dtype=bool)
-        # a rotation may sit out of order ONLY if it carries no jump
-        crossed |= (order[2] - order[1] < -tol) & (_rot_strength(0, 1) > 1e-8)
-        crossed |= (order[5] - order[4] < -tol) & (_rot_strength(4, 5) > 1e-8)
-        # every other adjacent pair must be ordered unconditionally
-        for _k in (0, 2, 3, 5):
-            crossed |= (order[_k + 1] - order[_k] < -tol)
+        crossed = _self_crossing(res["zones"], res["VsLv"], res["VsRv"],
+                                 _WAVE_ORDER_TOL)
         crossed &= take
         n_crossed = int(crossed.sum())
         take = take & ~crossed

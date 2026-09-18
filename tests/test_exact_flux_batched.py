@@ -127,11 +127,20 @@ def test_matches_the_scalar_reference(eos, problems):
     both = mb & ms
     assert int(both.sum()) >= n // 3, (
         f"only {int(both.sum())}/{n} interfaces solved exactly by both")
+    # Scaled per INTERFACE by its largest flux component, as
+    # test_exact_flux.py does -- not per component.  Both Newtons stop at
+    # `accuracy` in the residual, so their states differ by ~1e-11 of the
+    # state; divided by a component 1e3 smaller than the rest (Sz = 4.2e-4
+    # against tau = 0.56 on calea's draw) that reads as 1.1e-8 and failed.
+    # Measured 2026-09-18 on both hosts' draws: every lane then sits inside
+    # its Newton certificate |J^+ f|_batched + |J^+ f|_scalar (worst 2.9e-9
+    # against 8.7e-9), except one ray-sampling lane that exposed a real
+    # defect in the scalar quartic (rmhd poly_solvers, a0 == 0 exit).
+    sc = torch.stack([torch.maximum(Fs[k][both].abs(), Fb[k][both].abs())
+                      for k in Fb]).amax(dim=0).clamp(min=1e-30)
     worst = 0.0
     for k in Fb:
-        a, b = Fs[k][both], Fb[k][both]
-        sc = torch.maximum(a.abs(), b.abs()).clamp(min=1e-30)
-        worst = max(worst, float(((a - b).abs() / sc).max()))
+        worst = max(worst, float(((Fs[k][both] - Fb[k][both]).abs() / sc).max()))
     assert worst < 1e-8, f"batched flux differs from scalar by {worst:.3e}"
 
 

@@ -159,6 +159,30 @@ def test_exact_flux_beats_hlld_against_constructed_truth(eos, cases):
     )
 
 
+def test_a_self_crossing_fan_is_not_exact(eos):
+    """The scalar reference applies the batched path's wave-order gate.
+
+    An interface from calea's draw of the fixture above (the generator is not
+    host-independent).  The warm-started Newton converges to a root with
+    residual 2.2e-11 whose left slow wave (-0.34738) runs ahead of its left
+    Alfven wave (-0.347137) while that rotation carries a jump -- a fan that
+    crosses itself, which the constructed solution does not.  Accepted, its
+    flux sat 3.7e-5 from the constructed truth.  It must fall back instead,
+    and be counted.
+    """
+    left = [4.776674238280484, 0.6132634545893085, -0.17907080333679914,
+            0.36431071648592117, -0.16137843642894406, 0.07428004747480324,
+            0.11136586257332838]
+    right = [0.09023433508472711, 0.8516477238349558, 0.006933481358175708,
+             -0.3123561277573186, 0.21013409264716387, 0.7972403593174457,
+             -0.5066807551967896]
+    Bn = 0.6575793732595826
+    exact_flux(_prim(left, Bn, eos), _prim(right, Bn, eos), eos, idir=0)
+    d = dict(LAST_DIAG)
+    assert d["n_attempted"] == 1
+    assert d["n_wave_order_rejected"] == 1 and d["n_exact"] == 0
+
+
 def test_diagnostics_are_reported(eos, cases):
     """Fallback must be measured, not hidden."""
     s = cases[0]
