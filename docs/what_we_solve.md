@@ -159,7 +159,7 @@ coplanarity — a binary rotation is a branch, not a variable.
 
 A solution with a silent family is a **limit** of the richer family, not a
 separate structure: the five-wave solver returns zero strength for a wave that
-does nothing. `batched/test_degenerate_structures.py` pins this — a pure
+does nothing. `rmhd_final/tests/batched/test_degenerate_structures.py` pins this — a pure
 entropy wave gives *exactly* zero residual, not merely a small one, and the
 `nochange` branches of `fast_wave` and `slow_wave6` are what make it exact
 rather than lucky.
@@ -175,7 +175,10 @@ the hierarchy.
 ### The hierarchy, cumulative
 
 12,000 interfaces sampled from `rotor_64_exact` in the true solved/failed
-proportion; every accepted answer verified at 1e-8.
+proportion; every accepted answer verified at 1e-8.  So the first row,
+43.28%, is this SAMPLE's value of the 43.9% the whole run counts (the
+production coverage quoted elsewhere); both are fractions of attempted
+interfaces.
 
 | structure allowed | new | cumulative | % of attempted |
 |---|---|---|---|
@@ -228,9 +231,9 @@ So:
 The exact solver supplies about **one interface in nine**.
 
 The y-sweeps are much weaker than the x-sweeps (65.7% against 90.9%), which is
-where the normal field is small. Note `planar_solver.tex` currently claims
-83.9% for the y-sweeps; the finished run measures **65.7%** and the tex needs
-correcting.
+where the normal field is small. (`planar_solver.tex` first quoted 83.9% for
+the y-sweeps, from a pilot of this run; it now states the finished run's
+**65.7%**.)
 
 ---
 

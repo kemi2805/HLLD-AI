@@ -4,6 +4,10 @@ Written 2026-09-08 against HLLD `954046b` and rmhd_final `add9f70`. Same
 purpose as `numerical_setup_notes.md`: the section quotes measurements, so
 each one needs a source that outlives the session.
 
+Re-verified 2026-09-18 after rmhd_final became the `rmhd` package: its
+batched modules are under `rmhd/batched/` and its tests under
+`tests/batched/`; the paths below are updated, the content is unchanged.
+
 **Everything marked MEASURED is re-derivable by one command:**
 
 ```
@@ -23,23 +27,23 @@ individually below.
 | coplanarity median 3.5e-11, below 1e-6 on 100% | MEASURED, block 1 |
 | forward-constructed set: median 0.65, 0.01% below 1e-4 | MEASURED, block 1, `--dataset` |
 | slow wave turns the field by 6e-12 rad | MEASURED, block 2 |
-| freezing the angles: 79.5% → 90.5% | session measurement 2026-09-08 on `unsolved`/`solved` shards; the mechanism is asserted by `batched/test_planar5.py` rather than the number. Recorded in [[rotor-failures-no-root]] |
+| freezing the angles: 79.5% → 90.5% | session measurement 2026-09-08 on `unsolved`/`solved` shards; the mechanism is asserted by `rmhd_final/tests/batched/test_planar5.py` rather than the number. Recorded in [[rotor-failures-no-root]] |
 | slow wave changes \|Bt\| by 3.3%, under 1% on 27.5% | MEASURED, block 3 |
 | ~50% constructible from a seed, 99.5% in a grid | session measurement (angle enumeration × 7³ grid); [[rotor-failures-no-root]] |
 | Alfven/slow gap median 5.5e-3, p5 9.4e-6; fast/Alfven 2.8e-1 | MEASURED, block 4 |
 | exhaustive 8 × 7³ = 2744 points converges 8.5%; 3³ gives 7.0% | session measurement; [[rotor-failures-no-root]] |
 
 The three ill-posedness claims are also stated, with the same numbers, in the
-module docstring of `rmhd_final/batched/planar5_b.py`.
+module docstring of `rmhd_final/rmhd/batched/planar5_b.py`.
 
 ## Sect. 2 — the reduced system
 
 | statement | source |
 |---|---|
-| the five-wave formulation, unknowns and residual | `rmhd_final/batched/planar5_b.py`, `structure()` |
-| slack is an identity, ~1e-11 | `batched/test_planar5.py::test_slow_wave_slack_is_an_identity`; MEASURED, block 6 |
+| the five-wave formulation, unknowns and residual | `rmhd_final/rmhd/batched/planar5_b.py`, `structure()` |
+| slack is an identity, ~1e-11 | `rmhd_final/tests/batched/test_planar5.py::test_slow_wave_slack_is_an_identity`; MEASURED, block 6 |
 | signed `Bt_CD` removes the discrete branch | `planar5_b.structure` passes `Bz_t = 0` to `slow_wave6`; the eight-way enumeration it replaces is in the session's `enum8` measurement |
-| no warm start needed | `batched/test_planar5.py::test_no_warm_start_is_needed`; every number in the section comes from the default seed in `planar5_b.solve` |
+| no warm start needed | `rmhd_final/tests/batched/test_planar5.py::test_no_warm_start_is_needed`; every number in the section comes from the default seed in `planar5_b.solve` |
 | planar frame, out-of-plane residue reported | `planar5_b.to_planar`; residue median 1.5e-10, 0.2% above tolerance — MEASURED, block 6 |
 
 ## Sect. 3 — verification
@@ -49,7 +53,7 @@ module docstring of `rmhd_final/batched/planar5_b.py`.
 | the answer is written in the seven-wave unknowns and checked | `planar5_b.verify_full`, called by `solve` before setting `converged` |
 | accepted only below 1e-8; median 1.1e-10 | `RMHD_PLANAR5_VERIFY` default in `src/physics/exact_flux.py`; MEASURED, block 6 |
 | rotation census: 97.3% below 1e-6, 0.375% within 1e-3 of pi, 2.3% intermediate; chi 4.3e-9 on the intermediate ones vs 7.6e-11 overall | MEASURED 2026-09-09 on `results/rotor_64_exact/harvest`, 142,554 rotations. **Supersedes the earlier "2.3% carry a pi"**, which conflated any nonzero rotation with a pi one: only 0.375% are near pi, the bulk of the tail is small angles produced by roundoff-level non-coplanarity |
-| a pi rotation is outside the family and must be rejected | `batched/test_planar5.py::test_pi_rotations_are_rejected_not_faked` |
+| a pi rotation is outside the family and must be rejected | `rmhd_final/tests/batched/test_planar5.py::test_pi_rotations_are_rejected_not_faked` |
 | three-wave solver: converges ~100%, never reaches 1e-6, median 1.2e-2 | MEASURED, block 7 |
 | the residual is frame-sensitive | MEASURED, block 8 |
 
@@ -71,7 +75,7 @@ strengthen this without a third, larger measurement. See
 | cost ~8 ms (planar), ~1 ms (three-wave), ~30 ms (seven-wave) | session timings; the run logs give the per-step figure |
 | replay 471 → 763, 292 gained, none lost, p = 2.5e-88 | `scripts/rotor_replay.py replay x nj800x3` with `RMHD_PLANAR5_FALLBACK` off and on, then `compare`; recorded in the commit message of `2bfe9aa` |
 | p* bitwise identical on lanes both resolve | same, session check over the saved replay masks |
-| coverage 43.9% → 69.9%; y-sweeps 24.7% → 83.9% | `scripts/harvest_summary.py` on `results/rotor_64_exact/harvest` and on the run with the rescue enabled |
+| coverage 43.9% → 78.0%; y-sweeps 24.7% → 65.7% | `scripts/harvest_summary.py` on `results/rotor_64_exact/harvest` and on the FINISHED run with the rescue enabled (`rotor_64_p5`, t = 0.4). An early PILOT of that run measured 69.9% / 83.9%, which the tex first quoted; the tex now states the finished run's numbers. Denominator: attempted interfaces |
 | factor ~2 in wall time per step | the two run logs (`rotor_64_exact.log`, `rotor_64_p5.log`) |
 
 ## Deliberately NOT claimed

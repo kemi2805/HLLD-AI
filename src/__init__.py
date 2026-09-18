@@ -6,7 +6,8 @@ Physics solver
 
 Run a simulation
 ----------------
-    python -m src.physics.driver          # 1D; pass a config path
+    python scripts/shocktube_compare.py configs/Giacomazzo/Balsara1.yaml --solvers hlld
+                                                # 1D: driver.run on any YAML config
     python scripts/run_2d.py --problem rotor    # 2D production driver
 
 The exact flux (``--solver exact``) needs the rmhd package installed:

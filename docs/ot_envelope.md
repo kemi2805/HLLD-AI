@@ -75,5 +75,5 @@ union should be built from, not a guess.
 | rho range | 0.221 initial-ish → up to ~17.3 transient peak (~t=0.38) → settling toward ~0.05–1.9 by t=1.0 |
 
 No π-rotation symmetry check here — that diagnostic is rotor-specific
-(`scripts/run_rotor.py::symmetry_error` exploits the rotor's exact π
+(`scripts/run_2d.py::symmetry_error` exploits the rotor's exact π
 rotational symmetry, which OT does not share).

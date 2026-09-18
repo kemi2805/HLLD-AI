@@ -4,6 +4,10 @@ Written 2026-09-07 against HLLD `43bc6c2` and rmhd_final `a2451c7`. The point
 of this file is that the section can be re-checked against the code later, and
 that anything the code does NOT do is listed rather than quietly written in.
 
+Re-verified 2026-09-18 after rmhd_final became the `rmhd` package: its
+modules moved under `rmhd/` (paths below updated), and every cited line range
+still points at the same code except `_features_canonical`, now `:386`.
+
 ## Evolution code
 
 | statement | source |
@@ -30,19 +34,19 @@ that anything the code does NOT do is listed rather than quietly written in.
 
 | statement | source |
 |---|---|
-| Giacomazzo & Rezzolla 2006 formulation, seven waves, zones R1..R8 | `fullcontact.py:1-25` |
-| classic four unknowns + contact closure | `fullcontact.py:17-25` |
-| six-unknown vector, log-polar | `fullcontact.py:1115-1131`, `unk6_from_primitive` |
-| Alfven wave solved psi-pinned, branch owned by the outer Newton | `fullcontact.py:1119-1121` |
-| six residuals: four contact jumps + two slow-wave slacks | `fullcontact.py:1172-1177` |
-| slack = eq. (4.17) z-momentum residual (shock) / angle mismatch (rarefaction) | `fullcontact.py:1066-1091` |
-| shock root by pressure parameterisation with a bracketing scan | `shock_speed.find_shock_speed_pmethod`, `batched/shock_b.py` scan |
-| rarefaction by RK4 through the fan | `rarefaction.py`, `batched/rarefaction_b.py` |
-| degenerate families -> reduced three-wave solver; classification from eigenvalues | `batched/classify.py`, `batched/contact_b.py` |
-| forward-difference Jacobian, SVD step with truncation, trust region, line search, best iterate | `fullcontact.py:1220-1223`, `batched/fullcontact_b.py` |
+| Giacomazzo & Rezzolla 2006 formulation, seven waves, zones R1..R8 | `rmhd/fullcontact.py:1-25` |
+| classic four unknowns + contact closure | `rmhd/fullcontact.py:17-25` |
+| six-unknown vector, log-polar | `rmhd/fullcontact.py:1115-1131`, `unk6_from_primitive` |
+| Alfven wave solved psi-pinned, branch owned by the outer Newton | `rmhd/fullcontact.py:1119-1121` |
+| six residuals: four contact jumps + two slow-wave slacks | `rmhd/fullcontact.py:1172-1177` |
+| slack = eq. (4.17) z-momentum residual (shock) / angle mismatch (rarefaction) | `rmhd/fullcontact.py:1066-1091` |
+| shock root by pressure parameterisation with a bracketing scan | `rmhd/shock_speed.py` `find_shock_speed_pmethod`, `rmhd/batched/shock_b.py` scan |
+| rarefaction by RK4 through the fan | `rmhd/rarefaction.py`, `rmhd/batched/rarefaction_b.py` |
+| degenerate families -> reduced three-wave solver; classification from eigenvalues | `rmhd/batched/classify.py`, `rmhd/batched/contact_b.py` |
+| forward-difference Jacobian, SVD step with truncation, trust region, line search, best iterate | `rmhd/fullcontact.py:1220-1223`, `rmhd/batched/fullcontact_b.py` |
 | convergence at 1e-8 | `exact_flux.exact_flux_batched(accuracy=1e-8)` |
-| MLP: 13 features -> 9 outputs, angles as (cos, sin) | `ml_guess.py:80-105`, `_features_canonical` at `:353` |
-| retries from other checkpoints or perturbations | `batched/ml_b.solve_with_retries`, `exact_flux._EXTRA_CKPTS` |
+| MLP: 13 features -> 9 outputs, angles as (cos, sin) | `rmhd/ml_guess.py:80-105`, `_features_canonical` at `:386` |
+| retries from other checkpoints or perturbations | `rmhd/batched/ml_b.py` `solve_with_retries`, `exact_flux._EXTRA_CKPTS` |
 | batched per sweep; exact flux only if converged AND ray resolved AND physical | `exact_flux.py` `take = conv & ray_ok & physical` |
 | weak-jump gate | `exact_flux.py` `tau_weak` |
 
