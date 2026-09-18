@@ -42,24 +42,14 @@ def exact_solution(cfg, x_cells, x_fine, t):
     from rmhd import ml_guess as mg, paths as rmhd_paths
     from rmhd.batched import api as API
     from rmhd.batched import ml_b as MB
-    from rmhd.batched import rarefaction_b as RB
-    from rmhd.batched import ray_b as RAY
-    from rmhd.batched import wave_speeds_b as WB
+    from rmhd.batched import profile as PR
 
     rc = cfg["run"]
     g = float(cfg["eos"]["gamma"])
     x0 = float(rc["x_interface"])
 
-    def seven(P):
-        v2 = P["vx"] ** 2 + P["vy"] ** 2 + P["vz"] ** 2
-        W2 = 1.0 / (1.0 - v2)
-        eta = P["Bx"] * P["vx"] + P["By"] * P["vy"] + P["Bz"] * P["vz"]
-        b2 = (P["Bx"] ** 2 + P["By"] ** 2 + P["Bz"] ** 2) / W2 + eta ** 2
-        return [P["rho"], P["p"] + 0.5 * b2, P["vx"], P["vy"], P["vz"],
-                P["By"], P["Bz"]], P["Bx"]
-
-    l7, Bn = seven(rc["primL"])
-    r7, _ = seven(rc["primR"])
+    l7, Bn = PR.seven_from_prim(rc["primL"])
+    r7, _ = PR.seven_from_prim(rc["primR"])
 
     ck = os.environ.get("RMHD_ML_CKPT", "data/ml_guess_gamma53_v5.pt")
     model, scaler = mg.load(rmhd_paths.resolve(ck))
@@ -80,33 +70,12 @@ def exact_solution(cfg, x_cells, x_fine, t):
     cd = 0.5 * (zones0[2][2] + zones0[3][2])
     speeds = np.array([VsL[0], VsL[1], VsL[2], cd, VsR[2], VsR[1], VsR[0]])
 
-    idx = {"LF": 0, "LS": 1, "RS": 2, "RF": 3}
-
-    def xi_fn(state, switch, B, gg=g):
-        k = idx[switch]
-        eig, _, _, ok = WB.xi_all(*state, B, gg)
-        return np.where(ok[:, k], eig[:, k], np.nan)
-
-    fan_p, fan_n = RB.make_integrators(g, lambda s, sw, B, gg: xi_fn(s, sw, B))
+    sampler = PR.make_sampler(g)
 
     def read(x):
-        n = x.size
-        left = [np.full(n, c) for c in l7]
-        right = [np.full(n, c) for c in r7]
-        Bnv = np.full(n, Bn)
-        zones = [[np.full(n, z[k]) for k in range(7)] for z in zones0]
-        VL = [np.full(n, v) for v in VsL]
-        VR = [np.full(n, v) for v in VsR]
-        st, region, err = RAY.state_at_xi(left, right, zones, VL, VR, Bnv, g,
-                                          xi_fn, fan_p, fan_n,
-                                          xi_target=(x - x0) / t)
-        rho, Ptot, vn, vt1, vt2, Bt1, Bt2 = st
-        v2 = vn ** 2 + vt1 ** 2 + vt2 ** 2
-        W2 = 1.0 / np.maximum(1.0 - v2, 1e-300)
-        eta = Bnv * vn + Bt1 * vt1 + Bt2 * vt2
-        b2 = (Bnv ** 2 + Bt1 ** 2 + Bt2 ** 2) / W2 + eta ** 2
-        return dict(rho=rho, p=Ptot - 0.5 * b2, vx=vn, vy=vt1, vz=vt2,
-                    By=Bt1, Bz=Bt2, region=region, err=err)
+        prim, region, err = PR.profile_at(l7, r7, Bn, zones0, VsL, VsR, g,
+                                          (x - x0) / t, sampler)
+        return dict(prim, region=region, err=err)
 
     return dict(cells=read(x_cells), fine=read(x_fine), speeds=speeds,
                 unk=np.array(unk), seed=np.array([s0[c][0] for c in range(6)]),

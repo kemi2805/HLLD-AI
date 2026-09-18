@@ -19,9 +19,8 @@ from rmhd.eos import set_eos
 set_eos("ideal")
 from rmhd.batched import fullcontact_b as FB
 from rmhd.batched import planar5_b as P5
+from rmhd.batched import profile as PR
 from rmhd.batched import ray_b as RAY
-from rmhd.batched import rarefaction_b as RB
-from rmhd.batched import wave_speeds_b as WB
 
 np.seterr(all="ignore")
 G = 5.0 / 3.0
@@ -30,16 +29,7 @@ W = FB.make_waves(G)
 H = os.environ.get("HARVEST", "results/rotor_64_exact/harvest")
 OUT_NPZ = os.environ.get("PROFILE_NPZ", "figs/riemann_profile.npz")
 os.makedirs("figs", exist_ok=True)
-_IDX = {"LF": 0, "LS": 1, "RS": 2, "RF": 3}
-
-
-def xi_fn(state, switch, Bn, g=G):
-    eig, _, _, ok = WB.xi_all(*state, Bn, g)
-    k = _IDX[switch]
-    return np.where(ok[:, k], eig[:, k], np.nan)
-
-
-fan_p, fan_n = RB.make_integrators(G, lambda s, sw, B, g: xi_fn(s, sw, B, g))
+xi_fn, fan_p, fan_n = PR.make_sampler(G)
 
 # ── pick an interface the planar solver rescues, with a visible structure ──
 fs = sorted(glob.glob("%s/unsolved_*.npz" % H))[:2]

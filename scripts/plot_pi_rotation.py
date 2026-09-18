@@ -20,25 +20,16 @@ import matplotlib.pyplot as plt
 from rmhd.eos import set_eos
 set_eos("ideal")
 from rmhd.batched import planar5_b as P5
+from rmhd.batched import profile as PR
 from rmhd.batched import ray_b as RAY
-from rmhd.batched import rarefaction_b as RB
-from rmhd.batched import wave_speeds_b as WB
+from rmhd.util.angles import wrap
 
 np.seterr(all="ignore")
 G = 5.0 / 3.0
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 H = os.environ.get("HARVEST", os.path.join(ROOT, "results/rotor_64_exact/harvest"))
 ROW = int(os.environ.get("ROW", "3928"))
-_IDX = {"LF": 0, "LS": 1, "RS": 2, "RF": 3}
-wrap = lambda a: (a + np.pi) % (2 * np.pi) - np.pi
-
-
-def xi_fn(state, switch, Bn, g=G):
-    eig, _, _, ok = WB.xi_all(*state, Bn, g)
-    return np.where(ok[:, _IDX[switch]], eig[:, _IDX[switch]], np.nan)
-
-
-fan_p, fan_n = RB.make_integrators(G, lambda s, sw, B, g: xi_fn(s, sw, B, g))
+xi_fn, fan_p, fan_n = PR.make_sampler(G)
 
 fs = sorted(glob.glob("%s/solved_*.npz" % H))[:8]
 Z = np.concatenate([np.load(f)["zones"] for f in fs]).astype(float)[ROW]

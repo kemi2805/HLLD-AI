@@ -53,26 +53,15 @@ def exact_profile(cfg, x, t):
     from rmhd import ml_guess as mg, paths as rmhd_paths
     from rmhd.batched import api as API
     from rmhd.batched import ml_b as MB
-    from rmhd.batched import rarefaction_b as RB
-    from rmhd.batched import ray_b as RAY
-    from rmhd.batched import wave_speeds_b as WB
+    from rmhd.batched import profile as PR
 
     rc = cfg["run"]
     g = float(cfg["eos"]["gamma"])
     L, R = rc["primL"], rc["primR"]
     x0 = float(rc["x_interface"])
 
-    def seven(P):
-        v2 = P["vx"] ** 2 + P["vy"] ** 2 + P["vz"] ** 2
-        W2 = 1.0 / (1.0 - v2)
-        eta = P["Bx"] * P["vx"] + P["By"] * P["vy"] + P["Bz"] * P["vz"]
-        b2 = (P["Bx"] ** 2 + P["By"] ** 2 + P["Bz"] ** 2) / W2 + eta ** 2
-        return [P["rho"], P["p"] + 0.5 * b2, P["vx"], P["vy"], P["vz"],
-                P["By"], P["Bz"]], P["Bx"]
-
-    l7, Bn = seven(L)
-    r7, _ = seven(R)
-    n = x.size
+    l7, Bn = PR.seven_from_prim(L)
+    r7, _ = PR.seven_from_prim(R)
 
     # Solve the Riemann problem ONCE.  A shock tube is a single problem read
     # at many rays, so the wave structure is shared by every cell and only xi
@@ -124,33 +113,11 @@ def exact_profile(cfg, x, t):
     good = np.flatnonzero(res1["converged"])
     j = int(good[0])
 
-    # broadcast the one solution back over the cells, and read it at each ray
-    left = [np.full(n, c) for c in l7]
-    right = [np.full(n, c) for c in r7]
-    Bnv = np.full(n, Bn)
-    zones = [[np.full(n, z[k][j]) for k in range(7)] for z in res1["zones"]]
-    VsLv = [np.full(n, v[j]) for v in res1["VsLv"]]
-    VsRv = [np.full(n, v[j]) for v in res1["VsRv"]]
-
-    idx = {"LF": 0, "LS": 1, "RS": 2, "RF": 3}
-
-    def xi_fn(state, switch, B, gg=g):
-        # per-ROOT validity; see the twin in src/physics/exact_flux.py
-        k = idx[switch]
-        eig, _, _, ok = WB.xi_all(*state, B, gg)
-        return np.where(ok[:, k], eig[:, k], np.nan)
-
-    fan_p, fan_n = RB.make_integrators(g, lambda s, sw, B, gg: xi_fn(s, sw, B))
-    xi = (x - x0) / t
-    st, region, err = RAY.state_at_xi(left, right, zones, VsLv, VsRv, Bnv, g,
-                                      xi_fn, fan_p, fan_n, xi_target=xi)
-    rho, Ptot, vn, vt1, vt2, Bt1, Bt2 = st
-    v2 = vn ** 2 + vt1 ** 2 + vt2 ** 2
-    W2 = 1.0 / np.maximum(1.0 - v2, 1e-300)
-    eta = Bnv * vn + Bt1 * vt1 + Bt2 * vt2
-    b2 = (Bnv ** 2 + Bt1 ** 2 + Bt2 ** 2) / W2 + eta ** 2
-    return dict(rho=rho, p=Ptot - 0.5 * b2, vx=vn, vy=vt1, vz=vt2,
-                By=Bt1, Bz=Bt2), region, err
+    # the one solution (lane j), read at each cell's ray
+    zones = [[z[k][j] for k in range(7)] for z in res1["zones"]]
+    VsL = [v[j] for v in res1["VsLv"]]
+    VsR = [v[j] for v in res1["VsRv"]]
+    return PR.profile_at(l7, r7, Bn, zones, VsL, VsR, g, (x - x0) / t)
 
 
 def contact_width(x, rho, x_contact, frac=0.8):
