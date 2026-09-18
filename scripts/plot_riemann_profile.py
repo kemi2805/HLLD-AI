@@ -191,7 +191,7 @@ sub = (r"$B^n = %.3f$      left $(\rho,\,p_{\rm tot},\,v^x,\,v^t,\,B^t) = "
           RAR, SHK, float(z["full"])))
 fig.text(0.010, 0.955, sub, fontsize=8.2, color=MUT, ha="left", va="top")
 fig.tight_layout(rect=[0, 0, 1, 0.885])
-out = "/Users/miler/Codes/HLLD/figs/planar_riemann_profile.png"
+out = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "figs/planar_riemann_profile.png")
 os.makedirs(os.path.dirname(out), exist_ok=True)
 fig.savefig(out, dpi=170)
 print("wrote", out)

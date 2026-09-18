@@ -26,7 +26,8 @@ from rmhd.batched import wave_speeds_b as WB
 
 np.seterr(all="ignore")
 G = 5.0 / 3.0
-H = "/Users/miler/Codes/HLLD/results/rotor_64_exact/harvest"
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+H = os.environ.get("HARVEST", os.path.join(ROOT, "results/rotor_64_exact/harvest"))
 ROW = int(os.environ.get("ROW", "3928"))
 _IDX = {"LF": 0, "LS": 1, "RS": 2, "RF": 3}
 wrap = lambda a: (a + np.pi) % (2 * np.pi) - np.pi
@@ -184,6 +185,6 @@ fig.text(0.010, 0.966,
          "Shaded blue = rarefaction fans.  $B^n = %.4f$." % Bn[0],
          fontsize=8.2, color=MUT, ha="left", va="top")
 fig.tight_layout(rect=[0, 0, 1, 0.930])
-out = "/Users/miler/Codes/HLLD/figs/pi_rotation_profile.png"
+out = os.path.join(ROOT, "figs/pi_rotation_profile.png")
 fig.savefig(out, dpi=165)
 print("wrote", out)

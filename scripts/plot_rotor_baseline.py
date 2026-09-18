@@ -3,10 +3,10 @@ import numpy as np
 import matplotlib; matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.colors import LinearSegmentedColormap
-sys.path.insert(0, "/Users/miler/Codes/HLLD/scripts")
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import rotor_compare as RC
 
-R = "/Users/miler/Codes/HLLD/results"
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__))); R = f"{ROOT}/results"
 runs = {64: f"{R}/rotor_64_hlld", 128: f"{R}/rotor_128_hlld", 256: f"{R}/rotor_256_hlld"}
 col = {64: "#2a78d6", 128: "#eb6834", 256: "#1baf7a"}          # categorical slots 1-3, validated
 dash = {64: "-", 128: "--", 256: "-."}                          # secondary encoding
@@ -80,4 +80,4 @@ fig.suptitle("Magnetic rotor, HLLD baseline: 64² / 128² / 256²  —  the bar 
              color=ink, fontsize=12.5, x=0.02, ha="left", y=0.995)
 fig.text(0.02, 0.965, "L1 between resolution levels is the reference's own convergence: 32.8% (64²→128²) and 26.8% (128²→256²) in ρ at t=0.4. "
          "Exact-64² vs HLLD-128² must come in below 32.8%; near 26.8% would support the claim.", color=ink2, fontsize=9.5)
-out = "/Users/miler/Codes/HLLD/figs/rotor_hlld_baseline.png"; fig.savefig(out, dpi=140, bbox_inches="tight"); print("saved", out)
+out = f"{ROOT}/figs/rotor_hlld_baseline.png"; fig.savefig(out, dpi=140, bbox_inches="tight"); print("saved", out)
