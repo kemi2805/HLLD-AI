@@ -504,27 +504,17 @@ def _batched_parts(gamma):
     if gamma in _SOLVER_CACHE:
         return _SOLVER_CACHE[gamma]
     from rmhd.batched import api as API
-    from rmhd.batched import rarefaction_b as RB
+    from rmhd.batched import profile as PR
     from rmhd.batched import ray_b as RAY
-    from rmhd.batched import wave_speeds_b as WB
     import numpy as np
 
-    idx = {"LF": 0, "LS": 1, "RS": 2, "RF": 3}
-
-    def xi_fn(state, switch, Bn, g=gamma):
-        # ok is per-ROOT, (N, 4), aligned with eig's [LF, LS, RS, RF].  Ask it
-        # about the root being requested and no other: near B_n = 0 the
-        # interior pair merges into a double root that double precision cannot
-        # resolve, while the fast pair stays exact to ~1e-17.  Gating LF/RF on
-        # the interior pair's failure refuses rarefactions that are perfectly
-        # well determined -- and B_n = By IS the rotor's y-sweep, zero at t=0
-        # and small for a long while after.  See rmhd_final commit 2392aa6.
-        k = idx[switch]
-        eig, _, _, ok = WB.xi_all(*state, Bn, g)
-        return np.where(ok[:, k], eig[:, k], np.nan)
-
-    fan_p, fan_n = RB.make_integrators(gamma, lambda s, sw, B, g:
-                                       xi_fn(s, sw, B, g))
+    # The ray sampler: xi is fullcontact_b.make_xi, which asks xi_all's per-ROOT
+    # validity about the requested root only.  Near B_n = 0 the interior pair
+    # merges into a double root double precision cannot resolve while the fast
+    # pair stays exact, and B_n = By IS the rotor's y-sweep -- so gating LF/RF
+    # on the interior pair would refuse well-determined rarefactions (rmhd_final
+    # commit 2392aa6).  This body used to be spelled out here; it is the same one.
+    xi_fn, fan_p, fan_n = PR.make_sampler(gamma)
     from rmhd.batched import contact_b as CB
     from rmhd.batched import planar5_b as P5
     parts = dict(solve=API.make_solver(gamma), ray=RAY, xi=xi_fn,
