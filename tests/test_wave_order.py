@@ -132,3 +132,82 @@ def test_a_zero_strength_crossing_is_not_rejected(problems, eos):
     assert on.get("n_planar5_exact", 0) == off.get("n_planar5_exact", 0), (
         "the gate removed planar answers, whose rotations have zero strength "
         "and therefore cannot cross anything that matters")
+
+
+# ── degenerate-class lanes ─────────────────────────────────────────────────
+# The gate reads the seven-wave speed layout res["VsLv"] / res["VsRv"].  The
+# DEGENERATE classes (ALFVEN_DEGEN, SLOW_DEGEN, FAST_DEGEN) are answered by the
+# reduced three-wave solver inside solve_batch, which fills only R4/R5 and
+# VsL/VsR and leaves those triples at zero, so the gate sees the order
+# [0, 0, 0, v_cd, 0, 0, 0] and calls the fan crossed whenever |v_cd| > 1e-6.
+
+def _degenerate_tube(eos, Bn=1e-4):
+    """A Sod-like tube with a tiny normal field: ALFVEN_DEGEN on the input.
+
+    |B_n| = 1e-4 puts the Alfven speeds within ~2e-5 of the fan width of the
+    fluid speed, far under classify.TOL_ALFVEN_CONTACT = 1e-3.  The contact
+    moves at about +0.34, so the zeroed speed layout reads as crossed.
+    """
+    t = lambda *a: torch.tensor(a, dtype=torch.float64)
+
+    def side(rho, p, By, Bz):
+        d = {"rho": t(rho), "p": t(p), "vx": t(0.0), "vy": t(0.0),
+             "vz": t(0.0), "Bx": t(Bn), "By": t(By), "Bz": t(Bz)}
+        d["eps"] = eos.eps__press_rho(d["p"], d["rho"])
+        return d
+
+    return side(1.0, 1.0, 0.5, 0.2), side(0.125, 0.1, 0.3, -0.4)
+
+
+@pytest.fixture(scope="module")
+def degenerate_runs(eos):
+    """(gate off, gate on) diagnostics for the one-lane tube.  Shared: each
+    call reloads exact_flux and so rebuilds the solvers (~80 s on the Mac)."""
+    sL, sR = _degenerate_tube(eos)
+    return _run(sL, sR, eos, gate=False)[1], _run(sL, sR, eos, gate=True)[1]
+
+
+def test_a_degenerate_lane_is_exact_without_the_gate(degenerate_runs):
+    """Precondition for the xfail below: the lane is ALFVEN_DEGEN, the reduced
+    solver answers it, and with the gate off it is exact -- so whatever
+    removes it with the gate on is the gate and nothing else."""
+    off, on = degenerate_runs
+    assert off["n_alfven_degen"] == 1, "fixture is not a degenerate-class lane"
+    assert off["n_converged"] == 1 and off["n_exact"] == 1
+    assert on["n_exact"] + on["n_wave_order_rejected"] == 1
+
+
+def test_the_gate_does_not_judge_a_degenerate_lane_on_seven_wave_speeds(
+        degenerate_runs):
+    _, on = degenerate_runs
+    assert on["n_wave_order_rejected"] == 0, (
+        "a three-wave answer was rejected on a speed layout it never filled")
+    assert on["n_exact"] == 1
+    # counted apart from the verified answers, and not refused: the lane was
+    # degenerate from the input, not reclassified out of a seven-wave solve
+    assert on["n_degenerate_exact"] == 1
+    assert on["n_reclassified_refused"] == 0
+
+
+def test_a_reclassified_lane_is_refused(eos, monkeypatch):
+    """solve_batch flags a lane it moved from a seven-wave class to a
+    degenerate one; its class was read off an abandoned (possibly
+    unconverged) seven-wave attempt, and on the rotor those three-wave
+    answers were off 0.55-0.82 against the verified planar solve.  The flag
+    is forced on the tube's lane here, since no cheap input reclassifies."""
+    import src.physics.exact_flux as EF
+    EF = importlib.reload(EF)
+    orig = EF._run_pipeline
+
+    def flagged(*a, **k):
+        out = orig(*a, **k)
+        out[0]["reclassified"][:] = True
+        return out
+
+    monkeypatch.setattr(EF, "_run_pipeline", flagged)
+    sL, sR = _degenerate_tube(eos)
+    EF.exact_flux_batched(sL, sR, eos, idir=0, max_iter=MAX_ITER)
+    d = dict(LAST_DIAG)
+    assert d["n_converged"] == 1, "precondition: the three-wave solve converged"
+    assert d["n_reclassified_refused"] == 1
+    assert d["n_exact"] == 0 and d["n_degenerate_exact"] == 0

@@ -740,6 +740,21 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
             accepted=take, ray_ok=ray_ok, source=0,
             seven_wave=np.isin(cls, (C.FULL7, C.COPLANAR)))
 
+    # ── degenerate answers: only where the INPUT was degenerate ───────────
+    # solve_batch re-solves with the three-wave solver any lane whose
+    # seven-wave attempt came out degenerate at R4/R5.  That class is read off
+    # a possibly unconverged attempt, and the three-wave answer then neglects
+    # waves the input needs.  MEASURED 2026-09-19 against the verified planar
+    # solve on the 64^2 rotor: those lanes are where the three-wave flux is
+    # worst (0.55-0.82 relative at |B_n| ~ 1, where HLLD is off 0.19), while
+    # on the 349 lanes degenerate from the input it is off 4e-5 (median),
+    # 1.8e-2 (max) against HLLD's 5.9e-3 and 8.8.  Refused here -- after the
+    # harvest, which would record a refused physical lane as "unphysical",
+    # and before the planar rescue, which may still answer it exactly.
+    reclass = np.asarray(res["reclassified"], dtype=bool)
+    n_reclass_refused = int((take & reclass).sum())
+    take = take & ~reclass
+
     # ── reduced three-wave rescue (opt-in) ────────────────────────────────
     # Only lanes the seven-wave solver did NOT win, and only where the
     # normal field is weak enough for the neglected slow waves to cost less
@@ -858,11 +873,20 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
     # seven-wave attempt, so the same test there would reject on the wrong
     # structure.  The planar answers need no test: both rotations have zero
     # strength by construction, so they cannot cross anything that matters.
+    #
+    # "Seven-wave path" means the seven-wave CLASSES, not `take`: the
+    # degenerate classes are answered inside solve_batch by the three-wave
+    # solver, which fills only R4/R5 and VsL/VsR.  Their VsLv/VsRv are zero
+    # (or, after a reclassification, the abandoned seven-wave attempt's), so
+    # the order read off them is [0, 0, 0, v_cd, 0, 0, 0] and every such lane
+    # with |v_cd| > tol was rejected.  MEASURED over a 32^2 rotor to t=0.4:
+    # 2205 of 2472 rejections (89%) were degenerate lanes, 1.7% of all exact
+    # fluxes (72 against 69 in the first step).
     n_crossed = 0
     if _WAVE_ORDER and take.any():
         crossed = _self_crossing(res["zones"], res["VsLv"], res["VsRv"],
                                  _WAVE_ORDER_TOL)
-        crossed &= take
+        crossed &= take & np.isin(cls, (C.FULL7, C.COPLANAR))
         n_crossed = int(crossed.sum())
         take = take & ~crossed
 
@@ -932,6 +956,13 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
     # 0.0% of its answers reach 1e-6 on this residual); the planar path
     # verifies inside `solve` before it reports convergence
     verified |= take5
+    # Degenerate-class lanes answered by solve_batch's three-wave solver are
+    # counted apart: exact in the limit their class names (B_n -> 0, or an
+    # Alfven wave merged with a magnetosonic one), not verified -- 3 of ~2000
+    # reach 1e-8 on the seven-wave residual.  So on a run with degenerate
+    # interfaces n_exact = n_verified + (n_degenerate_exact -
+    # n_degenerate_verified) [+ the opt-in n_3wave_exact], by design.
+    degen = take & ~np.isin(cls, (C.FULL7, C.COPLANAR))
 
     n_exact = int(g.size)
     fell_back = N - n_exact
@@ -955,6 +986,10 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
         n_verified=int(verified[take_all].sum()),
         n_wave_order_rejected=n_crossed,
         verified_mask=verified,
+        n_degenerate_exact=int(degen.sum()),
+        n_degenerate_verified=int((degen & verified).sum()),
+        degenerate_mask=degen,
+        n_reclassified_refused=n_reclass_refused,
         n_hlld_fallback=fell_back,
         frac_hlld_fallback=fell_back / max(N, 1),
         frac_exact=n_exact / max(N, 1),
