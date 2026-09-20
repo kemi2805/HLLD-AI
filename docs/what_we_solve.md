@@ -518,6 +518,60 @@ solvable neighbour; a fold would be evidence of non-existence with a
 mechanism), and the high-resolution *tube test*, which would exhibit what the
 solution **is** rather than proving what it is not.
 
+### Homotopy continuation, run (2026-09-20) — a rescue, and no fold
+
+`scripts/coplanar_limit.py` does what the paragraph above asks for. Every
+interface is coplanar to ~1e-11, so it is tilted out of its plane: in the
+planar frame the left tangential field is rotated by +eps and the right by
+-eps at fixed |B_t|, rho, gas pressure and velocity, which makes an ordinary
+FULL7 problem of it. The solution is then followed down a ladder
+eps = 1e-1 ... 1e-6, each rung warm-started from the one above and a failed
+rung re-walked in 2, 4 then 8 sub-steps, and finally polished at eps = 0.
+An answer counts only if it passes what production requires: full seven-wave
+residual <= 1e-8 **and** the waves in order.
+
+**The population had to be re-measured first.** The lanes come from a 64^2
+harvest that predates the Alfven sign fix (rmhd_final d09ffe2), so each one
+was first re-run through today's production path: **276 of the 1280
+"stubborn" interfaces (21.6%) are simply solved now** — 78 by the seven-wave
+Newton, 230 by the planar solver. Every stubborn number measured before
+2026-09-20, including the brute-force ceiling above, carries that
+contamination.
+
+**Validation gate**, on the 1219 control lanes the planar solver verifies:
+the difference to the planar answer falls linearly in eps (median 2.68e-2 at
+1e-1 to 2.68e-7 at 1e-6), the eps = 0 polish verifies on 94.8% of them and
+agrees with the planar answer to a median 4.7e-11. The rate at which a
+control is dragged onto a different branch and ends up labelled "singular" is
+0.25%, which is the noise floor for the stubborn classification below.
+
+**The 1004 genuinely stubborn lanes** (calea job 631, 2560 lanes, 2 min):
+
+| class | share | what it means |
+|---|---|---|
+| NOSTART | 83.2% | not solvable even tilted, at any eps from 0.03 to 1 rad |
+| LOST | 12.7% | the branch is lost below some eps*, with **kappa(J6) unchanged (ratio 1.00 on every lane)** |
+| SINGULAR | 0.3% | = the control artifact rate; no signal |
+| EXACT0 | **5.1%** | 51 verified exact answers, 50 with rotations at {0, pi} |
+
+Two conclusions, both negative for the original hope and one useful:
+
+* **No fold.** A fold would show as the Jacobian's condition number diverging
+  as eps -> eps*; it does not move at all. The lost lanes are Newton
+  failures, not a branch ending. So continuation does **not** supply the
+  non-existence argument.
+* **Coplanarity is not the obstacle.** kappa stays ~12-21 down to eps = 1e-6,
+  so the angle unknowns are observable at finite |B_t| (only |B_t| -> 0 loses
+  them), and tilting a stubborn interface by up to 1 rad leaves 67-78% of
+  them unsolvable. Whatever makes them hard survives leaving the plane.
+* **But it rescues 5.1%** that production misses, concentrated at
+  |B_n| in [0.01, 0.1) (34% of that bin). Brute force finds 23 further lanes;
+  together 74 of 1004 (7.4%), consistent with the ~5% admissible ceiling
+  measured above.
+
+The open question is therefore the 83% that cannot be started at all, which
+is a basin question rather than a geometry one, and the tube test below.
+
 ---
 
 ## 5b. Is the answer UNIQUE?  Yes on the measured population — but the residual is a weaker certificate than it looks
