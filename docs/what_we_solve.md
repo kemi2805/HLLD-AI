@@ -572,6 +572,65 @@ Two conclusions, both negative for the original hope and one useful:
 The open question is therefore the 83% that cannot be started at all, which
 is a basin question rather than a geometry one, and the tube test below.
 
+### The tube test, run (2026-09-20) — the structure is not in the family
+
+`scripts/tube_features.py` answers the question the Newton cannot: it evolves
+each interface as a 1D shock tube (`src/physics/tube_seed.run_tubes`), which
+solves the PDE and therefore shows the real structure whatever the solver can
+represent. Two resolutions are run so a feature counts only when it appears
+in both; speeds are read in the similarity variable xi = x / t; each feature
+is assigned to a wave family by comparing its speed with the seven
+characteristic speeds on either side of it. 351 interfaces (calea job 673),
+100 per group drawn from item B's classes.
+
+**Counting features answers nothing**, and the reason is worth recording. The
+detector resolves waves of strength >~1e-2 -- it finds 2.91 confirmed features
+per lane against 2.89 waves above 1e-2 in the known answers, and 4.47 above
+1e-3 -- but the seven characteristic speeds are routinely crowded inside 0.02,
+so neighbouring waves merge into one feature and a per-wave assignment is only
+21-40% reliable. Doubling the resolution (1024 + 2048) changes nothing:
+features per lane 2.87 -> 3.03 on controls, and the single "two features in
+one family" seen at the coarser pair disappears. **No lane in any group shows
+two features in one family.** The spec's compound-wave test comes back empty.
+
+**Asking what each feature IS answers it.** The elementary family allows only
+two kinds of jump: a rotational discontinuity turns the tangential field and
+leaves rho, P_tot and |B_t| alone, and a magnetosonic wave changes them
+without turning the field. So test every feature against that:
+
+| group | reversal + magnitude jump | \|B_t\| -> 0 inside a feature | rotation only |
+|---|---|---|---|
+| control (the solver answers these) | **2.0%** | 10.0% | 0.0% |
+| stubborn, ladder never starts | **61.0%** | 83.0% | 5.0% |
+| stubborn, ladder lost | **78.0%** | 86.0% | 2.0% |
+| stubborn, rescued at eps = 0 | 23.5% | 39.2% | 0.0% |
+
+The stubborn interfaces carry a **field reversal through |B_t| = 0 fused to a
+density and magnitude jump** -- a compound or intermediate wave. The seven-wave
+system has no root for it by construction: neither of its two jump types can
+do this. The 2% on controls is the test's own false-positive rate, and the
+lanes item B rescued sit in between at 23.5%, which is what they should do,
+being the ones that DO have an elementary root.
+
+Two supporting numbers point the same way. The seven-wave residual evaluated
+at the structure read straight off the profile is 2.5e-2 on controls against
+1.7e-1 and 2.4e-1 on the two stubborn groups; and handing that read to the
+Newton finishes 79-82% of controls against **2%** of the never-starting
+stubborn lanes.
+
+**So the answer to section 5's question is: the solver fails on these
+interfaces because their solution is not in the family it searches.** Not a
+seed, not conditioning, not coplanarity -- all three were tested and cleared
+above. Figures for individual lanes (`scripts/plot_tube_profiles.py`, written
+to the git-ignored `figs/tubes/`) show it directly: lane 1187 reverses the
+field twice while |B_t| dips to zero, lane 1519 does it inside a single slow
+wave, and v_z stays at 1e-14 throughout, so these are planar problems.
+
+Caveats, so the claim is not overread: the detector is blind below ~1e-2 in
+strength, the groups are 100 lanes each (so a percentage carries about +-5),
+and a compound wave is identified by what its jump violates, not by resolving
+its internal structure.
+
 ---
 
 ## 5b. Is the answer UNIQUE?  Yes on the measured population — but the residual is a weaker certificate than it looks
