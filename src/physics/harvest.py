@@ -47,9 +47,11 @@ import numpy as np
 R_NOT_CONVERGED = 0
 R_RAY_FAILED = 1
 R_UNPHYSICAL = 2
+R_SELF_CROSSING = 3        # converged, physical, but the fan is out of order
 R_REASONS = {R_NOT_CONVERGED: "not_converged",
              R_RAY_FAILED: "ray_failed",
-             R_UNPHYSICAL: "unphysical"}
+             R_UNPHYSICAL: "unphysical",
+             R_SELF_CROSSING: "self_crossing"}
 
 
 class Harvester:
@@ -114,12 +116,17 @@ class Harvester:
         return idx[(np.arange(idx.size) + off) % self.stride == 0]
 
     def record(self, left, right, Bn, *, cls, converged, zones, VsLv, VsRv,
-               attempts, accepted, seven_wave, source=0, ray_ok=None):
+               attempts, accepted, seven_wave, source=0, ray_ok=None,
+               crossed=None):
         """Record one batch.
 
         ``left``/``right`` are 7-lists of per-lane arrays in the solver frame,
         ``zones`` the six R2..R7 zone states, ``accepted`` the lanes that
-        passed every gate (converged, ray resolved, state physical).
+        passed every gate (converged, ray resolved, state physical, fan
+        ordered).  A lane in ``accepted`` is written as a training row, so
+        the caller must apply every gate BEFORE calling -- the wave-order
+        gate once ran after the harvest, and 1.04% of the seven-wave rows of
+        a 128^2 harvest were self-crossing fans.
 
         ``source`` tags which solver produced the rows: 0 = the seven-wave
         Newton, 1 = the five-wave planar solver.  Both write exactly the same
@@ -132,6 +139,9 @@ class Harvester:
         from one whose state came out unphysical.  Without it both are
         recorded as unphysical, which is what the code did before this
         argument existed even though ``R_RAY_FAILED`` was defined.
+        ``crossed`` does the same for the wave-order gate: those lanes
+        converged to a physical state, so without it they too would be
+        filed as unphysical.
 
         MAY BE CALLED MORE THAN ONCE PER SWEEP, but only on DISJOINT lane
         sets: the unsolved branch fires on every call, so a second call must
@@ -166,6 +176,8 @@ class Harvester:
                 if ray_ok is not None:
                     reason[np.asarray(converged) & ~np.asarray(ray_ok)] = R_RAY_FAILED
                 reason[~np.asarray(converged)] = R_NOT_CONVERGED
+                if crossed is not None:
+                    reason[np.asarray(crossed)] = R_SELF_CROSSING
                 idx = self._subsample(np.flatnonzero(bad))
                 idx = idx[:self.max_unsolved - self.n_unsolved]
                 if idx.size:

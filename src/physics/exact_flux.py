@@ -727,17 +727,43 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
 
     n_unphys = int((conv & ray_ok & ~physical).sum())
 
+    # ── admissibility: the waves must not cross ───────────────────────────
+    # Applied to the seven-wave path only, and BEFORE the harvest.  It used to
+    # run after the rescues, i.e. after the harvest too, so every fan it
+    # rejected was still written to the solved shards as a training row.
+    # MEASURED by replaying this function over the shards (2026-09-19): 0.53%
+    # of the seven-wave rows of rotor_64_exact and 1.04% of rotor_128_exact
+    # (24,238 of 2.33M) were self-crossing, 3-7% in the first steps.
+    #
+    # "Seven-wave path" means the seven-wave CLASSES, not `take`: the
+    # degenerate classes are answered inside solve_batch by the three-wave
+    # solver, which fills only R4/R5 and VsL/VsR.  Their VsLv/VsRv are zero
+    # (or, after a reclassification, the abandoned seven-wave attempt's), so
+    # the order read off them is [0, 0, 0, v_cd, 0, 0, 0] and every such lane
+    # with |v_cd| > tol was rejected.  MEASURED over a 32^2 rotor to t=0.4:
+    # 2205 of 2472 rejections (89%) were degenerate lanes, 1.7% of all exact
+    # fluxes (72 against 69 in the first step).  The planar answers need no
+    # test: both rotations have zero strength by construction, so they cannot
+    # cross anything that matters.
+    crossed = np.zeros(sel.size, dtype=bool)
+    if _WAVE_ORDER and take.any():
+        crossed = _self_crossing(res["zones"], res["VsLv"], res["VsRv"],
+                                 _WAVE_ORDER_TOL)
+        crossed &= take & np.isin(cls, (C.FULL7, C.COPLANAR))
+        take = take & ~crossed
+    n_crossed = int(crossed.sum())
+
     # Harvest before the flux assembly, while the per-lane verdict is still
     # in hand: `take` is the only place that knows a lane cleared EVERY gate
-    # (converged, ray resolved, state physical), and downstream only the
-    # assembled flux survives.
+    # (converged, ray resolved, state physical, fan ordered), and downstream
+    # only the assembled flux survives.
     if harvester is not None:
         from src.physics.harvest import Harvester           # noqa: F401
         harvester.record(
             subL, subR, subBn, cls=cls, converged=conv, zones=res["zones"],
             VsLv=res["VsLv"], VsRv=res["VsRv"],
             attempts=res.get("attempts", np.ones(sel.size, dtype=int)),
-            accepted=take, ray_ok=ray_ok, source=0,
+            accepted=take, ray_ok=ray_ok, crossed=crossed, source=0,
             seven_wave=np.isin(cls, (C.FULL7, C.COPLANAR)))
 
     # ── degenerate answers: only where the INPUT was degenerate ───────────
@@ -755,6 +781,12 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
     n_reclass_refused = int((take & reclass).sum())
     take = take & ~reclass
 
+    # A self-crossing lane is NOT offered to the rescues below (hence the
+    # `~crossed` in both candidate masks).  That is what the code did while
+    # the gate ran after them, so moving the gate changes the harvest and
+    # nothing else.  Offering them to the planar solver would change the
+    # flux, which is a separate decision.
+
     # ── reduced three-wave rescue (opt-in) ────────────────────────────────
     # Only lanes the seven-wave solver did NOT win, and only where the
     # normal field is weak enough for the neglected slow waves to cost less
@@ -765,7 +797,7 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
     take3 = np.zeros(sel.size, dtype=bool)
     n3_att = 0
     if _3WAVE_FALLBACK:
-        cand = np.flatnonzero(~take & (np.abs(subBn) <= _BN_3WX_MAX))
+        cand = np.flatnonzero(~take & ~crossed & (np.abs(subBn) <= _BN_3WX_MAX))
         n3_att = int(cand.size)
         if cand.size:
             r3 = P["reduced"]([c[cand] for c in subL], [c[cand] for c in subR],
@@ -805,7 +837,7 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
     take5 = np.zeros(sel.size, dtype=bool)
     n5_att = 0
     if _PLANAR5_FALLBACK:
-        cand = np.flatnonzero(~take & ~take3)
+        cand = np.flatnonzero(~take & ~crossed & ~take3)
         n5_att = int(cand.size)
         if cand.size:
             sL5 = [c[cand] for c in subL]
@@ -866,29 +898,6 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
                             accepted=np.ones(k5, dtype=bool),
                             seven_wave=np.ones(k5, dtype=bool),
                             source=1)
-
-    # ── admissibility: the waves must not cross ───────────────────────────
-    # Applied to the seven-wave path only.  `res["zones"]` holds that solve's
-    # answer; for a lane rescued by the planar solver it holds the FAILED
-    # seven-wave attempt, so the same test there would reject on the wrong
-    # structure.  The planar answers need no test: both rotations have zero
-    # strength by construction, so they cannot cross anything that matters.
-    #
-    # "Seven-wave path" means the seven-wave CLASSES, not `take`: the
-    # degenerate classes are answered inside solve_batch by the three-wave
-    # solver, which fills only R4/R5 and VsL/VsR.  Their VsLv/VsRv are zero
-    # (or, after a reclassification, the abandoned seven-wave attempt's), so
-    # the order read off them is [0, 0, 0, v_cd, 0, 0, 0] and every such lane
-    # with |v_cd| > tol was rejected.  MEASURED over a 32^2 rotor to t=0.4:
-    # 2205 of 2472 rejections (89%) were degenerate lanes, 1.7% of all exact
-    # fluxes (72 against 69 in the first step).
-    n_crossed = 0
-    if _WAVE_ORDER and take.any():
-        crossed = _self_crossing(res["zones"], res["VsLv"], res["VsRv"],
-                                 _WAVE_ORDER_TOL)
-        crossed &= take & np.isin(cls, (C.FULL7, C.COPLANAR))
-        n_crossed = int(crossed.sum())
-        take = take & ~crossed
 
     take_all = take | take3 | take5
     g = sel[take_all]

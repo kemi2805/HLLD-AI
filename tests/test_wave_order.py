@@ -211,3 +211,94 @@ def test_a_reclassified_lane_is_refused(eos, monkeypatch):
     assert d["n_converged"] == 1, "precondition: the three-wave solve converged"
     assert d["n_reclassified_refused"] == 1
     assert d["n_exact"] == 0 and d["n_degenerate_exact"] == 0
+
+
+# ── the harvest must see the gate ──────────────────────────────────────────
+# `accepted` is what the harvester writes as a TRAINING row.  The gate once ran
+# after the harvest, so every fan it rejected was still written to the solved
+# shards: replayed offline, 1.04% of the 2.33M seven-wave rows of
+# rotor_128_exact were self-crossing.
+
+def _harvest(problems, eos, tmp, *, reject_all):
+    """One sweep with a harvester, gate on.  ``reject_all`` replaces the gate
+    by one that rejects every lane, which makes the ordering of gate and
+    harvest observable whatever the fixture's natural crossing rate is."""
+    import glob
+    from src.physics.harvest import Harvester
+    sL, sR = problems
+    old = os.environ.get("RMHD_WAVE_ORDER")
+    os.environ["RMHD_WAVE_ORDER"] = "1"
+    try:
+        import src.physics.exact_flux as EF
+        EF = importlib.reload(EF)
+        if reject_all:
+            EF._self_crossing = lambda Zc, VL, VR, tol: np.ones(
+                np.shape(VL[0]), dtype=bool)
+        h = Harvester(str(tmp), GAMMA, only_retried=False,
+                      max_solved=10 ** 6, max_unsolved=10 ** 6)
+        EF.exact_flux_batched(sL, sR, eos, idir=0, max_iter=MAX_ITER,
+                              harvester=h)
+        diag = dict(LAST_DIAG)
+        h.close()
+    finally:
+        if old is None:
+            os.environ.pop("RMHD_WAVE_ORDER", None)
+        else:
+            os.environ["RMHD_WAVE_ORDER"] = old
+        import src.physics.exact_flux as EF
+        importlib.reload(EF)
+
+    def load(kind, keys):
+        z = [np.load(f) for f in sorted(glob.glob(str(tmp / f"{kind}_*.npz")))]
+        return {k: np.concatenate([q[k] for q in z]) if z else np.zeros(0)
+                for k in keys}
+
+    return (load("solved", ("zones", "speeds", "source")),
+            load("unsolved", ("reason", "cls")), diag)
+
+
+@pytest.fixture(scope="module")
+def harvest_all_rejected(problems, eos, tmp_path_factory):
+    return _harvest(problems, eos, tmp_path_factory.mktemp("wo_all"),
+                    reject_all=True)
+
+
+def test_a_rejected_fan_is_not_harvested_as_solved(harvest_all_rejected):
+    solved, _, diag = harvest_all_rejected
+    assert diag["n_wave_order_rejected"] > 0, (
+        "fixture has no seven-wave answers for the gate to reject")
+    n0 = int((solved["source"] == 0).sum())
+    assert n0 == 0, (f"{n0} seven-wave rows the gate rejected were harvested "
+                     "as solved training rows")
+
+
+def test_a_rejected_fan_is_harvested_as_unsolved_with_its_reason(
+        harvest_all_rejected):
+    """Filed under its own reason: those lanes converged to a physical state,
+    so without one they would read as `unphysical` in the failure set."""
+    from src.physics.harvest import R_SELF_CROSSING
+    _, unsolved, diag = harvest_all_rejected
+    n = int((unsolved["reason"] == R_SELF_CROSSING).sum())
+    assert n == diag["n_wave_order_rejected"]
+
+
+def test_no_harvested_seven_wave_row_is_self_crossing(problems, eos,
+                                                      tmp_path_factory):
+    """The contract in the consumer's terms: replay the gate on the SHARDS.
+
+    The shard keeps everything the gate reads -- zones R1..R8 and the speeds
+    in spatial order (LF, LA, LS, CD, RS, RA, RF) -- so this is the same test
+    exact_flux_batched applied, not an approximation of it."""
+    import src.physics.exact_flux as EF
+    solved, _, _ = _harvest(problems, eos, tmp_path_factory.mktemp("wo_real"),
+                            reject_all=False)
+    seven = solved["source"] == 0
+    if not seven.any():
+        pytest.skip("no seven-wave rows harvested")
+    Z, S = solved["zones"][seven], solved["speeds"][seven]
+    Zc = [[Z[:, z, j] for j in range(7)] for z in range(1, 7)]      # R2..R7
+    crossed = EF._self_crossing(Zc, [S[:, 0], S[:, 1], S[:, 2]],
+                                [S[:, 6], S[:, 5], S[:, 4]],
+                                EF._WAVE_ORDER_TOL)
+    assert int(np.sum(crossed)) == 0, (
+        f"{int(np.sum(crossed))} harvested seven-wave rows are self-crossing")
