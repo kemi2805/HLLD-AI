@@ -622,7 +622,7 @@ stubborn lanes.
 interfaces because their solution is not in the family it searches.** Not a
 seed, not conditioning, not coplanarity -- all three were tested and cleared
 above. Figures for individual lanes (`scripts/plot_tube_profiles.py`, written
-to the git-ignored `figs/tubes/`) show it directly: lane 1187 reverses the
+to the git-ignored `figs/tubes/`; the committed one is below) show it directly: lane 1187 reverses the
 field twice while |B_t| dips to zero, lane 1519 does it inside a single slow
 wave, and v_z stays at 1e-14 throughout, so these are planar problems.
 
@@ -630,6 +630,50 @@ Caveats, so the claim is not overread: the detector is blind below ~1e-2 in
 strength, the groups are 100 lanes each (so a percentage carries about +-5),
 and a compound wave is identified by what its jump violates, not by resolving
 its internal structure.
+
+**Over the whole population, not a sample** (calea job 721, every one of the
+1004 still-stubborn lanes plus 300 controls, at 256 + 512 cells): the reversal
+fused to a jump appears on **58.8%** of the lanes the ladder cannot start and
+**68.0%** of those it loses, against **4.3%** of controls. The control rate is
+higher than the 2.0% measured at 512 + 1024 cells, as a coarser screen should
+be; the stubborn rates agree with the 100-lane sample within its +-5.
+
+![A solved interface beside a stubborn one](figs/compound_wave_pair.svg)
+
+*Left: lane 853, an interface the solver answers exactly -- five planar
+waves, the two rotations silent, and B_t never changes sign. Right: lane 431,
+a stubborn interface at almost the same normal field (B_n = +1.04 against
++1.05). At xi ~ 0.6 the tangential field flips from -0.22 to +0.20 exactly
+where rho, P_tot, v_x and v_y all jump (red dashed line), and it crosses zero
+again inside the right-going fast rarefaction. Grey bands are the detected
+features. Lane 431 was chosen as the clearest of the whole screen (job 724
+re-ran the eight best candidates and a matched control each at 512 + 1024
+cells); the title says only what is visible, because at this resolution a
+fused wave and a pi-rotation riding exactly on the slow wave look the same.
+Either way no admissible elementary root exists: brute force, which
+enumerates every rotation including pi, found none. PDF for the paper:
+`figs/compound_wave_pair.pdf`.*
+
+### Where the stubborn population stands (2026-09-21)
+
+Of the 1280 interfaces that were stubborn in the pre-fix 64^2 harvest:
+
+| | lanes | share |
+|---|---|---|
+| solved by today's production path (seven-wave 78, planar 230, both 32) | 276 | 21.6% |
+| + an exact answer from the eps-ladder (item B) | 51 | |
+| + from brute force, B_n >= 0 only | 21 | |
+| + from the tube read handed to the Newton (item C) | 12 | |
+| **exact today, by any method** (the three rescues overlap; union 68) | **344** | **26.9%** |
+| left without an exact answer | 936 | 73.1% |
+
+Brute force found 13 further roots on B_n < 0 lanes, but it ran with the
+sign-swapped Alfven speeds, so those roots are not verified under the fixed
+solver and are not counted. Of the 936 left, 933 were screened by the tube
+test and **60.0%** carry the reversal fused to a jump -- the structure the
+seven-wave family cannot hold. The eps-ladder, brute force and the tube seed
+are measurement tools; none runs in production, and turning any of them into
+a production rescue would need its own paired rotor replay.
 
 ---
 

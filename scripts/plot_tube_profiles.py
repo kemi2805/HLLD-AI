@@ -111,6 +111,8 @@ def main():
     ap.add_argument("--out", default="figs/tubes")
     ap.add_argument("--pair", help="two gidx values, control first: a single "
                                    "side-by-side figure instead of one page each")
+    ap.add_argument("--fig", help="with --pair: write exactly this file (the "
+                                  "extension picks the format, e.g. docs/figs/x.pdf)")
     a = ap.parse_args()
     import matplotlib
     matplotlib.use("Agg")
@@ -126,7 +128,7 @@ def main():
                                                          float(z["Bn"][j]))
         pair(z, ja, jb, (lab(ja, "solved exactly: five planar waves"),
                          lab(jb, "stubborn: B_t reverses where rho and P jump")),
-             os.path.join(a.out, "pair_%05d_%05d.png" % (ga, gb)))
+             a.fig or os.path.join(a.out, "pair_%05d_%05d.png" % (ga, gb)))
         return
     n = z["Bn"].size
     for j in range(n):
