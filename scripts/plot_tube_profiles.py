@@ -86,11 +86,15 @@ def pair(z, ja, jb, titles, out):
         # on a scale set by the far side of the tube it is easy to miss
         sb = sgn * Bt
         flip = np.flatnonzero(np.diff(np.sign(sb)) != 0)
-        for f in flip[:2]:
+        span = sb.max() - sb.min()
+        for n_f, f in enumerate(flip[:2]):
             for r in range(5):
                 ax[r, col].axvline(x[f], color="#b91c1c", lw=1.0, ls="--")
+            # alternate the label to the left-below / right-above of the crossing
+            # so two reversals close together do not print on top of each other
+            dx, dy = ((-0.45, -0.30) if n_f % 2 == 0 else (0.08, 0.30))
             ax[2, col].annotate("B_t reverses", xy=(x[f], 0.0),
-                                xytext=(x[f] + 0.12, 0.45 * sb.min()),
+                                xytext=(x[f] + dx, dy * span),
                                 fontsize=9, color="#b91c1c",
                                 arrowprops=dict(arrowstyle="->", color="#b91c1c",
                                                 lw=0.9))
@@ -121,7 +125,7 @@ def main():
         lab = lambda j, g: "%s — lane %d, Bn = %+.2f" % (g, int(z["gidx"][j]),
                                                          float(z["Bn"][j]))
         pair(z, ja, jb, (lab(ja, "solved exactly: five planar waves"),
-                         lab(jb, "stubborn: reversal fused to a slow wave")),
+                         lab(jb, "stubborn: B_t reverses where rho and P jump")),
              os.path.join(a.out, "pair_%05d_%05d.png" % (ga, gb)))
         return
     n = z["Bn"].size
