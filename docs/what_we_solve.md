@@ -764,6 +764,54 @@ enrichment is below 1 on x-faces and 1.1-1.4 on late y-faces. That fits the
 census, where a reversal alone predicts little and the reversal matters only
 together with a nearly normal field.
 
+### The same at twice the resolution (2026-09-22)
+
+Two things could have made the census above an artifact: the tube test's own
+resolution, and the grid's. Both were checked, and neither is.
+
+**The tube labels are resolution-stable.** 5% of the 64^2 lanes (512 of
+them, a systematic subsample; calea job 1236) were re-tube-tested at 512 +
+1024 cells instead of 256 + 512. The labels agree on **98.4%**, and on
+**99.8%** once t = 0 is left out -- 7 of the 8 disagreements are on the
+rotor's initial edge, and the single one elsewhere is a lane the finer tube
+calls compound and the coarser one does not. Solvability came out identical,
+as it must, since it does not involve the tube. The plan's threshold was 95%,
+so the 256 + 512 labels stand.
+
+**The 128^2 census reproduces the 64^2 one** (calea job 1237, 9 h 15 min,
+16,930 attempted interfaces).
+
+| | 64^2 | 128^2 |
+|---|---|---|
+| attempted interfaces | 10,172 | 16,930 |
+| unsolvable | 6.6% | 6.4% |
+| compound | 2.5% | 2.3% |
+| P(compound given unsolvable) | 29.0% | 24.6% |
+| P(unsolvable given compound) | 75.7% | 68.1% |
+| the rule flags | 2.48% | 2.18% |
+| ... of which compound (precision) | 81.3% | 81.8% |
+| ... of all compound found (recall) | 79.2% | 77.0% |
+| ... of which unsolvable | 76.2% | 66.9% |
+
+The compound fraction is the same at both resolutions, so it is not a
+discretisation artifact, and the rule carries over untouched -- it was fitted
+on 64^2 and applied to 128^2 with the same two thresholds.
+
+**The classifier transfers both ways.** Trained on one resolution and tested
+on the other, with no refitting:
+
+| target | 64^2 -> 128^2 | 128^2 -> 64^2 |
+|---|---|---|
+| compound | AUC 0.994 | 0.988 |
+| unsolvable | 0.963 | 0.963 |
+
+![Census at 128^2, t = 0.30](figs/compound_census_128_t030.png)
+
+*The same time as the figure above, at 128^2. The compound interfaces are no
+longer scattered points: they line up into curves along the wound-up shell,
+which is what a codimension-one locus -- the set where the tangential field
+vanishes -- should look like once it is resolved.*
+
 **What this means for ML.** The seed network cannot learn these lanes as
 they stand. Its output is the seven-wave unknowns, which cannot express a
 compound wave, and the label would be ambiguous: Balsara 1 has two exact
@@ -995,6 +1043,8 @@ these resolutions for a scheme of this class.
 | failure map (5) | `scripts/failure_map_2d.py results/rotor_64_exact --out figs/failure_map` |
 | snapshot census (5) | `sbatch scripts/calea_snapshot_census.sh` (from `ssh itp`; writes `results/snapshot_census_64`) |
 | compound classifier and maps (5) | `scripts/compound_classifier.py results/snapshot_census_64 --run results/rotor_64_exact --maps figs/census` |
+| 128^2 census (5) | `RUN=results/rotor_128_exact TAG=128 sbatch scripts/calea_snapshot_census.sh` |
+| tube-resolution check (5) | `NSHARDS=1280 TAG=64_res512 EXTRA="--ncells 512" sbatch scripts/calea_snapshot_census.sh` |
 
 The census, hierarchy, rotation and rarefaction measurements were run from
 session scripts on 2026-09-09; the numbers and their method are stated above
