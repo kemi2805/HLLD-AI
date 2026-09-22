@@ -675,6 +675,104 @@ seven-wave family cannot hold. The eps-ladder, brute force and the tube seed
 are measurement tools; none runs in production, and turning any of them into
 a production rescue would need its own paired rotor replay.
 
+### Where compound waves appear, and what predicts them (2026-09-22)
+
+The screens above worked on harvest rows, which carry no grid position. To
+put compound waves on the rotor, the census rebuilds every interface from
+the snapshots instead (`scripts/snapshot_census.py`, calea job 829). It
+covers the 9 snapshots of the 64^2 run. At each, it reconstructs the face
+states with the run's own MC limiter, applies production's gates (bad state,
+weak jump, upwind), solves what remains with today's code (after the Alfven
+sign fix), and tube-tests every lane at 256 + 512 cells. That gives 10,172
+attempted interfaces, each with a position, a time and two labels.
+
+**Base rates.**
+
+| | share |
+|---|---|
+| unsolvable today (neither the seven-wave nor the planar solver) | 6.6% |
+| compound (the tube sees a reversal fused to a jump) | 2.5% |
+| P(compound given unsolvable) | 29.0% |
+| P(unsolvable given compound) | 75.7% |
+
+Leaving out t = 0, the rotor's initial edge, changes these by at most 2
+points. So compound interfaces are mostly unsolvable, but they are only about
+a third of what is unsolvable. The rest is the older difficulty, crowded wave
+speeds; see below.
+
+**What predicts compound: a weak tangential field that reverses.** The
+features are all computable from (L, R, B_n) before any solve
+(`scripts/compound_classifier.py`). Cross-validated by snapshot time, an L1
+logistic regression separates compound from elementary interfaces with AUC
+0.991 +- 0.002. A single feature, |B_t| on the weaker side, already reaches
+0.95. On compound lanes its median is 0.009; on elementary lanes it is 0.56.
+
+Small B_t alone does not make the label, which rules out the obvious worry.
+A reversal through |B_t| = 0 is nearly automatic if one side already has
+B_t ~ 0, so the label could have been circular. The data say it is not:
+
+| min\|B_t\| / \|B_n\| below | lanes | compound | unsolvable | share of all compound |
+|---|---|---|---|---|
+| 0.01 | 402 | 28.6% | 31.1% | 44.4% |
+| 0.03 | 717 | 22.2% | 25.2% | 61.4% |
+| 0.10 | 1353 | 16.0% | 20.3% | 83.8% |
+| 0.30 | 2723 | 9.3% | 17.4% | 98.1% |
+
+Within the 1353 lanes below 0.1, the label still discriminates. Compound
+lanes there are 81.6% unsolvable; the others only 8.5%. What separates them
+is the angle between the two tangential fields (AUC 0.85): compound lanes
+rotate by more than pi/2. That gives a two-condition rule:
+
+> **min|B_t| < 0.3 |B_n|  and  |Δψ| > π/2**
+> (the field is nearly normal to the face, and its tangential part reverses)
+
+It flags 252 lanes (2.5%). Of those, 81% are compound, and it finds 79% of
+all compound lanes. 76% of the lanes it flags are unsolvable, against 4.9%
+outside it. This is the regime where the slow, Alfven and fast speeds
+approach one another: near B_t = 0 the MHD system loses strict
+hyperbolicity, and that is where intermediate and compound waves live.
+
+**Where they sit.** The regime has a geometric reading on the rotor.
+
+- On x-faces, compound lanes lie on the outer fast front near the x-axis,
+  where the field is still along x.
+- On y-faces, they line the edges of the wound-up central band, where the
+  tangential component B_x changes sign.
+
+![Census at t = 0.30](figs/compound_census_t030.png)
+
+*The 64^2 rotor at t = 0.30, over log density. x-faces left, y-faces right.
+Red: compound; blue: unsolved but elementary; grey: solved. The other eight
+times are in `figs/census/` (not tracked); run the command in "Reproducing
+the numbers" to redraw them.*
+
+**The other two thirds: crowded speeds, not compound waves.** For the target
+"unsolvable", the time-cross-validated AUC is 0.957. The strongest
+coefficients are a small gap between the contact and the waves beside it
+(`d_contact`), a narrow fast fan (`d_fast`) and high magnetisation. The
+unsolved elementary lanes collect in the low-density central cavity, mostly
+on y-faces. This is the pressure-cancellation and speed-crowding difficulty
+of high sigma, not a missing wave.
+
+**The failure map agrees.** `scripts/failure_map_2d.py` puts the pre-fix
+harvest's own failures (attempted but not exact) back on the grid. It sees
+the same x/y asymmetry: y-sweeps fail 67-79% of their attempts, x-sweeps
+25-41%. On y-faces the B_n < 0 share of failures equals the attempted base
+rate, so the Alfven sign bug does not drive that asymmetry. With a 5% field
+floor, failures lean only mildly towards reversals of the cell field:
+enrichment is below 1 on x-faces and 1.1-1.4 on late y-faces. That fits the
+census, where a reversal alone predicts little and the reversal matters only
+together with a nearly normal field.
+
+**What this means for ML.** The seed network cannot learn these lanes as
+they stand. Its output is the seven-wave unknowns, which cannot express a
+compound wave, and the label would be ambiguous: Balsara 1 has two exact
+solutions. A classifier needs no network, though. The rule above uses two
+numbers that are cheap before any solve, and it could route the 2.5% it
+flags past the full retry budget (plan F, step 4; not done). The next checks
+are the 128^2 census, whether the rule transfers across resolution, and
+whether the tube labels survive at 512 + 1024 cells.
+
 ---
 
 ## 5b. Is the answer UNIQUE?  Yes on the measured population — but the residual is a weaker certificate than it looks
@@ -894,6 +992,9 @@ these resolutions for a scheme of this class.
 | a solved profile | `scripts/plot_riemann_profile.py` |
 | a π-rotation profile | `scripts/plot_pi_rotation.py` |
 | planar-solver claims | `scripts/measure_planar_claims.py results/rotor_64_exact/harvest` |
+| failure map (5) | `scripts/failure_map_2d.py results/rotor_64_exact --out figs/failure_map` |
+| snapshot census (5) | `sbatch scripts/calea_snapshot_census.sh` (from `ssh itp`; writes `results/snapshot_census_64`) |
+| compound classifier and maps (5) | `scripts/compound_classifier.py results/snapshot_census_64 --run results/rotor_64_exact --maps figs/census` |
 
 The census, hierarchy, rotation and rarefaction measurements were run from
 session scripts on 2026-09-09; the numbers and their method are stated above

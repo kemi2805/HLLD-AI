@@ -95,7 +95,7 @@ STRENGTH_CUTS = (1e-6, 1e-4, 1e-3, 1e-2, 1e-1)
 
 # ── population ───────────────────────────────────────────────────────────
 
-def load_lanes(d, n_per_group, seed=0, pick=None):
+def load_lanes(d, n_per_group, seed=0, pick=None, n_control=None):
     """Lanes from a coplanar_limit run, grouped by what item B made of them.
 
     ``pick`` selects exact lanes by their index in that run's concatenation
@@ -123,9 +123,11 @@ def load_lanes(d, n_per_group, seed=0, pick=None):
         i = np.flatnonzero(masks[g])
         if pick is not None:
             i = np.array([j for j in i if j in pick], dtype=int)
-        elif n_per_group and i.size > n_per_group:
-            i = np.sort(np.random.default_rng(seed + gi).choice(i, n_per_group,
-                                                                replace=False))
+        else:
+            cap = n_control if (g == "control" and n_control is not None) else n_per_group
+            if cap and i.size > cap:
+                i = np.sort(np.random.default_rng(seed + gi).choice(i, cap,
+                                                                    replace=False))
         out["UL"].append(UL[i]); out["UR"].append(UR[i]); out["Bn"].append(Bn[i])
         out["orig"].append(orig[i]); out["gidx"].append(i)
         out["group"].append(np.full(i.size, gi, np.int8))
@@ -236,7 +238,7 @@ def elementary(feat, prof, Ptot, j, bt_floor=1e-3):
     is precisely the switch-off structure an elementary wave cannot carry,
     because the rotation is then glued to the magnitude change).
 
-    Returns ``(kind, dpsi, dmag, bt_min_rel)`` with kind
+    Returns ``(kind, dpsi, dmag, bt_min_rel, BtA, BtB)`` with kind
         0 magnetosonic (no rotation)      1 rotation only (an RD)
         2 REVERSING     rotation by ~pi carried together with a magnitude
                         or density jump -- compound / intermediate
@@ -258,16 +260,16 @@ def elementary(feat, prof, Ptot, j, bt_floor=1e-3):
     bt_in = np.hypot(prof["By"][lo:hi, j].numpy(), prof["Bz"][lo:hi, j].numpy())
     bt_min_rel = float(bt_in.min()) / max(scale, 1e-30)
     if scale < bt_floor:
-        return -1, 0.0, 0.0, bt_min_rel
+        return -1, 0.0, 0.0, bt_min_rel, BtA, BtB
     dpsi = abs(sc(wrap(np.arctan2(b[6], b[5]) - np.arctan2(a[6], a[5]))))
     dmag = max(abs(BtB - BtA) / max(scale, 1e-30),
                abs(sc(b[0]) - sc(a[0])) / max(abs(sc(a[0])), 1e-30),
                abs(sc(b[1]) - sc(a[1])) / max(abs(sc(a[1])), 1e-30))
     if dpsi < 0.05:
-        return 0, dpsi, dmag, bt_min_rel
+        return 0, dpsi, dmag, bt_min_rel, BtA, BtB
     if dmag < 0.05:
-        return 1, dpsi, dmag, bt_min_rel
-    return (2 if dpsi > np.pi - 0.3 else 3), dpsi, dmag, bt_min_rel
+        return 1, dpsi, dmag, bt_min_rel, BtA, BtB
+    return (2 if dpsi > np.pi - 0.3 else 3), dpsi, dmag, bt_min_rel, BtA, BtB
 
 
 def match(f1, f2, tol=0.02):
@@ -355,13 +357,86 @@ def tube(UL, UR, Bn, eos, ncells, tend, limiter, max_steps):
     return prof, Ptot, t, rho.shape[0]
 
 
+TUBE_KEYS = ("nfeat", "counts", "counts_sure", "unassigned", "fnov", "fkind",
+             "fdpsi", "fdmag", "fbtmin", "fbtA", "fbtB", "fspeed", "fwidth",
+             "ffam", "fstr")
+
+
+def classify_tubes(UL, UR, Bn, ncells, tend, *, limiter="mc", max_steps=20000,
+                   thresh=2e-3, match_tol=0.02, speed_tol=0.01, log=None):
+    """The tube test for a batch of interfaces, the one code path the screen
+    and the snapshot census share.
+
+    ``UL``/``UR`` are (n, 7) solver-frame states, ``Bn`` (n,).  Evolves every
+    lane at ``ncells`` and ``2 * ncells``, confirms each feature at both, and
+    classifies it (family by speed; elementary() for what the jump carries).
+    Returns ``(dict over TUBE_KEYS, runs)``; ``runs[1]`` is the finer tube,
+    which ``read_zones`` needs for a tube seed.
+    """
+    global BN_J
+    BN_J = Bn
+    n = Bn.size
+    eos = hybrid_eos(K=0.0, gamma=GAMMA, gamma_th=GAMMA)
+    runs = []
+    for nc in (ncells, 2 * ncells):
+        prof, Ptot, t_end, ncc = tube(UL, UR, Bn, eos, nc, tend, limiter,
+                                      max_steps)
+        db, fac = indicator(prof, Ptot)
+        runs.append(dict(prof=prof, Ptot=Ptot, t=t_end, nc=ncc, db=db, fac=fac))
+        if log:
+            log("tube at %d cells: t = %.3f" % (nc, t_end))
+
+    nfeat = np.zeros((n, 2), np.int16)
+    counts = np.zeros((n, 7), np.int16)            # confirmed features per family
+    counts_sure = np.zeros((n, 7), np.int16)       # ... assigned unambiguously
+    unassigned = np.zeros(n, np.int16)
+    fnov = np.zeros((n, MAXF), np.int8)
+    fkind = np.full((n, MAXF), -2, np.int8)          # elementary() verdict
+    fdpsi = np.full((n, MAXF), np.nan)
+    fdmag = np.full((n, MAXF), np.nan)
+    fbtmin = np.full((n, MAXF), np.nan)
+    fbtA = np.full((n, MAXF), np.nan)             # |Bt| ahead of / behind the feature
+    fbtB = np.full((n, MAXF), np.nan)
+    fspeed = np.full((n, MAXF), np.nan)
+    fwidth = np.full((n, MAXF), np.nan)
+    ffam = np.full((n, MAXF), -2, np.int8)
+    fstr = np.full((n, MAXF), np.nan)
+    for j in range(n):
+        feats = []
+        for r in runs:
+            feats.append(find_features(r["db"][:, j], r["fac"], r["nc"], r["t"],
+                                       thresh))
+        nfeat[j] = (len(feats[0]), len(feats[1]))
+        conf = match(feats[0], feats[1], match_tol)
+        r = runs[1]                                  # classify on the finer run
+        for m, (_, fb) in enumerate(conf[:MAXF]):
+            k, nov = assign(fb, r["prof"], r["Ptot"], j, speed_tol)
+            fnov[j, m] = nov
+            (fkind[j, m], fdpsi[j, m], fdmag[j, m], fbtmin[j, m],
+             fbtA[j, m], fbtB[j, m]) = elementary(fb, r["prof"], r["Ptot"], j)
+            fspeed[j, m] = 0.5 * (fb[0] + fb[1])
+            fwidth[j, m] = fb[1] - fb[0]
+            fstr[j, m] = fb[2]
+            ffam[j, m] = k
+            if k < 0:
+                unassigned[j] += 1
+            else:
+                counts[j, k] += 1
+                if nov == 1:
+                    counts_sure[j, k] += 1
+    return dict(nfeat=nfeat, counts=counts, counts_sure=counts_sure,
+                unassigned=unassigned, fnov=fnov, fkind=fkind, fdpsi=fdpsi,
+                fdmag=fdmag, fbtmin=fbtmin, fbtA=fbtA, fbtB=fbtB, fspeed=fspeed,
+                fwidth=fwidth, ffam=ffam, fstr=fstr), runs
+
+
 def run_shard(a):
     global BN_J
     t0 = time.time()
     tag = "[%s shard %d/%d]" % (socket.gethostname(), a.shard, a.nshards)
     log = lambda s: print("%s %6.0fs  %s" % (tag, time.time() - t0, s), flush=True)
     pick = (set(int(x) for x in a.pick.split(",")) if a.pick else None)
-    pop = load_lanes(a.lanes, a.n, pick=pick)
+    pop = load_lanes(a.lanes, a.n, pick=pick, n_control=a.n_control)
     sel = np.arange(pop["Bn"].size)[a.shard::a.nshards]
     pop = {k: v[sel] for k, v in pop.items()}
     n = sel.size
@@ -385,65 +460,27 @@ def run_shard(a):
     log("calibration: %d/%d lanes have a verified seven-wave answer to check "
         "the detector against" % (known_ok.sum(), n))
 
-    runs = []
-    for nc in (a.ncells, 2 * a.ncells):
-        prof, Ptot, t_end, ncc = tube(UL, UR, Bn, eos, nc, a.tend, a.limiter,
-                                      a.max_steps)
-        db, fac = indicator(prof, Ptot)
-        runs.append(dict(prof=prof, Ptot=Ptot, t=t_end, nc=ncc, db=db, fac=fac))
-        log("tube at %d cells: t = %.3f" % (nc, t_end))
-
-    nfeat = np.zeros((n, 2), np.int16)
-    counts = np.zeros((n, 7), np.int16)            # confirmed features per family
-    counts_sure = np.zeros((n, 7), np.int16)       # ... assigned unambiguously
-    unassigned = np.zeros(n, np.int16)
-    fnov = np.zeros((n, MAXF), np.int8)
-    fkind = np.full((n, MAXF), -2, np.int8)          # elementary() verdict
-    fdpsi = np.full((n, MAXF), np.nan)
-    fdmag = np.full((n, MAXF), np.nan)
-    fbtmin = np.full((n, MAXF), np.nan)
-    fspeed = np.full((n, MAXF), np.nan)
-    fwidth = np.full((n, MAXF), np.nan)
-    ffam = np.full((n, MAXF), -2, np.int8)
-    fstr = np.full((n, MAXF), np.nan)
-    for j in range(n):
-        feats = []
-        for r in runs:
-            feats.append(find_features(r["db"][:, j], r["fac"], r["nc"], r["t"],
-                                       a.thresh))
-        nfeat[j] = (len(feats[0]), len(feats[1]))
-        conf = match(feats[0], feats[1], a.match_tol)
-        r = runs[1]                                  # classify on the finer run
-        for m, (_, fb) in enumerate(conf[:MAXF]):
-            k, nov = assign(fb, r["prof"], r["Ptot"], j, a.speed_tol)
-            fnov[j, m] = nov
-            (fkind[j, m], fdpsi[j, m], fdmag[j, m],
-             fbtmin[j, m]) = elementary(fb, r["prof"], r["Ptot"], j)
-            fspeed[j, m] = 0.5 * (fb[0] + fb[1])
-            fwidth[j, m] = fb[1] - fb[0]
-            fstr[j, m] = fb[2]
-            ffam[j, m] = k
-            if k < 0:
-                unassigned[j] += 1
-            else:
-                counts[j, k] += 1
-                if nov == 1:
-                    counts_sure[j, k] += 1
-        if a.debug and j < a.debug:
-            sL, _ = speeds7([UL[:, c][j:j + 1] for c in range(7)], Bn[j:j + 1])
-            sR, _ = speeds7([UR[:, c][j:j + 1] for c in range(7)], Bn[j:j + 1])
-            print("  lane %d (%s): raw %d/%d, confirmed %d" % (
-                j, GROUPS[pop["group"][j]], len(feats[0]), len(feats[1]), len(conf)))
-            print("    speeds in L: %s" % np.array2string(sL[0], precision=3))
-            print("    speeds in R: %s" % np.array2string(sR[0], precision=3))
-            for m in range(MAXF):
-                if ffam[j, m] == -2:
-                    break
-                print("    xi %+.4f  width %.4f  strength %7.3f  family %s"
-                      " (%d families overlap)"
-                      % (fspeed[j, m], fwidth[j, m], fstr[j, m],
-                         FAMILIES[ffam[j, m]] if ffam[j, m] >= 0 else "UNASSIGNED",
-                         fnov[j, m]))
+    tf, runs = classify_tubes(UL, UR, Bn, a.ncells, a.tend, limiter=a.limiter,
+                              max_steps=a.max_steps, thresh=a.thresh,
+                              match_tol=a.match_tol, speed_tol=a.speed_tol, log=log)
+    (nfeat, counts, counts_sure, unassigned, fnov, fkind, fdpsi, fdmag, fbtmin,
+     fbtA, fbtB, fspeed, fwidth, ffam, fstr) = (tf[k] for k in TUBE_KEYS)
+    for j in range(min(a.debug, n)):
+        sL, _ = speeds7([UL[:, c][j:j + 1] for c in range(7)], Bn[j:j + 1])
+        sR, _ = speeds7([UR[:, c][j:j + 1] for c in range(7)], Bn[j:j + 1])
+        print("  lane %d (%s): raw %d/%d, confirmed %d" % (
+            j, GROUPS[pop["group"][j]], nfeat[j, 0], nfeat[j, 1],
+            int((ffam[j] != -2).sum())))
+        print("    speeds in L: %s" % np.array2string(sL[0], precision=3))
+        print("    speeds in R: %s" % np.array2string(sR[0], precision=3))
+        for m in range(MAXF):
+            if ffam[j, m] == -2:
+                break
+            print("    xi %+.4f  width %.4f  strength %7.3f  family %s"
+                  " (%d families overlap)"
+                  % (fspeed[j, m], fwidth[j, m], fstr[j, m],
+                     FAMILIES[ffam[j, m]] if ffam[j, m] >= 0 else "UNASSIGNED",
+                     fnov[j, m]))
     # Detection, measured two ways, because the loose one is worthless: the
     # seven speeds are often crowded inside 0.02 and a fan is 0.1-0.4 wide in
     # xi, so "a feature covers this wave's speed" is satisfied by accident
@@ -490,6 +527,7 @@ def run_shard(a):
         UL=pop["UL"], UR=pop["UR"],
         Bn=Bn, nfeat=nfeat, counts=counts, counts_sure=counts_sure,
         fnov=fnov, fkind=fkind, fdpsi=fdpsi, fdmag=fdmag, fbtmin=fbtmin,
+        fbtA=fbtA, fbtB=fbtB,
         unassigned=unassigned, known_ok=known_ok,
         known_str=known_str, known_spd=known_spd, known_seen=known_seen,
         n_above=n_above, strength_cuts=np.array(STRENGTH_CUTS),
@@ -618,6 +656,8 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("lanes", nargs="?", help="a coplanar_limit output directory")
     ap.add_argument("--n", type=int, default=100, help="lanes per group (0 = all)")
+    ap.add_argument("--n-control", type=int, default=None,
+                    help="a separate cap for the control group (default: --n)")
     ap.add_argument("--shard", type=int, default=0)
     ap.add_argument("--nshards", type=int, default=1)
     ap.add_argument("--out")
