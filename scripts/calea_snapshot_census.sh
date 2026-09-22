@@ -13,10 +13,14 @@
 #   cd /mnt/rafast/miler/codes/rotor2d/HLLD && sbatch scripts/calea_snapshot_census.sh
 # Knobs: RUN (a rotor run dir with snap_*.npz), TAG, NW, ROOT, EXTRA (e.g.
 # "--times 0.2,0.4 --ncells 512").  Production kernels and warm start.
+# NSHARDS > NW runs only shards 0..NW-1 of NSHARDS: a systematic subsample
+# of NW/NSHARDS of the lanes (NW=64 NSHARDS=1280 EXTRA="--ncells 512" is the
+# tube-resolution check of plan F step 2: 5% of the lanes at 512 + 1024).
 set -u
 ROOT=${ROOT:-/mnt/rafast/miler/codes/rotor2d/HLLD}
 PY=${PY:-$HOME/venv/rmhd/bin/python}
 NW=${NW:-$(nproc)}
+NSHARDS=${NSHARDS:-$NW}
 RUN=${RUN:-/mnt/rafast/miler/codes/rotor2d/HLLD/results/rotor_64_exact}
 TAG=${TAG:-64}
 OUT=${OUT:-/mnt/rafast/miler/codes/rotor2d/HLLD/results/snapshot_census_$TAG}
@@ -34,10 +38,10 @@ ls "$RUN"/snap_*.npz >/dev/null 2>&1 || { echo "PREFLIGHT FAILED: no snapshots i
 export NUMBA_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1
 mkdir -p "$OUT/logs"
 echo "== $(date) $(hostname)  HLLD $(git rev-parse --short HEAD)$([ -z "$(git status --porcelain -- scripts)" ] || echo '+uncommitted')  rmhd $("$PY" -c 'import rmhd.paths as p; print(p.git_rev())')"
-echo "== $RUN -> $OUT  workers=$NW  $EXTRA"
+echo "== $RUN -> $OUT  workers=$NW of $NSHARDS shards  $EXTRA"
 pids=()
 for ((i=0; i<NW; i++)); do
-    "$PY" -u scripts/snapshot_census.py "$RUN" --shard "$i" --nshards "$NW" \
+    "$PY" -u scripts/snapshot_census.py "$RUN" --shard "$i" --nshards "$NSHARDS" \
         --out "$OUT/shard_$(printf '%03d' $i).npz" $EXTRA \
         > "$OUT/logs/w$(printf '%03d' $i).log" 2>&1 &
     pids+=($!)
