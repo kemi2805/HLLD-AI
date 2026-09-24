@@ -1017,6 +1017,52 @@ final 1.089e-02 with the gate against 7.391e-02 without (max over the run
 reference 33% away, and a visible reduction in the scheme's own
 inconsistency. It is the better argument for the gate than coverage is.
 
+### 5d. The legacy scalar `solve_riemann` can converge to a non-solution (2026-09-24)
+
+`rmhd.solver.solve_riemann` -- the Fortran-port entry point that answers the
+13 built-in test cases, NOT the path any run or harvest uses -- carries four
+unknowns when `Bx != 0` (`p_LF, By_CD, Bz_CD, p_RF`) and a multistart that
+enumerates the Alfven branches. Its residual covers those four equations and
+says nothing about the tangential FIELD at the contact, so it can report
+convergence on a state that is not a solution.
+
+Measured over all 13 cases, checking the contact directly -- across a
+contact only the density jumps, so v_x, the total pressure, the tangential
+velocity and the tangential field must all be continuous:
+
+| cases | contact defect |
+|---|---|
+| 1-11, 13 | 6e-13 ... 2.3e-10 |
+| **12 (Balsara 5)** | **4.7e-5 on calea, 1.2e-4 on the laptop** |
+
+All of case 12's defect is in the tangential field (By 6.7e-4, Bz 3.3e-4)
+while its own `|fvec|` is 3.9e-11. And it is not only a residual: the
+production six-unknown batched solver converges on this problem on its FIRST
+attempt from the network seed, full residual 7.4e-11, contact 1.3e-11 -- and
+its answer differs from the scalar one by **7.3e-3 in Bz (1.3%)** and 1.3e-3
+in the star density. So the scalar answer is wrong at the percent level in
+one component, with a converged flag and a 4e-11 residual to show for it.
+That the defect differs between hosts (4.7e-5 / 1.2e-4) is the same
+branch-chaos this path is known for: 1-ulp library differences send the
+multistart to another Alfven branch.
+
+The cause is the slow-wave over-determination described in section 3: each
+slow wave is prescribed BOTH tangential components while its family has one
+parameter, so the left slow wave need not reach the prescribed `Bt_CD`, and
+in the four-unknown form nothing asks it to.
+
+**Fixed by refusing, not by hiding.** `solve_riemann` now computes
+`contact_defect`, returns it in its result dict, and when it exceeds
+`CONTACT_TOL = 1e-8` sets `converged = False` and warns, naming the batched
+solver. With `Bx = 0` the contact is a tangential discontinuity and the field
+may legitimately jump, so only v_x and the total pressure are checked there.
+
+**Scope.** Nothing else depends on this path: the rotor runs, the harvest
+and every coverage number in this document go through
+`exact_flux_batched`, and the Balsara 5 figure
+(`scripts/balsara5_slowwave.py`) builds its exact solution from the batched
+six-unknown solver. The 13-case demonstration is the only consumer.
+
 ## 6. Are the waves resolved properly?
 
 Two integrations, and only one of them is certified by the residual.
