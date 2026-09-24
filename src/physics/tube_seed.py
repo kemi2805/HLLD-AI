@@ -35,7 +35,7 @@ import numpy as np
 import torch
 
 from .c2p import conservative_to_primitive
-from .hlld import hlld_flux, primitive_to_conserved
+from .hlld import hlld_flux, hlle_flux, primitive_to_conserved
 from .reconstruction import reconstruct_prims
 
 _KEYS = ("D", "Sx", "Sy", "Sz", "tau")
@@ -75,11 +75,14 @@ def _bc(d, ng):
         v[-ng:] = v[-ng - 1:-ng]
 
 
-def _rhs(prims, eos, dx, ng, limiter):
+_FLUX = {"hlld": hlld_flux, "hlle": hlle_flux}
+
+
+def _rhs(prims, eos, dx, ng, limiter, flux="hlld"):
     L, R = reconstruct_prims(prims, axis=0, eos=eos, limiter=limiter)
     # B_n is single-valued at a face and constant in 1D
     L["Bx"] = R["Bx"] = prims["Bx"][:1].expand(L["rho"].shape).clone()
-    F, _, _ = hlld_flux(L, R, eos, idir=0)
+    F, _, _ = _FLUX[flux](L, R, eos, idir=0)
     out = {}
     for k in _KEYS + ("By", "Bz"):
         f = F[k]
@@ -88,7 +91,7 @@ def _rhs(prims, eos, dx, ng, limiter):
 
 
 def run_tubes(UL, UR, Bn, eos, *, ncells=192, tend=0.18, cfl=0.3,
-              limiter="mc", ng=2, max_steps=400):
+              limiter="mc", ng=None, max_steps=400, flux="hlld"):
     """Evolve N Riemann problems to ``tend`` on ``x in [-0.5, 0.5]``.
 
     ``UL``/``UR`` are ``(N, 7)`` solver-frame states (rho, P_tot, vx, vy, vz,
@@ -98,6 +101,9 @@ def run_tubes(UL, UR, Bn, eos, *, ncells=192, tend=0.18, cfl=0.3,
     ``tend`` is chosen so the fastest wave stays inside the domain: the fast
     speed is below 1, so waves reach at most ``tend`` from the centre.
     """
+    if ng is None:                       # the stencil sets the ghost count
+        from src.physics.reconstruction import ghosts_needed
+        ng = ghosts_needed(limiter)
     dx = 1.0 / ncells
     prims = _prims_from(np.asarray(UL, float), np.asarray(UR, float),
                         np.asarray(Bn, float), eos, ncells, ng)
@@ -125,10 +131,10 @@ def run_tubes(UL, UR, Bn, eos, *, ncells=192, tend=0.18, cfl=0.3,
         smax = float((prims["vx"].abs() + torch.clamp(cs + 0.5, max=1.0)).max())
         dt = min(cfl * dx / max(smax, 1e-8), tend - t)
 
-        k1 = _rhs(prims, eos, dx, ng, limiter)
+        k1 = _rhs(prims, eos, dx, ng, limiter, flux)
         c1 = {k: cons[k] + dt * k1[k] for k in cons}
         p1 = sync(c1)
-        k2 = _rhs(p1, eos, dx, ng, limiter)
+        k2 = _rhs(p1, eos, dx, ng, limiter, flux)
         cons = {k: 0.5 * (cons[k] + c1[k] + dt * k2[k]) for k in cons}
         prims = sync(cons)
         t += dt

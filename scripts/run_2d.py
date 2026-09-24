@@ -7,6 +7,7 @@ for v in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS",
 import numpy as np, torch
 
 from src.physics.eos import hybrid_eos
+from src.physics.reconstruction import ghosts_needed
 from src.physics.grid import Grid2D
 from src.physics.ct import div_b
 from src.physics.driver2d import (compute_dt_2d, prims_to_cons_2d, rk_step_ct,
@@ -124,7 +125,8 @@ def main():
     os.makedirs(out, exist_ok=True)
     eos = hybrid_eos(K=0.0, gamma=P["gamma"], gamma_th=P["gamma"])
     lo, hi = P["box"]
-    g = Grid2D(lo, hi, a.n, lo, hi, a.n, ng=2)
+    # the stencil sets the ghost count: PLM 2, WENO5/MP5 3, MP7 4
+    g = Grid2D(lo, hi, a.n, lo, hi, a.n, ng=ghosts_needed(a.limiter))
 
     if a.problem == "rotor":
         prims, Az = magnetic_rotor(g, eos)

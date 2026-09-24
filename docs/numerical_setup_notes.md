@@ -15,13 +15,15 @@ still points at the same code except `_features_canonical`, now `:386`.
 | evolved variables `D, Sx, Sy, Sz, tau, Bz`; in-plane B on faces | `src/physics/state.py:41` (`EVOLVED_KEYS`), `State2D.Bxf/Byf` |
 | ideal gas, gamma 5/3 rotor, 4/3 Orszag-Tang | `scripts/run_2d.py:28` (`PROBLEMS`), `src/physics/eos.py` |
 | piecewise-linear reconstruction, MC limiter (minmod, PCM available) | `src/physics/reconstruction.py:47` (`_LIMITERS`), `:73` |
+| high order available: MP5 and MP7 (Suresh & Huynh 1997), WENO5-Z (Borges 2008) | `src/physics/reconstruction.py` (`_FACE_FN`), `tests/test_reconstruction_high_order.py` |
+| measured orders 5, 7 and 5; MP5/MP7 create no new extremum at a step, WENO-Z overshoots ~2% | `tests/test_reconstruction_high_order.py` (order, step, smooth-extremum tests) |
 | MC formula, slopes from the two one-sided differences | `src/physics/reconstruction.py:36-45` (`mc_limiter`), `:59-70` (`cell_slopes`) |
 | interface states `Q +- sigma/2`, face i between cells i-1 and i | `src/physics/reconstruction.py:73-95` |
 | variables reconstructed: rho, p, vx, vy, vz, Bx, By, Bz | `src/physics/reconstruction.py:100` (`_RECON_KEYS`) |
 | reconstruct `z = W v`, recover `v = z / sqrt(1+z^2)` | `src/physics/reconstruction.py:113-125, 160-165` |
 | eps recomputed from reconstructed (p, rho) | `src/physics/reconstruction.py:168` |
 | per-face PCM fallback on the rho/p floors | `src/physics/reconstruction.py:146-158` |
-| two ghost zones | `src/physics/grid.py:166` ("PPM or WENO would need ng = 3") |
+| ghost zones from the stencil: 2 (PLM), 3 (MP5/WENO5-Z), 4 (MP7) | `src/physics/reconstruction.py` (`ghosts_needed`), used by `scripts/run_2d.py` and `tube_seed.run_tubes` |
 | reconstruct `W v` not `v`; PCM floor on rho and p | `src/physics/reconstruction.py:103-151` |
 | four flux functions selectable | `scripts/run_2d.py` `SOLVERS`, `src/physics/hlld.py` |
 | SSP-RK3 (Shu-Osher), RK2 optional | `src/physics/driver2d.py:100-107` |
