@@ -367,13 +367,24 @@ def balsara1(a):
     eos = hybrid_eos(K=0.0, gamma=gamma, gamma_th=gamma)
     UL = np.array([left]); UR = np.array([right])
     tubes = {}
-    for nc in a.ncells:
-        prof, t = run_tubes(UL, UR, Bn, eos, ncells=nc, tend=a.tend,
-                            limiter="mc", max_steps=100000)
-        xi = (-0.5 + (np.arange(nc) + 0.5) / nc) / t
-        tubes[nc] = dict(xi=xi, **{k: prof[k].numpy()[:, 0] for k in
-                                   ("rho", "p", "vx", "vy", "By")})
-        print("  tube %5d cells done (t = %.3f, %.0fs)" % (nc, t, time.time() - t0))
+    for lim in a.limiter:
+        for nc in a.ncells:
+            prof, t = run_tubes(UL, UR, Bn, eos, ncells=nc, tend=a.tend,
+                                limiter=lim, max_steps=100000, flux=a.flux)
+            xi = (-0.5 + (np.arange(nc) + 0.5) / nc) / t
+            tubes[(lim, nc)] = dict(xi=xi, **{k: prof[k].numpy()[:, 0] for k in
+                                              ("rho", "p", "vx", "vy", "By")})
+            print("  tube %-7s %5d cells done (t = %.3f, %.0fs)"
+                  % (lim, nc, t, time.time() - t0), flush=True)
+
+    # written BEFORE the analysis below: the runs are half an hour and a
+    # formatting slip in a print must not cost them
+    np.savez_compressed(a.out, **{("tube_%s_%d_%s" % (lim, nc, k)): v
+                                  for (lim, nc), tb in tubes.items()
+                                  for k, v in tb.items()},
+                        **{("%s_%s" % (key, k)): np.asarray(v)
+                           for key, d in out.items() for k, v in d.items()})
+    print("  wrote %s (%.0fs)" % (a.out, time.time() - t0), flush=True)
 
     # compare plateau values: the state just left of the contact
     def plateau(tb, lo, hi):
@@ -400,16 +411,40 @@ def balsara1(a):
         cp = out["compound"]
         lo = cp["Vtail"] + 0.02
         hi = 0.5 * (cp["B"][2] + cp["C"][2]) - 0.02
-        for nc in a.ncells:
-            pl = plateau(tubes[nc], lo, hi)
-            if pl:
-                print("  %-26s %9.5f %9.5f %9.5f %9.5f" % (
-                    "tube %d cells" % nc, pl["rho"], pl["p"], pl["vx"], pl["By"]))
-    np.savez_compressed(a.out, **{("tube_%d_%s" % (nc, k)): v
-                                  for nc, tb in tubes.items() for k, v in tb.items()},
-                        **{("%s_%s" % (key, k)): np.asarray(v)
-                           for key, d in out.items() for k, v in d.items()})
-    print("\n  wrote %s (%.0fs)" % (a.out, time.time() - t0))
+        for lim in a.limiter:
+            for nc in a.ncells:
+                pl = plateau(tubes[(lim, nc)], lo, hi)
+                if pl:
+                    print("  %-26s %9.5f %9.5f %9.5f %9.5f" % (
+                        "tube %s %d cells" % (lim, nc),
+                        pl["rho"], pl["p"], pl["vx"], pl["By"]))
+        # WHICH exact answer is it approaching?  Balsara 1 has two (see the
+        # module docstring): the compound wave and the single intermediate
+        # shock production's planar solver returns.  The distance is taken on
+        # the four plateau quantities, each scaled by its own size, so no
+        # component dominates by units alone.
+        def gas(st):
+            rho, Pt, vx, vy, vz, By, Bz = st
+            v2 = vx * vx + vy * vy + vz * vz
+            eta = Bx * vx + By * vy + Bz * vz
+            b2 = (Bx * Bx + By * By + Bz * Bz) * (1 - v2) + eta * eta
+            return dict(rho=rho, p=Pt - 0.5 * b2, vx=vx, By=By)
+        targets = {"compound": gas(cp["B"])}
+        for key in ("regular_flip10", "regular_flip00"):
+            if out.get(key, {}).get("conv"):
+                targets["planar %s" % key[-2:]] = gas(out[key]["zones"][1])
+        dist = lambda pl, tg: max(abs(pl[k] - tg[k]) / max(abs(tg[k]), 1e-12)
+                                  for k in ("rho", "p", "vx", "By"))
+        print("\n  relative distance of the tube plateau to each exact answer:")
+        print("  %-22s%s" % ("", "".join("%14s" % k for k in targets)))
+        for lim in a.limiter:
+            for nc in a.ncells:
+                pl = plateau(tubes[(lim, nc)], lo, hi)
+                if pl:
+                    print("  %-22s%s" % ("%s %d" % (lim, nc),
+                                         "".join("%14.2e" % dist(pl, tg)
+                                                 for tg in targets.values())))
+
 
 
 def main():
@@ -417,6 +452,15 @@ def main():
     ap.add_argument("--balsara1", action="store_true")
     ap.add_argument("--ncells", type=int, nargs="+", default=[1024, 2048, 4096])
     ap.add_argument("--tend", type=float, default=0.4)
+    ap.add_argument("--flux", default="hlld", choices=("hlld", "hlle"),
+                    help="the flux function the tube runs with.  Which of the "
+                         "two exact answers a finite-volume scheme selects is "
+                         "set by ITS dissipation, so this is the knob that "
+                         "can move the selection -- the reconstruction order "
+                         "cannot (measured, job 1422)")
+    ap.add_argument("--limiter", nargs="+", default=["mc"],
+                    help="reconstructions to run the tube with (mc, mp5, mp7, "
+                         "weno5z); each is run at every --ncells")
     ap.add_argument("--out", default="balsara1_compound.npz")
     a = ap.parse_args()
     if a.balsara1:

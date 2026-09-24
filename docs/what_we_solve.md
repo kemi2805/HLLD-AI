@@ -817,9 +817,85 @@ they stand. Its output is the seven-wave unknowns, which cannot express a
 compound wave, and the label would be ambiguous: Balsara 1 has two exact
 solutions. A classifier needs no network, though. The rule above uses two
 numbers that are cheap before any solve, and it could route the 2.5% it
-flags past the full retry budget (plan F, step 4; not done). The next checks
-are the 128^2 census, whether the rule transfers across resolution, and
-whether the tube labels survive at 512 + 1024 cells.
+flags past the full retry budget -- that was plan F step 4, and it was
+measured; see below.
+
+### Routing them past the solver: measured, and NOT worth it (2026-09-24)
+
+`RMHD_COMPOUND_SKIP` (`src/physics/exact_flux.py`, default OFF) applies the
+rule before the ML seed: a flagged interface keeps HLLD's flux and costs
+nothing. The routed interfaces stay visible -- `harvest.record_coverage`
+writes a third bitmap, `routed`, beside attempted and exact.
+
+Paired replay, the same 12 recorded sweeps of the 32^2 rotor through both
+settings (calea job 1780):
+
+| | flag off | flag on |
+|---|---|---|
+| exact fluxes | 362 | 340 |
+| interfaces routed | — | 60 |
+| of those, exact with the flag off | — | **22** |
+| wall | 119.8 s | 110.2 s (8.0% less) |
+
+**6.1% of the exact fluxes for 8% of the time, and the flux moves a lot on
+what it gives up**: on the routed interfaces that had been exact, B_y
+changes by 62% on sweep 1 and 1.8% on sweep 3. The step's own gate was time
+saved with no meaningful loss of exact fluxes, so it fails, and the flag
+stays off.
+
+Two reasons it underperforms the census. The census labelled "solvable" with
+`coplanar_limit.production_retest`; production's real retry ladder does
+better, so 37% of what the rule flags IS solved in the run, against the 24%
+the census predicted. And the losses concentrate where |B_t| is exactly zero
+on both sides -- the t = 0 x-sweep -- which the rule flags wholesale and
+which the degenerate three-wave path already answers. That sweep is also
+where most of the saving comes from (21.5 s -> 1.2 s), so the saving and the
+damage have one source. A rule that additionally demanded a genuinely
+nonzero tangential field on both sides would be the thing to try; it is not
+tried here.
+
+The wall numbers are noisy at this size -- sweep 2 went 1.1 s -> 19.0 s on
+first-call compilation alone -- so 8% is the optimistic reading.
+
+### Which of the two solutions does a finite-volume run pick? (2026-09-24)
+
+Balsara 1 carries the non-uniqueness in its cleanest form: a compound wave
+and a single intermediate shock, both exact, 7.7e-4 apart in the star state.
+Which one a scheme converges to is a property of ITS dissipation, not of the
+ideal equations -- the selected weak solution depends on the ratio of the
+effective viscosity to the resistivity, and refining shrinks both while
+holding the ratio, so the limit does not move. Two knobs were tested, each
+at 1024, 2048 and 4096 cells, as the relative distance from the tube's star
+plateau to each exact answer (`scripts/compound_wave.py --balsara1 --flux
+{hlld,hlle} --limiter ...`; calea jobs 1422 and 1671):
+
+| flux, reconstruction | -> compound | -> intermediate shock |
+|---|---|---|
+| HLLD, PLM | 1.0e-3 / 9.9e-4 / 1.6e-3 | 1.1e-3 / 3.8e-4 / 5.2e-4 |
+| HLLD, MP5 | 1.4e-3 / 1.0e-3 / 1.4e-3 | 6.1e-4 / 3.2e-4 / **2.7e-4** |
+| HLLE, PLM | 1.0e-3 / 4.7e-4 / 1.1e-3 | 2.1e-3 / 6.2e-4 / **9.1e-5** |
+| HLLE, MP5 | 5.1e-4 / 8.8e-4 / 1.2e-3 | 5.8e-4 / 2.1e-4 / **1.3e-4** |
+
+(MP7 and WENO5-Z were run too, at 512-2048, and behave like MP5.)
+
+**Neither knob moves the selection.** Every combination approaches the
+intermediate shock, reaching 9.1e-5 at 4096 -- eight times inside the
+separation between the two answers -- while the distance to the compound
+answer stalls near 1e-3 at every resolution. Raising the reconstruction from
+second to seventh order only gets there on fewer cells; the more dissipative
+flux (HLLE) converges most cleanly, which is the opposite of what "less
+dissipation reaches the compound branch" would predict. That is expected:
+order controls the error where the solution is SMOOTH, while the selection
+happens inside the discontinuity, where every scheme is first order and the
+profile is the flux function's own.
+
+The consequence is worth stating plainly, because it is easy to report a
+number and call it the answer: within ideal MHD the compound/intermediate
+question is not decided by the equations. It is decided by the dissipation,
+and a code that reports one of the two is reporting a property of its own
+solver. Choosing deliberately means adding physical resistivity and
+viscosity with a stated ratio and resolving those scales -- which is no
+longer ideal MHD.
 
 ---
 
@@ -1043,6 +1119,8 @@ these resolutions for a scheme of this class.
 | failure map (5) | `scripts/failure_map_2d.py results/rotor_64_exact --out figs/failure_map` |
 | snapshot census (5) | `sbatch scripts/calea_snapshot_census.sh` (from `ssh itp`; writes `results/snapshot_census_64`) |
 | compound classifier and maps (5) | `scripts/compound_classifier.py results/snapshot_census_64 --run results/rotor_64_exact --maps figs/census` |
+| the routing replay (5) | `RMHD_COMPOUND_SKIP=1 REPLAY_OUT=on.npz scripts/rotor_replay.py replay x <tag>` against the same recording without the flag |
+| which solution a scheme picks (5) | `scripts/compound_wave.py --balsara1 --flux hlle --limiter mp5 --ncells 1024 2048 4096` |
 | 128^2 census (5) | `RUN=results/rotor_128_exact TAG=128 sbatch scripts/calea_snapshot_census.sh` |
 | tube-resolution check (5) | `NSHARDS=1280 TAG=64_res512 EXTRA="--ncells 512" sbatch scripts/calea_snapshot_census.sh` |
 

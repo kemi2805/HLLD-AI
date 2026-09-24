@@ -104,6 +104,16 @@ if __name__ == "__main__":   # guarded: RMHD_POOL workers import this module
             d = dict(LAST_DIAG); m2 = d["exact_mask"]; m1 = rec["exact_mask"]
             saved[f"mask_{k}"] = m2.numpy().copy(); saved[f"p_{k}"] = p_star.reshape(-1).numpy().copy()
             saved[f"rescued_{k}"] = d.get("n_retry_rescued", 0)
+            saved[f"wall_{k}"] = w
+            saved[f"skipped_{k}"] = d.get("n_compound_skip", 0)
+            # lanes the compound rule routed to HLLD that the reference solved
+            # exactly: the price of the routing, in fluxes and in how far the
+            # flux moves (RMHD_COMPOUND_SKIP; plan F step 4)
+            rt = d.get("compound_mask")
+            rt = torch.as_tensor(np.asarray(rt), dtype=torch.bool) if rt is not None \
+                else torch.zeros_like(m1)
+            lost = m1 & rt
+            saved[f"routed_{k}"] = rt.numpy().copy()
             both = m1 & m2
             only_rec, only_now = int((m1 & ~m2).sum()), int((~m1 & m2).sum())
             # Scale by the flux's OWN physical size, not each component's.
@@ -123,6 +133,18 @@ if __name__ == "__main__":   # guarded: RMHD_POOL workers import this module
                     worst, wkey = float(dd.max()), key
             ps, ps2 = rec["p_star"].reshape(-1), p_star.reshape(-1)
             dps = ((ps - ps2).abs() / ps.abs().clamp(min=1e-30))[both]
+            if int(lost.sum()):
+                gsc2 = max(float(rec["F"][k2].abs().max()) for k2 in F) or 1.0
+                w2, wk2 = 0.0, None
+                for key in F:
+                    a = rec["F"][key].reshape(-1); b = F[key].reshape(-1)
+                    sc = max(float(a.abs().max()), 1e-6 * gsc2)
+                    dd = ((a - b).abs() / sc)[lost]
+                    if dd.numel() and float(dd.max()) > w2:
+                        w2, wk2 = float(dd.max()), key
+                print(f"   routed: {int(rt.sum())} lanes, {int(lost.sum())} of them were "
+                      f"exact in the reference; flux rel diff on those max={w2:.2e} ({wk2})",
+                      flush=True)
             print(f"sweep {k} idir={rec['idir']}: rec exact={int(m1.sum())} now exact={int(m2.sum())} "
                   f"flips: rec-only {only_rec}, now-only {only_now} | common-exact flux rel diff max={worst:.2e} ({wkey}) "
                   f"p* rel max={float(dps.max()) if dps.numel() else 0:.2e} | {w:.1f}s", flush=True)

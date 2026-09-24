@@ -40,6 +40,7 @@ than its own discretisation defect.
 
 from __future__ import annotations
 
+import math as _math
 import os
 import sys
 
@@ -165,6 +166,19 @@ _VERIFY_TOL = float(os.environ.get("RMHD_VERIFY_TOL", "1e-8"))
 # run with this on is not bit-reproducible against one with it off.  Set
 # RMHD_UPWIND_SKIP=0 to recover the old behaviour.
 _UPWIND_SKIP = os.environ.get("RMHD_UPWIND_SKIP", "1") not in ("0", "", "off")
+# Compound interfaces: a structure the seven-wave family cannot hold, so no
+# amount of retrying finds it.  MEASURED on the snapshot census (plan F,
+# `docs/what_we_solve.md` section 5; 10,172 interfaces at 64^2 and 16,930 at
+# 128^2): a face whose tangential field is weak against the normal one AND
+# reverses is compound 81% of the time, and 67-76% of those faces cannot be
+# solved by any path we have.  The rule is two numbers, both already in hand
+# before the solve, and it transfers between the two resolutions with no
+# refitting.  It is OFF by default: it trades a small number of exact fluxes
+# (24% of the faces it flags ARE solvable) for the retry budget spent on the
+# rest, and that trade has to be measured per run before it is taken.
+_COMPOUND_SKIP = os.environ.get("RMHD_COMPOUND_SKIP", "0") not in ("0", "", "off")
+_COMPOUND_BT_MAX = float(os.environ.get("RMHD_COMPOUND_BT_MAX", "0.3"))
+_COMPOUND_DPSI_MIN = float(os.environ.get("RMHD_COMPOUND_DPSI_MIN", str(_math.pi / 2)))
 # The jump conditions do not order the waves.  A fan whose rotational
 # discontinuity sits on the far side of its slow wave is self-crossing and is
 # not a Riemann solution, however small its residual -- verification cannot
@@ -641,18 +655,42 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
         *_, cmax_hl, cmin_hl = compute_srmhd_fluxes(sL, sR, eos, idir)
         upwind = (~bad) & (~weak) & ((cmin_hl <= 0.0) | (cmax_hl <= 0.0))
     live = to_np((~bad) & (~weak) & (~upwind)).astype(bool)
+    # the compound rule, on the solver-frame tangential fields (see
+    # _COMPOUND_SKIP): weak against the normal field, and reversing
+    routed = np.zeros(N, dtype=bool)
+    if _COMPOUND_SKIP:
+        BtL = np.hypot(left[5], left[6])
+        BtR = np.hypot(right[5], right[6])
+        # the wrapped difference of the two field angles, NOT atan2 of the
+        # cross and dot product: they agree except where one side's
+        # tangential field is exactly zero, and those lanes (the rotor's
+        # t = 0 x-sweeps) are 52 of the 252 the fitted rule flags
+        psiL = np.arctan2(left[6], left[5])
+        psiR = np.arctan2(right[6], right[5])
+        dpsi = np.abs((psiR - psiL + _math.pi) % (2.0 * _math.pi) - _math.pi)
+        routed = live & (np.minimum(BtL, BtR)
+                         < _COMPOUND_BT_MAX * np.abs(Bn)) & (dpsi > _COMPOUND_DPSI_MIN)
+        live = live & ~routed
     sel = np.flatnonzero(live)
 
     diag = dict(solver="exact-batched", idir=idir, n_interfaces=N,
                 n_bad=int(bad.sum()), n_weak_gate=int(weak.sum()),
-                n_upwind_skip=int(upwind.sum()))
+                n_upwind_skip=int(upwind.sum()),
+                n_compound_skip=int(routed.sum()))
 
     if sel.size == 0:
+        # exact_mask has to be here too: every consumer reads it
+        # unconditionally (scripts/rotor_replay.py:104), and with the
+        # compound routing on, a sweep CAN gate out every live lane -- the
+        # rotor's t = 0 x-sweep does, where one side has |Bt| = 0 exactly
         LAST_DIAG.update(**diag, n_attempted=0, n_exact=0,
                          n_hlld_fallback=N, frac_hlld_fallback=1.0,
-                         frac_exact=0.0)
+                         frac_exact=0.0, compound_mask=routed,
+                         exact_mask=torch.zeros(N, dtype=torch.bool))
         if harvester is not None:
-            harvester.record_coverage(idir, N, np.zeros(0, dtype=int), np.zeros(0, dtype=int))
+            harvester.record_coverage(idir, N, np.zeros(0, dtype=int),
+                                      np.zeros(0, dtype=int),
+                                      np.flatnonzero(routed))
         return F, U, p_star
 
     subL = [c[sel] for c in left]
@@ -902,7 +940,7 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
     take_all = take | take3 | take5
     g = sel[take_all]
     if harvester is not None:
-        harvester.record_coverage(idir, N, sel, g)
+        harvester.record_coverage(idir, N, sel, g, np.flatnonzero(routed))
     if g.size:
         tt = lambda a: torch.tensor(a[take_all], dtype=dt)
         one = {k: v[g] for k, v in sL.items()}
@@ -981,6 +1019,7 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
     LAST_DIAG.update(
         **diag,
         exact_mask=exact_mask,
+        compound_mask=routed,
         n_attempted=int(sel.size),
         n_exact=n_exact,
         n_fan_interior=n_fan,

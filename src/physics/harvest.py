@@ -230,17 +230,27 @@ class Harvester:
                     attempts=att[idx].astype(np.int16),
                     source=np.asarray(src)[idx].astype(np.int8))
 
-    def record_coverage(self, idir, n_interfaces, attempted_idx, exact_idx):
+    def record_coverage(self, idir, n_interfaces, attempted_idx, exact_idx,
+                        routed_idx=None):
         """One sweep's coverage: flat interface indices that were attempted
         and that came out exact (``exact_idx`` is a subset of ``attempted_idx``).
-        Not subject to the stride or the caps -- it is the complete map."""
+        Not subject to the stride or the caps -- it is the complete map.
+
+        ``routed_idx`` are interfaces the compound rule sent straight to HLLD
+        (``RMHD_COMPOUND_SKIP``).  They are NOT attempted, so they would
+        otherwise vanish from the map -- and the whole point of the rule is to
+        be able to go back and ask what it routed."""
         att = np.zeros(int(n_interfaces), dtype=np.bool_)
         ex = np.zeros(int(n_interfaces), dtype=np.bool_)
+        rt = np.zeros(int(n_interfaces), dtype=np.bool_)
         att[np.asarray(attempted_idx, dtype=np.int64)] = True
         ex[np.asarray(exact_idx, dtype=np.int64)] = True
+        if routed_idx is not None:
+            rt[np.asarray(routed_idx, dtype=np.int64)] = True
         self._coverage.append(dict(sweep=self.n_sweeps, idir=int(idir),
                                    n=int(n_interfaces),
-                                   attempted=np.packbits(att), exact=np.packbits(ex)))
+                                   attempted=np.packbits(att), exact=np.packbits(ex),
+                                   routed=np.packbits(rt)))
         self.n_sweeps += 1
 
     # ── output ───────────────────────────────────────────────────────────
@@ -264,7 +274,8 @@ class Harvester:
                 idir=np.array([d["idir"] for d in c], dtype=np.int8),
                 n=np.array([d["n"] for d in c], dtype=np.int64),
                 attempted=np.stack([d["attempted"] for d in c], axis=0),
-                exact=np.stack([d["exact"] for d in c], axis=0))
+                exact=np.stack([d["exact"] for d in c], axis=0),
+                routed=np.stack([d["routed"] for d in c], axis=0))
             c.clear()
         self._shard += 1
 
