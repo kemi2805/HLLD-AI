@@ -359,9 +359,18 @@ def main():
         if a.max_steps is not None and steps_here >= a.max_steps and not done:
             save_restart()
             log.close()
+            # the stamp has to be finished here too: a pilot run exists
+            # precisely to be asked what a step costs
+            wall = time.time() - t0
+            meta.update(steps=step, steps_here=steps_here,
+                        wall_s=round(wall, 1),
+                        s_per_step=round(wall / max(steps_here, 1), 3),
+                        stopped_early=True,
+                        finished=time.strftime("%Y-%m-%dT%H:%M:%S"))
+            _write_meta(out, meta)
             print(f"stopped after {steps_here} steps at t={t:.6f} "
                   f"(step {step}); restart file written "
-                  f"({time.time()-t0:.0f}s)", flush=True)
+                  f"({wall:.0f}s)", flush=True)
             return
 
     save("fin", t)
