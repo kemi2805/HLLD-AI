@@ -43,8 +43,24 @@ import os
 
 import numpy as np
 
-NG = 2
 HALF_WINDOW = 0.025
+
+
+def run_ghosts(rundir):
+    """The ghost count this run used, since the stencil sets it (PLM 2,
+    MP5/WENO5-Z 3, MP7 4) and the coverage bitmaps are laid out on the
+    ghost-inclusive face grid."""
+    import json
+    meta = os.path.join(rundir, "run_meta.json")
+    if os.path.exists(meta):
+        return int(json.load(open(meta)).get("ng", 2))
+    for f in sorted(glob.glob(os.path.join(rundir, "snap_*.npz"))):
+        z = np.load(f)
+        if "ng" in z.files:
+            return int(z["ng"])
+        break
+    print("  ! %s carries no ng stamp; assuming 2" % rundir)
+    return 2
 
 
 def _unpack(bits, n):
@@ -103,12 +119,12 @@ def face_fields(snap):
     return dict(neg=(bnx < 0, bny < 0), near=(near(rev_x, 0), near(rev_y, 1)))
 
 
-def accumulate(rundir, snaps, nx, ny):
+def accumulate(rundir, snaps, nx, ny, ng=2):
     """Attempted and failed counts per face and direction, per snapshot window."""
     t_after, dt = load_diag(rundir)
-    nxt, nyt = nx + 2 * NG, ny + 2 * NG
-    shapes = {0: ((nxt + 1, nyt), (slice(NG, NG + nx + 1), slice(NG, NG + ny))),
-              1: ((nxt, nyt + 1), (slice(NG, NG + nx), slice(NG, NG + ny + 1)))}
+    nxt, nyt = nx + 2 * ng, ny + 2 * ng
+    shapes = {0: ((nxt + 1, nyt), (slice(ng, ng + nx + 1), slice(ng, ng + ny))),
+              1: ((nxt, nyt + 1), (slice(ng, ng + nx), slice(ng, ng + ny + 1)))}
     T = np.array([float(s["t"]) for s in snaps])
     K = T.size
     att = {d: np.zeros((K,) + ((nx + 1, ny) if d == 0 else (nx, ny + 1)), np.int32)
@@ -222,11 +238,12 @@ def main():
     a = ap.parse_args()
     snaps = load_snaps(a.rundir)
     nx, ny = snaps[0]["rho"].shape
-    T, att, fail, per_sweep = accumulate(a.rundir, snaps, nx, ny)
+    ng = run_ghosts(a.rundir)
+    T, att, fail, per_sweep = accumulate(a.rundir, snaps, nx, ny, ng)
     tot_a = sum(p[2] for p in per_sweep)
     tot_e = sum(p[3] for p in per_sweep)
-    print("%s: %dx%d, %d sweeps, attempted %d, exact %d (%.1f%%), failed %d"
-          % (a.rundir, nx, ny, len(per_sweep), tot_a, tot_e,
+    print("%s: %dx%d (ng %d), %d sweeps, attempted %d, exact %d (%.1f%%), failed %d"
+          % (a.rundir, nx, ny, ng, len(per_sweep), tot_a, tot_e,
              100 * tot_e / max(tot_a, 1), tot_a - tot_e))
     print("windows of +-%.3f around the %d snapshot times\n" % (HALF_WINDOW, T.size))
     summarise(T, att, fail, snaps)

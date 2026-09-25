@@ -230,27 +230,63 @@ class Harvester:
                     attempts=att[idx].astype(np.int16),
                     source=np.asarray(src)[idx].astype(np.int8))
 
-    def record_coverage(self, idir, n_interfaces, attempted_idx, exact_idx,
-                        routed_idx=None):
-        """One sweep's coverage: flat interface indices that were attempted
-        and that came out exact (``exact_idx`` is a subset of ``attempted_idx``).
-        Not subject to the stride or the caps -- it is the complete map.
+    # what answered a face, in the order the flux assembly decides it
+    COVERAGE_KEYS = ("attempted", "exact", "routed", "seven", "planar5",
+                     "three_wave", "degenerate", "verified",
+                     "bad", "weak", "upwind")
 
-        ``routed_idx`` are interfaces the compound rule sent straight to HLLD
-        (``RMHD_COMPOUND_SKIP``).  They are NOT attempted, so they would
-        otherwise vanish from the map -- and the whole point of the rule is to
-        be able to go back and ask what it routed."""
-        att = np.zeros(int(n_interfaces), dtype=np.bool_)
-        ex = np.zeros(int(n_interfaces), dtype=np.bool_)
-        rt = np.zeros(int(n_interfaces), dtype=np.bool_)
+    def record_coverage(self, idir, n_interfaces, attempted_idx, exact_idx,
+                        routed_idx=None, **masks):
+        """One sweep's coverage: which faces were attempted, which came out
+        exact, and -- the point of the extra masks -- WHICH SOLVER answered
+        each one and why the rest were never tried.  Not subject to the
+        stride or the caps: it is the complete map.
+
+        ``attempted_idx`` and ``exact_idx`` are flat indices (``exact_idx`` a
+        subset).  ``routed_idx`` are faces the compound rule sent straight to
+        HLLD (``RMHD_COMPOUND_SKIP``); they are NOT attempted, so they would
+        otherwise vanish from the map.  The remaining masks arrive as boolean
+        arrays, either over the whole sweep (length ``n_interfaces``) or over
+        the attempted subset, in which case they are scattered back:
+
+            seven       the seven-wave Newton's own answer was taken
+            planar5     the five-wave planar rescue answered it
+            three_wave  the reduced three-wave rescue answered it
+            degenerate  answered in a degenerate class (exact in its limit)
+            verified    the answer passed the full seven-wave residual
+            bad, weak, upwind   why a face was never attempted
+
+        Everything is packed to bits, so eleven maps of a 128^2 sweep cost
+        about 22 kB.  This is what `scripts/plot_rotor_output.py` draws.
+        """
+        n = int(n_interfaces)
+        att = np.zeros(n, dtype=np.bool_)
+        ex = np.zeros(n, dtype=np.bool_)
+        rt = np.zeros(n, dtype=np.bool_)
         att[np.asarray(attempted_idx, dtype=np.int64)] = True
         ex[np.asarray(exact_idx, dtype=np.int64)] = True
         if routed_idx is not None:
             rt[np.asarray(routed_idx, dtype=np.int64)] = True
-        self._coverage.append(dict(sweep=self.n_sweeps, idir=int(idir),
-                                   n=int(n_interfaces),
-                                   attempted=np.packbits(att), exact=np.packbits(ex),
-                                   routed=np.packbits(rt)))
+        sel = np.asarray(attempted_idx, dtype=np.int64)
+        rec = dict(sweep=self.n_sweeps, idir=int(idir), n=n,
+                   attempted=np.packbits(att), exact=np.packbits(ex),
+                   routed=np.packbits(rt))
+        for k in self.COVERAGE_KEYS[3:]:
+            m = masks.get(k)
+            full = np.zeros(n, dtype=np.bool_)
+            if m is not None:
+                m = np.asarray(m, dtype=bool).reshape(-1)
+                if m.size == n:
+                    full = m
+                elif m.size == sel.size:
+                    full[sel] = m          # a mask over the attempted subset
+                else:
+                    raise ValueError(
+                        "coverage mask %r has %d entries, expected %d (the "
+                        "sweep) or %d (the attempted subset)"
+                        % (k, m.size, n, sel.size))
+            rec[k] = np.packbits(full)
+        self._coverage.append(rec)
         self.n_sweeps += 1
 
     # ── output ───────────────────────────────────────────────────────────
@@ -273,9 +309,8 @@ class Harvester:
                 sweep=np.array([d["sweep"] for d in c], dtype=np.int64),
                 idir=np.array([d["idir"] for d in c], dtype=np.int8),
                 n=np.array([d["n"] for d in c], dtype=np.int64),
-                attempted=np.stack([d["attempted"] for d in c], axis=0),
-                exact=np.stack([d["exact"] for d in c], axis=0),
-                routed=np.stack([d["routed"] for d in c], axis=0))
+                **{k: np.stack([d[k] for d in c], axis=0)
+                   for k in self.COVERAGE_KEYS})
             c.clear()
         self._shard += 1
 

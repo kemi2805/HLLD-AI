@@ -688,9 +688,15 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
                          frac_exact=0.0, compound_mask=routed,
                          exact_mask=torch.zeros(N, dtype=torch.bool))
         if harvester is not None:
+            # nothing was attempted, so the map is all gate reasons -- which
+            # is exactly what makes a sweep like the rotor's t = 0 x-sweep
+            # legible afterwards
             harvester.record_coverage(idir, N, np.zeros(0, dtype=int),
                                       np.zeros(0, dtype=int),
-                                      np.flatnonzero(routed))
+                                      np.flatnonzero(routed),
+                                      bad=to_np(bad).astype(bool),
+                                      weak=to_np(weak).astype(bool),
+                                      upwind=to_np(upwind).astype(bool))
         return F, U, p_star
 
     subL = [c[sel] for c in left]
@@ -939,8 +945,6 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
 
     take_all = take | take3 | take5
     g = sel[take_all]
-    if harvester is not None:
-        harvester.record_coverage(idir, N, sel, g, np.flatnonzero(routed))
     if g.size:
         tt = lambda a: torch.tensor(a[take_all], dtype=dt)
         one = {k: v[g] for k, v in sL.items()}
@@ -1010,6 +1014,21 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
     # interfaces n_exact = n_verified + (n_degenerate_exact -
     # n_degenerate_verified) [+ the opt-in n_3wave_exact], by design.
     degen = take & ~np.isin(cls, (C.FULL7, C.COPLANAR))
+
+    # The complete per-face map, recorded here rather than before the flux
+    # assembly so it can carry `verified` too.  Every mask below is over the
+    # ATTEMPTED subset except the three gate reasons, which are over the whole
+    # sweep; `record_coverage` scatters the first kind back.  This is what
+    # `scripts/plot_rotor_output.py` turns into "which solver answered this
+    # cell".
+    if harvester is not None:
+        seven_ok = take & np.isin(cls, (C.FULL7, C.COPLANAR))
+        harvester.record_coverage(
+            idir, N, sel, g, np.flatnonzero(routed),
+            seven=seven_ok, planar5=take5, three_wave=take3,
+            degenerate=degen, verified=verified,
+            bad=to_np(bad).astype(bool), weak=to_np(weak).astype(bool),
+            upwind=to_np(upwind).astype(bool))
 
     n_exact = int(g.size)
     fell_back = N - n_exact

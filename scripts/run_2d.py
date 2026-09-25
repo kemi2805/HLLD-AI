@@ -1,5 +1,5 @@
 """Run a 2D SRMHD problem (magnetic rotor / Orszag-Tang) and save snapshots."""
-import argparse, os, sys, time
+import argparse, json, os, socket, subprocess, sys, time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 for v in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS",
           "VECLIB_MAXIMUM_THREADS"):
@@ -32,6 +32,29 @@ PROBLEMS = {
     "orszag_tang": dict(box=(0.0, 1.0), gamma=4.0 / 3.0, tend=1.0,
                         bc=("periodic", "periodic"), sym=False),
 }
+
+
+def _git_rev():
+    try:
+        return subprocess.run(["git", "rev-parse", "--short", "HEAD"],
+                              cwd=os.path.dirname(os.path.dirname(
+                                  os.path.abspath(__file__))),
+                              capture_output=True, text=True,
+                              timeout=5).stdout.strip() or "unknown"
+    except Exception:                                   # not a checkout
+        return "unknown"
+
+
+def _write_meta(out, meta):
+    """`run_meta.json` beside the snapshots: what made this run.
+
+    Written at the start so a crashed or still-running run is still
+    identifiable, rewritten at the end with the cost.
+    """
+    tmp = os.path.join(out, "run_meta.json.tmp")
+    with open(tmp, "w") as fh:
+        json.dump(meta, fh, indent=1, sort_keys=True)
+    os.replace(tmp, os.path.join(out, "run_meta.json"))
 
 
 def symmetry_error(st, g):
@@ -118,11 +141,46 @@ def main():
 
     P = PROBLEMS[a.problem]
     tend = a.tend if a.tend is not None else P["tend"]
-    out = a.out or f"results/{a.problem}_{a.n}_{a.solver}"
+    # The limiter belongs in the name: without it `--limiter mp5` lands in
+    # results/rotor_64_hlld and overwrites the PLM baseline (save() rewrites
+    # snap_*.npz and diag.csv opens "w").  Appended only for a non-default
+    # limiter, so every existing directory name and documented command stays
+    # valid.
+    out = a.out or (f"results/{a.problem}_{a.n}_{a.solver}"
+                    + ("" if a.limiter == "mc" else f"_{a.limiter}"))
     bc_x, bc_y = P["bc"]
 
     torch.set_num_threads(int(os.environ.get("TORCH_THREADS", "4")))
     os.makedirs(out, exist_ok=True)
+
+    # What made this run.  Every consumer downstream (rotor_compare,
+    # failure_map_2d, snapshot_census, the plots) needs the limiter and the
+    # ghost count, and until now neither the snapshots nor the restart file
+    # carried them -- so an mp5 run could be analysed with PLM faces and
+    # nobody would see it.
+    meta = dict(problem=a.problem, n=a.n, solver=a.solver, limiter=a.limiter,
+                ng=ghosts_needed(a.limiter), cfl=a.cfl, tend=tend,
+                nsnap=a.nsnap, emf_mode=a.emf_mode,
+                upwind_emf=not a.no_upwind_emf, bc=[bc_x, bc_y],
+                gamma=P["gamma"], host=socket.gethostname(),
+                torch_threads=torch.get_num_threads(),
+                git=_git_rev(), started=time.strftime("%Y-%m-%dT%H:%M:%S"))
+    if a.solver == "exact":
+        meta.update(tau_weak=a.tau_weak, tau_bt=a.tau_bt,
+                    retries=a.exact_retries, max_iter=a.exact_max_iter)
+    prev = os.path.join(out, "run_meta.json")
+    if os.path.exists(prev) and not a.restart:
+        old = json.load(open(prev))
+        clash = {k: (old.get(k), meta[k]) for k in ("limiter", "n", "solver",
+                                                    "problem")
+                 if old.get(k) != meta[k]}
+        if clash:
+            sys.exit("refusing to write into %s: it holds a different run "
+                     "(%s).  Pass --out, or --restart to continue that one."
+                     % (out, ", ".join("%s %r != %r" % (k, o, n)
+                                       for k, (o, n) in clash.items())))
+    # NB written only after the restart check below: a refused run must not
+    # leave its own stamp on someone else's directory
     eos = hybrid_eos(K=0.0, gamma=P["gamma"], gamma_th=P["gamma"])
     lo, hi = P["box"]
     # the stencil sets the ghost count: PLM 2, WENO5/MP5 3, MP7 4
@@ -148,6 +206,19 @@ def main():
     gen, harvest_sweeps = 0, 0
     if a.restart:
         R = np.load(a.restart)
+        # A restart carries ghosts, so its arrays are (n + 2 ng)^2: resuming
+        # an mp5 run (ng = 3) with the default --limiter mc dies inside the
+        # reshape with an opaque message, and -- worse -- resuming it as
+        # weno5z (same ng) runs happily with the wrong scheme.  Check both.
+        want = (g.nxt, g.nyt)
+        got = tuple(R["cons_D"].shape)
+        if "limiter" in R.files and str(R["limiter"]) != a.limiter:
+            sys.exit("restart %s was written with --limiter %s, this run says "
+                     "%s" % (a.restart, str(R["limiter"]), a.limiter))
+        if got != want:
+            sys.exit("restart %s holds %s arrays, this grid is %s (ng = %d "
+                     "for --limiter %s): the limiter does not match"
+                     % (a.restart, got, want, g.ng, a.limiter))
         st = State2D(cons={k: torch.from_numpy(R["cons_" + k].copy())
                            for k in EVOLVED_KEYS},
                      Bxf=torch.from_numpy(R["Bxf"].copy()),
@@ -155,6 +226,7 @@ def main():
         st = sync_state(st, g, eos, bc_x, bc_y)
         gen = int(R["gen"]) + 1
         harvest_sweeps = int(R["harvest_sweeps"])
+    _write_meta(out, meta)
 
     def save(tag, t):
         ph = g.phys
@@ -163,7 +235,8 @@ def main():
             x=g.x[ph[0]].numpy(), y=g.y[ph[1]].numpy(),
             **{k: st.prims[k][ph].numpy()
                for k in ("rho", "p", "vx", "vy", "Bx", "By")},
-            divB=div_b(st.Bxf, st.Byf, g.dx, g.dy)[ph].numpy())
+            divB=div_b(st.Bxf, st.Byf, g.dx, g.dy)[ph].numpy(),
+            limiter=a.limiter, ng=g.ng, n=a.n, solver=a.solver)
 
     print(f"{a.problem} {a.n}^2  solver={a.solver}  emf={a.emf_mode}"
           f"{' (flux-CT)' if a.no_upwind_emf else ''}  limiter={a.limiter}  "
@@ -220,6 +293,7 @@ def main():
         path = os.path.join(out, "restart.npz")
         tmp = path + ".tmp.npz"
         np.savez(tmp, t=t, step=step, next_snap=next_snap, gen=gen,
+                 limiter=a.limiter, ng=g.ng, n=a.n, solver=a.solver,
                  harvest_sweeps=(harvester.n_sweeps if harvester is not None
                                  else 0),
                  Bxf=st.Bxf.numpy(), Byf=st.Byf.numpy(),
@@ -303,7 +377,12 @@ def main():
         print(f"\nmeasured interface envelope ({nrow} sampled states) "
               f"-> {a.envelope}", flush=True)
         print(format_summary(summ), flush=True)
-    print(f"done in {time.time()-t0:.0f}s, {step} steps -> {out}", flush=True)
+    wall = time.time() - t0
+    meta.update(steps=step, steps_here=steps_here, wall_s=round(wall, 1),
+                s_per_step=round(wall / max(steps_here, 1), 3),
+                finished=time.strftime("%Y-%m-%dT%H:%M:%S"))
+    _write_meta(out, meta)
+    print(f"done in {wall:.0f}s, {step} steps -> {out}", flush=True)
 
 
 if __name__ == "__main__":

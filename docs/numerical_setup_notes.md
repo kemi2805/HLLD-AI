@@ -60,10 +60,15 @@ omega = 9.95, p = 1, B = (1,0,0), sharp edge. Box and end time from
 
 ## Deliberately NOT written into the section
 
-- **WENO5.** RESOLVED 2026-09-07: the user confirms it belongs to a different
-  code, and it is out of this section. This code has no WENO. Reconstruction
-  is piecewise-linear with the MC limiter (minmod and PCM selectable), and the
-  grid carries two ghost zones, which WENO5 could not use.
+- **The high-order reconstructions.** SUPERSEDED 2026-09-25. The 2026-09-07
+  entry said this code has no WENO and carries two ghost zones; since
+  `0e7380b` it has WENO5-Z, MP5 and MP7, and `ghosts_needed()` sizes the grid
+  from the stencil (2 / 3 / 4). Production is still `--limiter mc`,
+  piecewise-linear, ng = 2, and every result in this work was made with it,
+  so the SETUP section still describes MC alone -- but as the scheme in use,
+  not as the only one available. Whether the higher orders change the rotor
+  is being measured separately; until that lands, they belong to neither
+  Setup nor Results.
 - **HLLC.** Present in the code and listed as selectable, but not used for any
   result in this work so far.
 - Numbers that belong to Results, not Setup: the exact fraction per sweep, the

@@ -35,6 +35,7 @@ from __future__ import annotations
 import argparse
 import glob
 import hashlib
+import json
 import os
 import socket
 import subprocess
@@ -61,7 +62,6 @@ np.seterr(all="ignore")
 torch.set_num_threads(1)
 
 GAMMA = 5.0 / 3.0
-NG = 2
 TAU_WEAK = 1e-2
 _BKEY = ("Bx", "By")
 
@@ -79,13 +79,39 @@ def load_snaps(rundir, times=None):
     return out
 
 
-def faces(snap, eos):
+def run_scheme(rundir, override=None):
+    """(limiter, ng) of the run whose snapshots these are.
+
+    The census rebuilds the faces itself, so it has to rebuild them with the
+    SAME reconstruction the run used -- analysing an mp5 run with PLM faces
+    changes the attempted set, the gates and every label, silently.  Read from
+    `run_meta.json`, else from the snapshot's own stamp, else PLM with a
+    warning (runs made before either existed).
+    """
+    from src.physics.reconstruction import ghosts_needed
+    if override:
+        return override, ghosts_needed(override)
+    meta = os.path.join(rundir, "run_meta.json")
+    if os.path.exists(meta):
+        lim = json.load(open(meta)).get("limiter", "mc")
+        return lim, ghosts_needed(lim)
+    snaps = sorted(glob.glob(os.path.join(rundir, "snap_*.npz")))
+    if snaps:
+        z = np.load(snaps[0])
+        if "limiter" in z.files:
+            lim = str(z["limiter"])
+            return lim, ghosts_needed(lim)
+    print("  ! %s carries no limiter stamp; assuming mc (ng 2)" % rundir)
+    return "mc", 2
+
+
+def faces(snap, eos, limiter="mc", ng=2):
     """Attempted interfaces of one snapshot, both directions.
 
     Returns a dict of arrays: UL, UR (N, 8; solver frame, B_n in column 7),
     idir, fa, fb (face indices), and the counts the gates removed."""
     nx, ny = snap["rho"].shape
-    t = lambda a: torch.as_tensor(np.pad(np.asarray(a, float), NG, mode="edge"),
+    t = lambda a: torch.as_tensor(np.pad(np.asarray(a, float), ng, mode="edge"),
                                   dtype=torch.float64)
     zero = np.zeros((nx, ny))
     prims = dict(rho=t(snap["rho"]), p=t(snap["p"]), vx=t(snap["vx"]),
@@ -95,7 +121,7 @@ def faces(snap, eos):
     out = {k: [] for k in ("UL", "UR", "idir", "fa", "fb")}
     gates = dict(bad=0, weak=0, upwind=0, total=0)
     for axis in (0, 1):
-        L, R = reconstruct_prims(prims, axis=axis, eos=eos, limiter="mc",
+        L, R = reconstruct_prims(prims, axis=axis, eos=eos, limiter=limiter,
                                  vel_var="Wv")
         B = prims[_BKEY[axis]]
         ext = torch.cat([B.narrow(axis, 0, 1), B, B.narrow(axis, B.shape[axis] - 1, 1)],
@@ -104,8 +130,8 @@ def faces(snap, eos):
         Bnf = 0.5 * (ext.narrow(axis, 0, n_f) + ext.narrow(axis, 1, n_f))
         L[_BKEY[axis]] = Bnf
         R[_BKEY[axis]] = Bnf
-        phys = ((slice(NG, NG + nx + 1), slice(NG, NG + ny)) if axis == 0 else
-                (slice(NG, NG + nx), slice(NG, NG + ny + 1)))
+        phys = ((slice(ng, ng + nx + 1), slice(ng, ng + ny)) if axis == 0 else
+                (slice(ng, ng + nx), slice(ng, ng + ny + 1)))
         shp = L["rho"][phys].shape
         sL = {k: v[phys].reshape(-1) for k, v in L.items()}
         sR = {k: v[phys].reshape(-1) for k, v in R.items()}
@@ -128,11 +154,11 @@ def faces(snap, eos):
     return {k: np.concatenate(v) for k, v in out.items()}, gates
 
 
-def population(rundir, times):
+def population(rundir, times, limiter="mc", ng=2):
     eos = hybrid_eos(K=0.0, gamma=GAMMA, gamma_th=GAMMA)
     parts, g_all = [], []
     for s in load_snaps(rundir, times):
-        f, g = faces(s, eos)
+        f, g = faces(s, eos, limiter, ng)
         f["t"] = np.full(f["idir"].size, float(s["t"]))
         parts.append(f)
         g_all.append((float(s["t"]), g))
@@ -144,7 +170,9 @@ def run(a):
     tag = "[%s shard %d/%d]" % (socket.gethostname(), a.shard, a.nshards)
     log = lambda s: print("%s %6.0fs  %s" % (tag, time.time() - t0, s), flush=True)
     times = [float(x) for x in a.times.split(",")] if a.times else None
-    pop, gates = population(a.run, times)
+    limiter, ng = run_scheme(a.run, a.limiter)
+    log("reconstruction: limiter %s, ng %d" % (limiter, ng))
+    pop, gates = population(a.run, times, limiter, ng)
     if a.shard == 0:
         for t, g in gates:
             log("t = %.3f: %d faces; gated out bad %d, weak %d, upwind %d"
@@ -225,6 +253,8 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("run", nargs="?", help="rotor run directory with snap_*.npz")
     ap.add_argument("--times", help="comma-separated snapshot times (default all)")
+    ap.add_argument("--limiter", help="override the run's own reconstruction "
+                                      "(default: read it from the run)")
     ap.add_argument("--shard", type=int, default=0)
     ap.add_argument("--nshards", type=int, default=1)
     ap.add_argument("--limit", type=int, default=0, help="at most this many lanes "
