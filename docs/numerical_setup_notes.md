@@ -26,6 +26,7 @@ still points at the same code except `_features_canonical`, now `:386`.
 | ghost zones from the stencil: 2 (PLM), 3 (MP5/WENO5-Z), 4 (MP7) | `src/physics/reconstruction.py` (`ghosts_needed`), used by `scripts/run_2d.py` and `tube_seed.run_tubes` |
 | reconstruct `W v` not `v`; PCM floor on rho and p | `src/physics/reconstruction.py:103-151` |
 | four flux functions selectable | `scripts/run_2d.py` `SOLVERS`, `src/physics/hlld.py` |
+| HLLD p* by a clamped secant (not bisection, whatever the function name says), seeded from Mignone eqs. 53/55, tolerance 1e-10; HLLE where it fails or the wave ordering is violated | `src/physics/hlld.py` (`safe_secant_bisection`, `_PSTAR_TOL`), measured against Newton in `docs/what_we_solve.md` §7 |
 | SSP-RK3 (Shu-Osher), RK2 optional | `src/physics/driver2d.py:100-107` |
 | CFL 0.25, unsplit | `scripts/run_2d.py:64`, `src/physics/driver2d.py:52` |
 | Kastaun C2P | `src/physics/c2p.py:4,34` (Kastaun et al. 2021 / arXiv:2312.11358) |

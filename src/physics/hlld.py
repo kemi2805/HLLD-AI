@@ -14,6 +14,8 @@ Conserved variables  (Cons):
 
 from typing import Dict, Tuple
 
+import os
+
 import torch
 
 from .c2p import conservative_to_primitive
@@ -744,6 +746,164 @@ def safe_secant_bisection(
     return x1, err, iters_used
 
 
+
+
+def newton_pstar(
+    func,
+    x0: torch.Tensor,
+    tol: float = 1e-12,
+    max_iter: int = 30,
+    derivative: str = "ad",
+    fd_h: float = 1e-6,
+    max_halvings: int = 6,
+    bracket=None,
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, dict]:
+    """Newton-Raphson for the HLLD star pressure, batched, with a safeguard.
+
+    The alternative to `safe_secant_bisection` (which is a clamped secant).
+    Same contract -- (root, err, iters_used) with err 0 where |f| < tol --
+    plus a cost record, because the whole question is whether Newton is
+    cheaper and "iterations" alone hides it: a Newton step needs f AND f'.
+
+    derivative
+        "ad"   exact f'(p) by reverse-mode autograd through the residual, one
+               forward and one backward pass per step (the residual is plain
+               torch, so this is the true derivative, not an approximation);
+        "fd"   central difference (f(p+h) - f(p-h)) / 2h: two EXTRA residual
+               evaluations per step, error O(h^2);
+        "fd1"  forward difference (f(p+h) - f(p)) / h from two close values:
+               ONE extra evaluation, because f(p) is needed for the step
+               anyway; error O(h).
+    fd_h
+        The step, relative to p.  The truncation error falls with h and the
+        round-off error grows as eps/h, so the best h is about sqrt(eps) ~
+        1.5e-8 for the forward difference and eps^(1/3) ~ 6e-6 for the
+        central one.
+
+    Safeguards, since the HLLD residual is multi-rooted (seven sign changes
+    at the ST1 discontinuity) and Newton is quicker than secant to jump to a
+    neighbouring root:
+      * a non-finite or vanishing derivative freezes that lane (it will fail
+        the tolerance and fall back to HLLE exactly as a non-converged secant
+        lane does);
+      * backtracking: a step that does not reduce |f| is halved, up to
+        `max_halvings` times -- so each accepted step is a descent step;
+      * p stays positive (clamped at 1e-30, as the secant does).
+    Converged lanes are frozen, as in the secant.
+
+    bracket
+        (lo, hi, f_lo, f_hi) with a sign change: the safeguarded form
+        ("rtsafe", Numerical Recipes 9.4).  The bracket is kept up to date,
+        and any Newton step that would leave it -- or that shrinks it less
+        than bisection would -- is replaced by a bisection step.  That keeps
+        the iteration on the root the bracket holds instead of letting it
+        jump to a neighbour; lanes whose bracket has no sign change run
+        unguarded.
+    """
+    x = _t(x0).detach().clone()
+    scalar = x.ndim == 0
+    if scalar:
+        x = x.reshape(1)
+    cost = dict(fevals=0, backward=0, halvings=0)
+
+    def f_only(p):
+        cost["fevals"] += 1
+        with torch.no_grad():
+            return _t(func(p))
+
+    def f_and_df(p):
+        if derivative == "ad":
+            q = p.detach().clone().requires_grad_(True)
+            with torch.enable_grad():
+                f = _t(func(q))
+                # a residual that does not depend on p at all has no graph;
+                # its derivative is zero, and the lane then fails cleanly
+                g = (torch.autograd.grad(f.sum(), q, allow_unused=True)[0]
+                     if f.requires_grad else None)
+            cost["fevals"] += 1
+            cost["backward"] += 1
+            if g is None:
+                g = torch.zeros_like(q)
+            return f.detach(), g.detach()
+        h = fd_h * p.abs().clamp(min=1e-30)
+        if derivative == "fd1":
+            # two close values, p and p + h; the step is formed from the
+            # representable difference, so the division is exact
+            f0 = f_only(p)
+            ph = p + h
+            return f0, (f_only(ph) - f0) / (ph - p)
+        fp, fm = f_only(p + h), f_only((p - h).clamp(min=1e-30))
+        return f_only(p), (fp - fm) / (2.0 * h)
+
+    f, df = f_and_df(x)
+    n = x.shape
+    if bracket is not None:
+        lo, hi, flo, fhi = (_t(b).detach().clone().reshape(n) for b in bracket)
+        lo, hi, flo, fhi = (torch.where(lo <= hi, lo, hi),
+                            torch.where(lo <= hi, hi, lo),
+                            torch.where(lo <= hi, flo, fhi),
+                            torch.where(lo <= hi, fhi, flo))
+        guarded = (flo * fhi) < 0
+    else:
+        guarded = torch.zeros(n, dtype=torch.bool, device=x.device)
+    err = torch.full(n, max_iter, dtype=torch.int32, device=x.device)
+    iters_used = torch.full(n, max_iter, dtype=torch.int32, device=x.device)
+    done = torch.zeros(n, dtype=torch.bool, device=x.device)
+    dead = torch.zeros(n, dtype=torch.bool, device=x.device)
+    it = 0
+    for _ in range(max_iter):
+        it += 1
+        conv = f.abs() < tol
+        newly = conv & ~done
+        iters_used = torch.where(newly, torch.full_like(iters_used, it - 1),
+                                 iters_used)
+        done = done | conv
+        dead = dead | ~torch.isfinite(df) | (df.abs() <= 1e-300) | ~torch.isfinite(f)
+        active = ~done & ~dead
+        if not bool(active.any()):
+            break
+        step = torch.where(active, f / torch.where(active, df, torch.ones_like(df)),
+                           torch.zeros_like(f))
+        # backtracking on |f|: only the lanes whose trial step did not help
+        # are re-evaluated, so a well-behaved batch pays nothing for it
+        lam = torch.ones_like(x)
+        x_new = torch.clamp(x - step, min=1e-30)
+        if bracket is not None:
+            # a guarded lane bisects when Newton would leave the bracket
+            out = guarded & ((x_new <= lo) | (x_new >= hi))
+            x_new = torch.where(out, 0.5 * (lo + hi), x_new)
+        f_new = f_only(x_new)
+        worse = active & ~guarded & ~(f_new.abs() < f.abs())
+        for _h in range(max_halvings):
+            if not bool(worse.any()):
+                break
+            cost["halvings"] += 1
+            lam = torch.where(worse, lam * 0.5, lam)
+            x_try = torch.clamp(x - lam * step, min=1e-30)
+            f_try = f_only(x_try)
+            x_new = torch.where(worse, x_try, x_new)
+            f_new = torch.where(worse, f_try, f_new)
+            worse = worse & ~(f_new.abs() < f.abs())
+        x = torch.where(active, x_new, x)
+        if bracket is not None:
+            # shrink the bracket around the sign change
+            left = guarded & active & ((f_new * flo) > 0)
+            right = guarded & active & ~left
+            lo = torch.where(left, x_new, lo); flo = torch.where(left, f_new, flo)
+            hi = torch.where(right, x_new, hi); fhi = torch.where(right, f_new, fhi)
+        # the derivative is needed only where we continue
+        f_next, df_next = f_and_df(x)
+        f = torch.where(active, f_next, f)
+        df = torch.where(active, df_next, df)
+    conv = f.abs() < tol
+    err = torch.where(conv, torch.zeros_like(err), err)
+    iters_used = torch.where(conv & ~done, torch.full_like(iters_used, it),
+                             iters_used)
+    if scalar:
+        return x.reshape(()), err.reshape(()), iters_used.reshape(()), cost
+    return x, err, iters_used, cost
+
+
 def bisection(
     func,
     x_lo: torch.Tensor,
@@ -918,6 +1078,18 @@ _PSTAR_BRACKET = "legacy"
 # for the AI comparison: at 1e-6 the measured difference between one-shot
 # and warm-started p* would be dominated by the tolerance, not the method.
 _PSTAR_TOL = 1.0e-10
+
+# Which root-finder `hlld_flux` uses for p*.  "secant" is the production
+# method (the clamped secant in `safe_secant_bisection`) and MUST stay the
+# default -- the bitwise gate is recorded with it.  "newton" (exact derivative
+# by autograd) and "newton_fd" (central difference) are the alternatives
+# measured by scripts/pstar_methods.py.  Read at call time, so a benchmark can
+# switch it without reloading the module.
+_PSTAR_METHOD = os.environ.get("RMHD_PSTAR_METHOD", "secant")
+# The relative step of the finite-difference derivatives (newton_fd,
+# newton_fd1); None takes each one's own default.
+_PSTAR_FD_H = (float(os.environ["RMHD_PSTAR_FD_H"])
+               if os.environ.get("RMHD_PSTAR_FD_H") else None)
 
 # Diagnostics from the most recent solver call (hlld_flux, exact_flux).  Populated
 # unconditionally (the cost is a few reductions per sweep) so the driver can
@@ -1148,9 +1320,27 @@ def hlld_flux(
         f_lo = torch.where(bad, _t(calc(p_lo)), f_lo)
         f_hi = torch.where(bad, _t(calc(p_hi)), f_hi)
 
-    p_star, err, n_iter = safe_secant_bisection(
-        calc, p_lo, p_hi, tol=_PSTAR_TOL, max_iter=30
-    )
+    method = _PSTAR_METHOD
+    cost = None
+    if method == "secant":
+        p_star, err, n_iter = safe_secant_bisection(
+            calc, p_lo, p_hi, tol=_PSTAR_TOL, max_iter=30
+        )
+    elif method in ("newton", "newton_fd", "newton_fd1", "newton_safe"):
+        # Newton needs one start, not two: take whichever end of the bracket
+        # already has the smaller residual -- both were evaluated above, so
+        # the choice is free
+        start = torch.where(f_lo.abs() <= f_hi.abs(), p_lo, p_hi)
+        deriv = {"newton_fd": "fd", "newton_fd1": "fd1"}.get(method, "ad")
+        fd_h = _PSTAR_FD_H or (1.5e-8 if deriv == "fd1" else 1e-6)
+        p_star, err, n_iter, cost = newton_pstar(
+            calc, start, tol=_PSTAR_TOL, max_iter=30,
+            derivative=deriv, fd_h=fd_h,
+            bracket=((p_lo, p_hi, f_lo, f_hi) if method == "newton_safe"
+                     else None))
+    else:
+        raise ValueError("RMHD_PSTAR_METHOD=%r: expected secant, newton, "
+                         "newton_safe, newton_fd or newton_fd1" % method)
     calc.compute_all_variables(p_star)
 
     # p_star, err = secant(calc, p_lo, p_hi, tol=1e-12)
@@ -1333,6 +1523,8 @@ def hlld_flux(
         n_hlle_fallback=int(failed.sum()),
         frac_hlle_fallback=float(failed.sum()) / max(n, 1),
         mean_iters=(float(n_iter[conv].double().mean()) if bool(conv.any()) else float("nan")),
+        pstar_method=method,
+        pstar_cost=cost,
         max_iters=int(n_iter.max()),
     )
     if torch.any(failed):

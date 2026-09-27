@@ -1247,6 +1247,66 @@ most accurate and the most robust of the five, and the gap to the reference
 closes with resolution, not with order. The hybrid exact solver's case rests
 on being exact where it is used (section 1), not on moving the global error.
 
+
+### The HLLD star-pressure root-finder: secant, not Newton (2026-09-27)
+
+Relativistic HLLD is not closed-form: the star-region total pressure p* is
+the root of Mignone's pressure-balance residual (Mignone, Ugliano & Bodo
+2009).  `hlld_flux` finds it with a **clamped secant** --
+`safe_secant_bisection`, whose name is historical: it does no bisection.  It
+is seeded from Mignone's two estimates (the B_n = 0 quadratic, eq. 55, or the
+HLL pressure, chosen by eq. 53) as a pair +-1% apart, widens the pair up to
+five times until the residual changes sign, and iterates to |f| < 1e-10.  A
+lane that does not converge, or whose root fails the wave-ordering check,
+falls back to HLLE.
+
+Newton-Raphson was tried against it, opt-in via `RMHD_PSTAR_METHOD`
+(`src/physics/hlld.py::newton_pstar`), with four derivatives: exact by
+autograd (the residual is plain torch), autograd kept inside the sign-change
+bracket (the "rtsafe" safeguard), central difference, and a forward
+difference from two close values p and p + h.  Measured on the production
+interface states of the 128^2 PLM rotor at t = 0.1, 0.25 and 0.4 (105,336
+interfaces, `scripts/pstar_methods.py`), and end to end on the 64^2 rotor to
+t = 0.4 (calea jobs 2152, 2153):
+
+| method | wrong-order fallback | iterations | batched evals | wall, 128^2 | 64^2 rotor |
+|---|---|---|---|---|---|
+| **secant** (production) | **0.31%** | 3.50 | **158** | **1.94 s** | **238 s** |
+| Newton, two close values, h = 1.5e-8 | 3.54% | 3.18 | 294 | 2.82 s | 312 s |
+| Newton, bracketed, autograd | 3.14% | 3.20 | 190 + 78 backward | 2.55 s | 353 s |
+| Newton, autograd | 3.69% | 3.18 | 639 + 104 backward | 5.28 s | 400 s |
+| Newton, central difference | 3.54% | 3.27 | 1068 | 7.08 s | 787 s |
+
+(The total HLLE fraction is ~11% for every method, because faces with B_n = 0
+fall back by design; the method-dependent part is the wrong-order column.)
+
+**Newton saves 0.3 iterations and loses everything else.** Every variant is
+slower, and every one sends ten times as many interfaces to HLLE as unphysical.
+Two mechanisms, separated on the 64^2 interfaces: in 85% of the lost cases
+Newton converges -- genuinely, |f| < 1e-10 -- to a DIFFERENT root of the
+multi-rooted residual, a median 17% away in p*, which the wave-ordering check
+then rejects; in the other 15% it finds the same root to 1e-8 and the
+ordering check still flips, on near-trivial interfaces where the waves are
+degenerate and the check sits on a knife edge.  Keeping Newton inside the
+bracket barely helps, because the bracket itself can hold more than one root.
+
+The step size of the two-close-values derivative behaves as numerical
+analysis says it should: h = 1e-4 (too coarse) sends 17% to HLLE, h = 1e-10
+(round-off) triples the evaluations, and at h = sqrt(eps) = 1.5e-8 it matches
+the exact derivative.  So the derivative is not what holds Newton back.
+
+**Why the secant wins.** The secant IS Newton with a derivative taken from two
+values -- only the choice of the second value differs.  The secant pairs p
+with the previous iterate, which is free; the finite-difference Newton pairs
+it with a fresh point just beside it, which costs an evaluation and gives a
+sharper local slope.  On a residual with several roots the sharper slope makes
+for bolder steps, and the bolder steps land on neighbouring roots.
+
+**And it is not a detail.** End to end, the choice of root-finder moves the
+64^2 rotor by 0.7-0.9% in L1(rho) at t = 0.4 -- more than switching on the
+exact seven-wave flux does (0.5%), and fifty times the cross-host noise.
+The secant stays the default; Newton remains available, opt-in, for anyone
+who wants to repeat this.
 ---
 
 ## Reproducing the numbers
@@ -1263,6 +1323,7 @@ on being exact where it is used (section 1), not on moving the global error.
 | compound classifier and maps (5) | `scripts/compound_classifier.py results/snapshot_census_64 --run results/rotor_64_exact --maps figs/census` |
 | the routing replay (5) | `RMHD_COMPOUND_SKIP=1 REPLAY_OUT=on.npz scripts/rotor_replay.py replay x <tag>` against the same recording without the flag |
 | the reconstruction study (7) | `N=<n> LIMITER=<limiter> sbatch scripts/calea_rotor_hlld.sh` for each run (limiter pcm, mc, mp5, mp7 or weno5z), then `scripts/recon_study.py --ref <512^2 run> --runs <runs> --plot figs/rotor_output/recon_study.png --failed mp5:512 mp7:512` |
+| secant vs Newton for the HLLD p* (7) | `scripts/pstar_methods.py results/rotor_128_hlld_mc --times 0.1,0.25,0.4` |
 | the rotor's state and solver map (7) | `scripts/plot_rotor_output.py <run> --out figs/rotor_output` |
 | which solution a scheme picks (5) | `scripts/compound_wave.py --balsara1 --flux hlle --limiter mp5 --ncells 1024 2048 4096` |
 | 128^2 census (5) | `RUN=results/rotor_128_exact TAG=128 sbatch scripts/calea_snapshot_census.sh` |
