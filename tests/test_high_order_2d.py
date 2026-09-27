@@ -191,3 +191,25 @@ def test_coverage_rejects_a_mask_of_the_wrong_length(tmp_path):
     with pytest.raises(ValueError):
         h.record_coverage(0, 40, np.array([1, 2]), np.array([1]),
                           seven=np.zeros(7, dtype=bool))
+
+
+def test_a_non_finite_run_fails_instead_of_finishing(tmp_path):
+    """A NaN in the state must abort the run.
+
+    `t + nan` is nan and `nan < tend` is False, so the time loop simply ends:
+    before this guard the 512^2 MP5 rotor (calea job 2085) printed "done",
+    wrote snap_fin and exited 0 with every cell NaN at t = 0.113, and that
+    file was about to be used as a convergence reference.  The guard is
+    exercised here through an initial condition the scheme cannot survive --
+    a CFL far above the stability limit -- rather than by patching the state,
+    so it tests the real path.
+    """
+    out = tmp_path / "boom"
+    r = subprocess.run([sys.executable, "scripts/run_2d.py", "--problem",
+                        "rotor", "--n", "32", "--solver", "hlld", "--limiter",
+                        "mc", "--cfl", "40.0", "--nsnap", "2", "--out",
+                        str(out)], cwd=ROOT, capture_output=True, text=True,
+                       timeout=900)
+    assert r.returncode != 0, r.stdout[-2000:]
+    assert "run failed" in (r.stdout + r.stderr)
+    assert not (out / "snap_fin.npz").exists(), "a failed run wrote snap_fin"

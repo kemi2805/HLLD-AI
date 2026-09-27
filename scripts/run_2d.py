@@ -303,6 +303,18 @@ def main():
     steps_here = 0
     while t < tend - 1e-14:
         dt = min(compute_dt_2d(st.prims, g, eos, a.cfl), tend - t)
+        # A run that goes non-finite must FAIL, not finish.  `t + nan` is nan
+        # and `nan < tend` is False, so the loop below simply ends, snap_fin
+        # is written and the run prints "done" -- which is how the 512^2 MP5
+        # rotor (calea job 2085) reported success at t = 0.113 with every
+        # cell NaN, and it would have been used as this study's reference.
+        if not np.isfinite(dt) or dt <= 0.0:
+            raise SystemExit(
+                "run failed at step %d, t = %.6f: dt = %r.  The state went "
+                "non-finite (rho_max %.3e, p_min %.3e); no snap_fin is "
+                "written and the exit status is non-zero."
+                % (step, t, dt, float(st.prims["rho"].max()),
+                   float(st.prims["p"].min())))
         st, diag = rk_step_ct(st, g, eos, dt, scheme="rk3",
                               bc_x=bc_x, bc_y=bc_y,
                               flux_fn=flux_fn,
@@ -310,6 +322,11 @@ def main():
                               upwind=not a.no_upwind_emf, recorder=rec)
         t += dt
         step += 1
+        if not np.isfinite(float(st.cons["D"].sum())):
+            raise SystemExit(
+                "run failed at step %d, t = %.6f: the conserved state is not "
+                "finite.  No snap_fin is written and the exit status is "
+                "non-zero." % (step, t))
         steps_here += 1
 
         if a.max_steps is not None:          # a pilot: every step is timed

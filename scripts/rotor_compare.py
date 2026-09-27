@@ -18,7 +18,7 @@ Plus per-sweep solved/attempted from diag.csv for an exact run.
 shocktube_compare.py is 1D-only; this is its 2D counterpart.  Kept to numpy +
 matplotlib so it runs on a cluster login node.
 """
-import argparse, csv, glob, os, sys
+import argparse, csv, glob, json, os, sys
 import numpy as np
 
 
@@ -58,14 +58,61 @@ def l1_rel(a, b):
     return float(np.abs(a - b).mean() / max(np.abs(b).mean(), 1e-300))
 
 
-def front_radius(s, thresh=0.02):
-    """Outermost |x| along y=0 where |B| deviates from the ambient by > thresh."""
+# the annuli the regional norms use: the evacuated core, the dense shell
+# where the structure lives, and the outer region -- which is also where the
+# outflow boundary and the schemes' different ghost widths sit, so it is
+# reported separately rather than folded into one number
+REGIONS = (("core r<0.20", 0.0, 0.20), ("shell 0.20-0.40", 0.20, 0.40),
+           ("outer r>0.40", 0.40, 9.9), ("inside r<0.45", 0.0, 0.45))
+
+
+def region_masks(x, y):
+    X, Y = np.meshgrid(x, y, indexing="ij")
+    r = np.hypot(X, Y)
+    return {name: (r >= lo) & (r < hi) for name, lo, hi in REGIONS}
+
+
+def front_radius(s, thresh=0.02, interpolate=True):
+    """Outermost |x| along y=0 where |B| deviates from the ambient by > thresh.
+
+    Interpolated across the crossing by default: taken at the cell centre it
+    is quantised by dx and biased outward on a coarse grid, which is exactly
+    the comparison this is used for (0.4766 / 0.4492 / 0.4395 at 64/128/256
+    against 0.4882 / 0.4598 / 0.4450 interpolated).
+    """
     B = magB(s); x = s["x"]; n = B.shape[0]
     row = B[n // 2]                       # y = 0 row
     amb = row[0]                          # ambient at the boundary
-    dev = np.abs(row - amb) > thresh * max(abs(amb), 1e-300)
-    idx = np.flatnonzero(dev)
-    return float(np.abs(x[idx]).max()) if idx.size else 0.0
+    dev = np.abs(row - amb) - thresh * max(abs(amb), 1e-300)
+    idx = np.flatnonzero(dev > 0)
+    if not idx.size:
+        return 0.0
+    if not interpolate:
+        return float(np.abs(x[idx]).max())
+    out = 0.0
+    for i in (idx.min(), idx.max()):      # the two ends of the disturbed zone
+        j = i - 1 if i == idx.min() else i + 1
+        if 0 <= j < n and dev[j] * dev[i] < 0:
+            w = dev[i] / (dev[i] - dev[j])          # linear crossing
+            out = max(out, abs(x[i] + w * (x[j] - x[i])))
+        else:
+            out = max(out, abs(x[i]))
+    return float(out)
+
+
+def run_stamp(d):
+    """`limiter/solver` of a run, so a comparison cannot silently mix two
+    schemes.  Runs made before the stamp existed say so."""
+    f = os.path.join(d, "run_meta.json")
+    if os.path.exists(f):
+        m = json.load(open(f))
+        return "%s/%s" % (m.get("solver", "?"), m.get("limiter", "?"))
+    for g in sorted(glob.glob(os.path.join(d, "snap_*.npz"))):
+        z = np.load(g)
+        if "limiter" in z.files:
+            return "%s/%s" % (str(z.get("solver", "?")), str(z["limiter"]))
+        break
+    return "unstamped"
 
 
 def read_diag(d):
@@ -96,14 +143,23 @@ def main():
     ap.add_argument("A"); ap.add_argument("B")
     ap.add_argument("--ref", default=None, help="a finer reference run for the front radius")
     ap.add_argument("--out", default=None, help="figure prefix; no figures if omitted")
+    ap.add_argument("--regions", action="store_true",
+                    help="L1 per annulus as well as globally: the global "
+                         "number hides an inversion in the middle annulus, "
+                         "and the outer one carries the boundary")
+    ap.add_argument("--csv", help="append one row per (A, B, t, field, region)")
     a = ap.parse_args()
 
     SA, SB = load_snaps(a.A), load_snaps(a.B)
     SR = load_snaps(a.ref) if a.ref else None
     nA = next(iter(SA.values()))["rho"].shape[0]
     nB = next(iter(SB.values()))["rho"].shape[0]
-    print(f"A = {a.A}  ({nA}^2)\nB = {a.B}  ({nB}^2)"
+    mA, mB = run_stamp(a.A), run_stamp(a.B)
+    print(f"A = {a.A}  ({nA}^2, {mA})\nB = {a.B}  ({nB}^2, {mB})"
           + (f"\nref = {a.ref}" if a.ref else ""))
+    if mA != mB:
+        print("  NOTE: different schemes -- this is a difference between "
+              "SCHEMES, not a resolution study")
     pairs = match_times(sorted(SA), sorted(SB))
     if not pairs:
         sys.exit("no matching snapshot times")
@@ -119,11 +175,41 @@ def main():
             ca, cb = to_common(fa, fb)
             r[k] = l1_rel(ca, cb)
         r["fA"], r["fB"] = front_radius(sa), front_radius(sb)
+        if a.regions:
+            ca, cb = to_common(sa["rho"], sb["rho"])
+            nx = ca.shape[0]
+            xs = np.linspace(-0.5, 0.5, nx, endpoint=False) + 0.5 / nx
+            for name, m in region_masks(xs, xs).items():
+                r["reg_" + name] = float(np.abs(ca - cb)[m].mean()
+                                         / max(np.abs(cb[m]).mean(), 1e-300))
         line = f"{t:7.4f} {r['rho']:9.3e} {r['p']:9.3e} {r['B']:9.3e} {r['fA']:8.4f} {r['fB']:8.4f}"
         if SR:
             tr = min(SR, key=lambda v: abs(v - t)); r["fR"] = front_radius(SR[tr])
             line += f" {r['fR']:10.4f}"
         print(line); rows.append((t, r))
+        if a.regions:
+            print("        regions, L1 rho: " + "  ".join(
+                "%s %.3e" % (n.split()[0], r["reg_" + n])
+                for n in [x[0] for x in REGIONS]))
+
+    if a.csv:
+        new = not os.path.exists(a.csv)
+        with open(a.csv, "a") as fh:
+            w = csv.writer(fh)
+            if new:
+                w.writerow(["A", "B", "scheme_A", "scheme_B", "nA", "nB", "t",
+                            "field", "region", "l1", "front_A", "front_B"])
+            for t, r in rows:
+                for k in ("rho", "p", "B"):
+                    w.writerow([a.A, a.B, mA, mB, nA, nB, "%.4f" % t, k,
+                                "global", "%.6e" % r[k], "%.5f" % r["fA"],
+                                "%.5f" % r["fB"]])
+                for n in [x[0] for x in REGIONS]:
+                    if "reg_" + n in r:
+                        w.writerow([a.A, a.B, mA, mB, nA, nB, "%.4f" % t,
+                                    "rho", n, "%.6e" % r["reg_" + n],
+                                    "%.5f" % r["fA"], "%.5f" % r["fB"]])
+        print("\nappended %d rows to %s" % (len(rows), a.csv))
 
     for tag, d in (("A", a.A), ("B", a.B)):
         dg = read_diag(d)
