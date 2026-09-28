@@ -94,6 +94,8 @@ def coverage_maps(rundir, snaps, nx, ny, ng):
                            np.int32)
                for k in keys + ["attempted", "exact", "failed"]}
            for d in (0, 1)}
+    for d in (0, 1):
+        out[d]["_nsweeps"] = np.zeros(T.size, np.int32)
     for f in files:
         z = np.load(f)
         for r in range(z["sweep"].shape[0]):
@@ -108,6 +110,7 @@ def coverage_maps(rundir, snaps, nx, ny, ng):
                                <= FM.HALF_WINDOW)
             if k.size == 0:
                 continue
+            out[d]["_nsweeps"][k[0]] += 1
             att = FM._unpack(z["attempted"][r], n)
             ex = FM._unpack(z["exact"][r], n)
             out[d]["attempted"][k[0]] += att.reshape(shp)[phys]
@@ -169,25 +172,29 @@ def plot_solver_map(snap, cov, order, k, meta, out, tag):
         a = ax[d]
         a.pcolormesh(x, y, np.log10(snap["rho"]).T, cmap="Greys",
                      shading="auto", alpha=0.55)
-        # first match wins, so a face is drawn as the strongest thing that
-        # happened to it rather than once per category
-        claimed = np.zeros_like(cov[d]["attempted"][k], dtype=bool)
-        for key in order:
-            m = (cov[d][key][k] > 0) & ~claimed
-            claimed |= m
-            ii, jj = np.nonzero(m)
-            shares[key] = shares.get(key, 0) + int(m.sum())
+        # Each face is drawn as its MAJORITY outcome over the sweeps in this
+        # window, and the shares below are summed counts of face-evaluations.
+        # (The first version painted a face with the "best" thing that
+        # happened to it in any sweep, which made the seven-wave solver look
+        # twice as common as the planar rescue when over the whole run the
+        # planar rescue answers MORE interfaces: 49.6% against 43.9%.)
+        nsw = int(cov[d]["_nsweeps"][k])
+        stack = np.stack([cov[d][key][k] for key in order], axis=0)
+        rest = np.maximum(nsw - stack.sum(axis=0), 0)     # never attempted
+        stack = np.concatenate([stack, rest[None]], axis=0)
+        keys_all = list(order) + ["untouched"]
+        winner = np.argmax(stack, axis=0)
+        for j, key in enumerate(keys_all):
+            shares[key] = shares.get(key, 0) + int(stack[j].sum())
+            ii, jj = np.nonzero(winner == j)
             if ii.size:
                 fx, fy = face_xy(x, y, d, ii, jj)
-                a.scatter(fx, fy, s=5, c=colour[key], edgecolors="none")
+                a.scatter(fx, fy, s=5, edgecolors="none",
+                          c=colour.get(key, "#e5e7eb"))
         a.set_aspect("equal")
-        a.set_title("%s" % name, fontsize=10)
+        a.set_title("%s (%d sweeps in the window)" % (name, nsw), fontsize=10)
         a.set_xlabel("x"); a.set_ylabel("y")
-    nx, ny = snap["rho"].shape
-    tot = (nx + 1) * ny + nx * (ny + 1)          # every physical face
-    drawn = sum(shares.values())
-    if drawn < tot:
-        shares["untouched"] = tot - drawn
+    tot = max(sum(shares.values()), 1)            # every face-evaluation
     handles = [Line2D([], [], marker="o", ls="", color=colour[key],
                       label="%s  %.1f%%" % (label[key], 100 * shares[key] / tot))
                for key in order if shares.get(key)]
@@ -197,7 +204,8 @@ def plot_solver_map(snap, cov, order, k, meta, out, tag):
                                     % (100 * shares["untouched"] / tot)))
     ax[1].legend(handles=handles, loc="upper left", bbox_to_anchor=(1.02, 1.0),
                  fontsize=8, frameon=False)
-    fig.suptitle("%s   t = %.3f   which solver answered each face   "
+    fig.suptitle("%s   t = %.3f   which solver answered each face "
+                 "(majority over the window; shares of face-evaluations)   "
                  "(%s flux, %s reconstruction)"
                  % (tag, float(snap["t"]), meta.get("solver", "?"),
                     meta.get("limiter", "?")), fontsize=11)

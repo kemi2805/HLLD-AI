@@ -237,6 +237,43 @@ the y-sweeps, from a pilot of this run; it now states the finished run's
 
 ---
 
+### Which solver answers which interface, per face (2026-09-28)
+
+The tables above are totals.  Since H a98d6a4 every exact run records, per face
+and per sweep, which solver produced the flux and why the rest were never
+attempted (`harvest.record_coverage`; drawn by `scripts/plot_rotor_output.py`).
+The first run with it: the 64^2 rotor to t = 0.4 with production settings -- PLM,
+two retries, the ML ensemble and the planar five-wave rescue -- calea job 32166,
+H 07dd058, 1,704 sweeps.  Per face-evaluation, over the whole run:
+
+| answered by | share of attempted | x-sweeps | y-sweeps |
+|---|---|---|---|
+| seven-wave Newton | 43.9% | 64.8% | 25.1% |
+| **planar five-wave rescue** | **49.6%** | 30.1% | **67.2%** |
+| degenerate class | 1.1% | 0.5% | 1.6% |
+| three-wave rescue | 0 (off in production) | | |
+| fell back to HLLD | 5.4% | 4.7% | 6.1% |
+
+98.9% of the exact answers pass the full seven-wave residual; the remainder is
+the degenerate class, exact in its limit by design (section 1).  About 12% of
+all face-evaluations are attempted at all -- the rest are weak jumps or
+upwind fans.
+
+**The planar rescue answers more interfaces than the solver it rescues**, two
+thirds of all y-sweep interfaces.  That is what makes it worth asking whether
+it should run first (the planar-first study).
+
+![Which solver answered each face, 64^2, t = 0.3](figs/solver_map_64_t030.png)
+
+*Each face is coloured by its majority outcome over the 104 sweeps within
+t = 0.30 +- 0.025, and the legend gives shares of face-evaluations.  The
+x-faces are a mixture; the y-faces are almost all planar (teal); the HLLD
+fallbacks (red) line the inner edge of the dense shell, bordering the central
+cavity -- the crowded-wave-speed region of section 5, not the compound-wave
+one.  A first version of the figure painted each face with the best outcome it
+had in ANY sweep of the window, which made the seven-wave solver look twice as
+common as the planar rescue; the counts above are the correction.*
+
 ## 4b. The gate: why 85.9% is never attempted
 
 The gate is one line — `relative_jump(sL, sR) < tau_weak`, with
