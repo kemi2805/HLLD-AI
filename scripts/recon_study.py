@@ -176,11 +176,13 @@ def plot(runs, E, out, failed, ref_meta):
                         "(t = 0.113 and 0.270)", (512, a_.get_ylim()[1] * 0.83),
                         fontsize=8, color="#374151", ha="center", va="top")
     ax[0].legend(fontsize=8, frameon=False, loc="lower left")
-    fig.suptitle("The rotor at t = 0.4, HLLD flux, five reconstructions, "
-                 "against a %s^2 %s reference -- second order is best, and "
-                 "both MP schemes fail at 512^2"
-                 % (ref_meta.get("n", "?"), STYLE.get(ref_meta.get("limiter"),
-                                                      ("?",))[0]),
+    # facts only in the title: a conclusion written here goes stale the
+    # moment another run lands (this one said "second order is best" until
+    # WENO5-Z reached 256^2)
+    fig.suptitle("The rotor at t = 0.4, HLLD flux, %d reconstructions, "
+                 "against a %s^2 %s reference"
+                 % (len({l for _, _, l, _ in runs}), ref_meta.get("n", "?"),
+                    STYLE.get(ref_meta.get("limiter"), ("?",))[0]),
                  fontsize=11)
     fig.tight_layout()
     fig.savefig(out, dpi=140)

@@ -1154,7 +1154,7 @@ whether going to third order or beyond (PPM, or a genuinely higher-order CT
 scheme) changes the balance, or whether the exact flux simply cannot matter at
 these resolutions for a scheme of this class.
 
-### Higher-order reconstruction, measured (2026-09-26) — second order is best
+### Higher-order reconstruction, measured (2026-09-26, corrected 2026-09-28) — WENO5-Z wins at 256², the MP schemes lose
 
 The question above, answered. Five reconstructions -- PCM (first-order
 Godunov, no reconstruction), PLM (the production MC limiter), WENO5-Z, MP5 and
@@ -1170,22 +1170,30 @@ solver does.** Changing PLM to MP5 moves L1(rho) by 11.7% at both 64^2 and
 interfaces it owns. At these resolutions the scheme's accuracy belongs to the
 reconstruction.
 
-**But higher order is worse, not better.** Error against the reference,
-L1(rho):
+**Which higher order matters more than whether.** Error against the
+reference, L1(rho):
 
 | reconstruction | 64^2 | 128^2 | 256^2 |
 |---|---|---|---|
 | PCM (1st) | 35.9% | 37.9% | 26.5% |
-| **PLM (2nd)** | **28.8%** | **30.3%** | **12.8%** |
-| WENO5-Z (5th) | 28.7% | — | — |
+| PLM (2nd, production) | 28.8% | 30.3% | 12.8% |
+| **WENO5-Z (5th)** | **28.7%** | **30.0%** | **11.5%** |
 | MP5 (5th) | 31.1% | 32.7% | 13.6% |
 | MP7 (7th) | 32.2% | 33.1% | 15.2% |
 
-The ordering PLM ~ WENO5-Z < MP5 < MP7 < PCM holds at every resolution, in
-L1(rho), L1(p) and L1(|B|), and in each of the three annuli (core r < 0.2,
-shell 0.2-0.4, outer r > 0.4 -- the last carries the outflow boundary and the
-schemes' different ghost widths, which is why it is reported apart). PCM is
-clearly worst, so reconstruction matters; it peaks at second order.
+PCM is clearly worst, so reconstruction matters.  Above second order the two
+families part ways.  **WENO5-Z** ties PLM at 64^2 and 128^2 and at 256^2 beats
+it by 10% relative -- in L1(rho), L1(p) (8.28% against 8.41%) and L1(|B|)
+(4.90% against 5.25%), and in every annulus (core r < 0.2: 15.6 against 17.4;
+shell 0.2-0.4: 18.4 against 20.5; outer r > 0.4, which carries the outflow
+boundary and the schemes' different ghost widths: 1.91 against 2.00) -- for 9%
+more wall time.  It does so against a PLM reference, which flatters PLM.  The
+**MP schemes** lose to PLM at every resolution, and MP7 more than MP5.
+
+*Correction.* This section first appeared (2026-09-26) with WENO5-Z at 64^2
+only, where it ties PLM, under the heading "second order is best".  The 128^2
+and 256^2 WENO5-Z runs (calea job 32165) overturned that: what fails is the
+MP limiter, not order as such.
 
 **And the MP schemes are not robust on this problem.** They drive the
 pressure to exactly zero at every resolution (PLM's minimum is 4.5e-3 to
@@ -1198,12 +1206,17 @@ shell does not converge: between their own 128^2 and 256^2 runs it changes by
 72% (MP5) and 74% (MP7), against 58% for PLM -- the knots rearrange instead of
 sharpening in place. And at 512^2 **both fail outright**: MP5 went non-finite
 at t = 0.113 and MP7 at t = 0.270, while PLM and PCM complete the problem.
-WENO5-Z, of the same order as MP5, shows none of this at 64^2 -- the
-instability belongs to the MP limiter, not to the order.
+WENO5-Z, of the same order as MP5, keeps the pressure and density minima at
+PLM's level (p_min 5.2e-3 at every resolution) -- the instability belongs to
+the MP limiter, not to the order.  It is not free of the symmetry problem,
+though: its worst violation at 256^2 is 0.15 against PLM's 0.09, with 0.28% of
+cells off by more than 5% (MP5: 0.64 and 3.7%).  Whether WENO5-Z survives
+512^2, where both MP schemes failed, is being run (calea job 32167).
 
-**Cost buys nothing.** MP5 at 256^2 (7742 s) is beaten by PLM at 256^2
-(6933 s); MP5 at 128^2 (1841 s) by PLM at 64^2 (254 s). WENO5-Z at 64^2 ties
-PLM at 64^2 at the same cost.
+**Cost.** The MP schemes buy nothing: MP5 at 256^2 (7742 s) is beaten by PLM
+at 256^2 (6933 s), MP5 at 128^2 (1841 s) by PLM at 64^2 (254 s).  WENO5-Z at
+256^2 (7533 s) is the most accurate run measured, at 9% more cost than PLM at
+the same resolution.
 
 ![Error and symmetry violation against resolution](figs/recon_study.png)
 
@@ -1211,13 +1224,12 @@ PLM at 64^2 at the same cost.
 
 **Three caveats, all stated on purpose.**
 
-- **The reference is PLM, and flatters PLM.** The plan was an MP5 reference,
-  which would have flattered MP5; it could not be made, because MP5 does not
-  complete the problem at 512^2. That is itself the result. A second-order
-  reference measures distance to a second-order solution, so the margin by
-  which PLM wins is an upper bound -- but the MP schemes' failures (the
-  pressure floor, the growing asymmetry, the blow-up) do not depend on any
-  reference at all.
+- **The reference is PLM, and flatters PLM.** The plan was an MP5 reference;
+  it could not be made, because MP5 does not complete the problem at 512^2.
+  A second-order reference measures distance to a second-order solution, so
+  WENO5-Z's 10% lead at 256^2 is if anything understated, and the MP
+  schemes' deficit overstated -- but their failures (the pressure floor, the
+  growing asymmetry, the blow-up) do not depend on any reference at all.
 - **L1(rho) is partly saturated.** From 64^2 to 128^2 the observed order is
   -0.07 for every scheme -- doubling the resolution does not reduce the error
   against a fixed finer reference -- and only from 128^2 to 256^2 does it move
@@ -1241,11 +1253,13 @@ non-finite dt or conserved state now aborts with a non-zero status and no
 the MP7 512^2 run then failed loudly, as it should.
 
 **What this means for the paper.** The exact Riemann solver was never the
-limiting factor at these resolutions, and higher-order reconstruction is not
-the lever either: the production scheme -- PLM with the MC limiter -- is the
-most accurate and the most robust of the five, and the gap to the reference
-closes with resolution, not with order. The hybrid exact solver's case rests
-on being exact where it is used (section 1), not on moving the global error.
+limiting factor at these resolutions: the reconstruction moves the rotor 24x
+more.  Among reconstructions, WENO5-Z is the one worth having -- it matches
+PLM at coarse resolution and wins by 10% at 256^2, while the monotonicity-
+preserving schemes are less accurate and unstable.  Even so, most of the gap
+closes with resolution, not with order (64^2 -> 256^2 takes WENO5-Z from
+28.7% to 11.5%).  The hybrid exact solver's case rests on being exact where
+it is used (section 1), not on moving the global error.
 
 
 ### The HLLD star-pressure root-finder: secant, not Newton (2026-09-27)
@@ -1322,7 +1336,7 @@ who wants to repeat this.
 | snapshot census (5) | `sbatch scripts/calea_snapshot_census.sh` (from `ssh itp`; writes `results/snapshot_census_64`) |
 | compound classifier and maps (5) | `scripts/compound_classifier.py results/snapshot_census_64 --run results/rotor_64_exact --maps figs/census` |
 | the routing replay (5) | `RMHD_COMPOUND_SKIP=1 REPLAY_OUT=on.npz scripts/rotor_replay.py replay x <tag>` against the same recording without the flag |
-| the reconstruction study (7) | `N=<n> LIMITER=<limiter> sbatch scripts/calea_rotor_hlld.sh` for each run (limiter pcm, mc, mp5, mp7 or weno5z), then `scripts/recon_study.py --ref <512^2 run> --runs <runs> --plot figs/rotor_output/recon_study.png --failed mp5:512 mp7:512` |
+| the reconstruction study (7) | `N=<n> LIMITER=<limiter> sbatch scripts/calea_rotor_hlld.sh` for each run (limiter pcm, mc, mp5, mp7 or weno5z; calea `results/`, see `results/recon_study_2026-09/README.md`), then `scripts/recon_study.py --ref <512^2 run> --runs <runs> --plot figs/rotor_output/recon_study.png --failed mp5:512 mp7:512` |
 | secant vs Newton for the HLLD p* (7) | `scripts/pstar_methods.py results/rotor_128_hlld_mc --times 0.1,0.25,0.4` |
 | the rotor's state and solver map (7) | `scripts/plot_rotor_output.py <run> --out figs/rotor_output` |
 | which solution a scheme picks (5) | `scripts/compound_wave.py --balsara1 --flux hlle --limiter mp5 --ncells 1024 2048 4096` |
