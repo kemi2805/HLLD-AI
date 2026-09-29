@@ -1247,8 +1247,10 @@ WENO5-Z, of the same order as MP5, keeps the pressure and density minima at
 PLM's level (p_min 5.2e-3 at every resolution) -- the instability belongs to
 the MP limiter, not to the order.  It is not free of the symmetry problem,
 though: its worst violation at 256^2 is 0.15 against PLM's 0.09, with 0.28% of
-cells off by more than 5% (MP5: 0.64 and 3.7%).  Whether WENO5-Z survives
-512^2, where both MP schemes failed, is being run (calea job 32167).
+cells off by more than 5% (MP5: 0.64 and 3.7%).  **And WENO5-Z completes the
+problem at 512^2** (calea job 32167: 2,736 steps, 6.4 h, finite throughout,
+end-of-run symmetry error 0.45 against PLM's 0.48 at the same resolution),
+where MP5 and MP7 both went non-finite.
 
 **Cost.** The MP schemes buy nothing: MP5 at 256^2 (7742 s) is beaten by PLM
 at 256^2 (6933 s), MP5 at 128^2 (1841 s) by PLM at 64^2 (254 s).  WENO5-Z at
@@ -1261,12 +1263,15 @@ the same resolution.
 
 **Three caveats, all stated on purpose.**
 
-- **The reference is PLM, and flatters PLM.** The plan was an MP5 reference;
-  it could not be made, because MP5 does not complete the problem at 512^2.
-  A second-order reference measures distance to a second-order solution, so
-  WENO5-Z's 10% lead at 256^2 is if anything understated, and the MP
-  schemes' deficit overstated -- but their failures (the pressure floor, the
-  growing asymmetry, the blow-up) do not depend on any reference at all.
+- **The reference is PLM, and flatters PLM -- so it was swapped.** The plan
+  was an MP5 reference; it could not be made, because MP5 does not complete
+  the problem at 512^2.  WENO5-Z does, which gives a second reference with
+  the opposite bias.  Against it, at 256^2: WENO5-Z 12.28%, PLM 13.91%, MP5
+  14.36%, MP7 15.95%, PCM 26.66% -- the SAME ranking, and WENO5-Z ties PLM at
+  64^2 and 128^2 under both.  The two references bracket WENO5-Z's lead at
+  256^2 at **10-12%**, each bounding the other's bias.  The MP schemes'
+  failures (the pressure floor, the growing asymmetry, the blow-up) do not
+  depend on any reference at all.
 - **L1(rho) is partly saturated.** From 64^2 to 128^2 the observed order is
   -0.07 for every scheme -- doubling the resolution does not reduce the error
   against a fixed finer reference -- and only from 128^2 to 256^2 does it move
