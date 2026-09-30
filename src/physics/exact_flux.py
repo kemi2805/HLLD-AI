@@ -143,6 +143,22 @@ _BN_3WX_MAX = float(os.environ.get("RMHD_BN_3WX_MAX", "0.1"))
 # above, whose answers never reach 1e-6 on the same test, which is why that one
 # stays off and this one is worth having.
 _PLANAR5_FALLBACK = os.environ.get("RMHD_PLANAR5_FALLBACK", "0") not in ("0", "", "off")
+# The planar rescue's LADDER (opt-in, default off).  The rescue starts the
+# planar Newton once, from the mean state, on the unflipped branch.  The
+# failure ledger (2026-09-29, 36 sweeps, 1371 failing interfaces) offered
+# every failing lane 4 flip branches x 6 seeds under production's own
+# acceptance: 192 were solved, none by a seed the rescue uses.  The rungs
+# below are that table's greedy cover, in its order -- fixed on the ledger's
+# windows, to be judged on held-out ones -- and are tried only on lanes still
+# unsolved, so nothing production solves can change:
+#     (flip L, flip R, seed)
+_PLANAR5_RUNGS = ((False, False, "+L"), (False, False, "+R"),
+                  (False, False, "-L"), (False, True, None),
+                  (True, False, None), (False, False, "s2p"))
+_PLANAR5_LADDER = os.environ.get("RMHD_PLANAR5_LADDER", "0") not in ("0", "", "off")
+# Offer the planar rescue the lanes whose seven-wave answer was refused as a
+# self-crossing fan (opt-in, default off; ledger: 16 of 16 then solved).
+_PLANAR5_CROSSED = os.environ.get("RMHD_PLANAR5_CROSSED", "0") not in ("0", "", "off")
 _PLANAR_TOL = float(os.environ.get("RMHD_PLANAR_TOL", "1e-6"))
 _PLANAR5_VERIFY = float(os.environ.get("RMHD_PLANAR5_VERIFY", "1e-8"))
 # Verify every exact flux against the full seven-wave system and report the
@@ -594,6 +610,163 @@ def _solve_and_ray(P, gamma, subL, subR, subBn, seed6, keys, seeds_extra, *,
     return res, d, star, region, ray_ok, n_fan
 
 
+def _planar_and_ray(P, gamma, sL5, sR5, B5, *, accuracy, max_iter,
+                    unk3_init=None, flip=(False, False)):
+    """The five-wave planar solve, the xi = 0 ray and the physical check.
+
+    One lane in, one verdict out, pure numpy: this is the planar rescue's
+    body, factored out so that anything else that offers a lane to the planar
+    solver -- another seed, another flip branch, the failure ledger -- applies
+    EXACTLY production's acceptance and not a private copy of it.
+
+    Returns a dict:
+      good     accepted: verified against the full seven-wave residual,
+               planar enough, ray resolved, state physical, and (with a flip)
+               the fan ordered
+      star, region   the state at xi = 0 and its zone (valid where `good`)
+      zones6, VsLv, VsRv   the answer in the seven-wave layout
+               [A, A2, B, C, D2, D] -- A2 = A and D2 = D without a flip
+      n_iter   Newton iterations per lane
+      reason   why a lane was refused: 0 accepted, 1 the reduced Newton did
+               not converge, 2 the input is not planar, 3 the answer fails
+               the full residual, 4 the ray, 5 unphysical, 6 self-crossing
+
+    Without a flip both rotational discontinuities have zero strength and
+    cannot cross anything that matters, so the wave-order gate is skipped, as
+    it always was; a flipped answer carries a strength-pi rotation and is
+    held to the gate.
+    """
+    import numpy as np
+    RAY = P["ray"]
+    n = B5.shape[0]
+    r5 = P["planar5"]["solve"](sL5, sR5, B5, unk3_init=unk3_init,
+                               accuracy=accuracy, max_iter=max_iter,
+                               planar_tol=_PLANAR_TOL,
+                               verify_tol=_PLANAR5_VERIFY, flip=flip)
+    good = r5["converged"].astype(bool)
+    raw = r5["converged_raw"].astype(bool)
+    reason = np.where(good, 0, np.where(
+        ~raw, 1, np.where(r5["planar_resid"] > _PLANAR_TOL, 2, 3))).astype(np.int8)
+    A, B_, C_, D = r5["zones"]
+    A2, D2 = r5["zones_mid"]
+    zones6 = [A, A2, B_, C_, D2, D]
+    out = dict(good=good, star=None, region=None, zones6=zones6,
+               VsLv=None, VsRv=None, n_iter=np.asarray(r5["n_iter"]),
+               reason=reason, unk=r5["unk"],
+               # how close each lane came: the reduced system's residual and
+               # the full seven-wave one (diagnostics; nothing reads them to
+               # decide anything)
+               resid=np.asarray(r5["nrm"]),
+               full_resid=np.asarray(r5["full_resid"]),
+               # how far each slow wave missed the tangential field it was
+               # asked to reach: the two equations the reduced system drops
+               slack=np.maximum(np.abs(np.asarray(r5["slack"][0])),
+                                np.abs(np.asarray(r5["slack"][1]))))
+    if not good.any():
+        return out
+    aspd = P["planar5"]["waves"]["alfven_speed"]
+    VsLv5 = [r5["speeds"][0], aspd(A, B5, "L"), r5["speeds"][1]]
+    VsRv5 = [r5["speeds"][4], aspd(D, B5, "R"), r5["speeds"][3]]
+    st5, reg5, e5 = RAY.state_at_xi(
+        sL5, sR5, zones6, VsLv5, VsRv5,
+        B5, gamma, P["xi"], P["fan_p"], P["fan_n"])
+    reason[good & e5] = 4
+    good = good & ~e5
+    rho5, P5_, vn5, vt15, vt25, Bt15, Bt25 = st5
+    v2_ = vn5 * vn5 + vt15 * vt15 + vt25 * vt25
+    W2_ = 1.0 / np.maximum(1.0 - v2_, 1e-300)
+    eta_ = B5 * vn5 + Bt15 * vt15 + Bt25 * vt25
+    b2_ = (B5 ** 2 + Bt15 ** 2 + Bt25 ** 2) / W2_ + eta_ ** 2
+    phys5 = (rho5 > 0.0) & (v2_ < 1.0) & (P5_ - 0.5 * b2_ > 0.0)
+    for c_ in st5:
+        phys5 &= np.isfinite(c_)
+    reason[good & ~phys5] = 5
+    good = good & phys5
+    if (flip[0] or flip[1]) and _WAVE_ORDER and good.any():
+        x5 = _self_crossing(zones6, VsLv5, VsRv5, _WAVE_ORDER_TOL)
+        reason[good & x5] = 6
+        good = good & ~x5
+    out.update(good=good, star=st5, region=reg5, VsLv=VsLv5, VsRv=VsRv5)
+    return out
+
+
+def _planar_seed(sL5, sR5, B5, kind):
+    """A planar seed `[ln p_LF, Bt_CD, ln p_RF]` other than the default:
+    the mean total pressure with `+-|B_t|` of one side (``"+L"``, ``"-L"``,
+    ``"+R"``, ``"-R"``) or `sqrt(2P)` signed like the mean field (``"s2p"``).
+    ``None`` is the solver's own default."""
+    import numpy as np
+    from rmhd.batched import planar5_b as P5B
+    if kind is None:
+        return None
+    L0, R0 = P5B.to_planar(sL5, sR5, B5)[:2]
+    d = P5B.default_seed(L0, R0)
+    if kind == "s2p":
+        bt = np.sqrt(2.0 * np.exp(d[0])) * np.where(d[1] >= 0.0, 1.0, -1.0)
+    else:
+        bt = np.abs((L0 if kind[1] == "L" else R0)[5])
+        bt = bt if kind[0] == "+" else -bt
+    return [d[0].copy(), np.array(bt, dtype=float, copy=True), d[0].copy()]
+
+
+def _planar_ladder(P, gamma, sL5, sR5, B5, r5, *, accuracy, max_iter):
+    """Offer the lanes `r5` left unsolved to the rungs of `_PLANAR5_RUNGS`.
+
+    ``r5`` is `_planar_and_ray`'s answer from the default start; the return
+    value has the same layout with the rungs' answers merged in, plus
+    ``rung`` (0 the default start, k the k-th rung, -1 unsolved) and
+    ``n_iter`` summed over the attempts.  Every answer passes through
+    `_planar_and_ray`, that is through production's acceptance.
+    """
+    import numpy as np
+    n = B5.shape[0]
+    good = r5["good"].copy()
+    rung = np.where(good, 0, -1).astype(np.int8)
+    n_iter = np.maximum(np.asarray(r5["n_iter"]), 0).astype(int)
+
+    def full(v):
+        return (np.zeros(n) if v is None
+                else np.array(np.broadcast_to(v, (n,)), dtype=float, copy=True))
+
+    have = r5["star"] is not None
+    star = [full(r5["star"][j] if have else None) for j in range(7)]
+    region = (np.array(r5["region"], copy=True) if have
+              else np.zeros(n, dtype=int))
+    zones6 = [[full(c) for c in z] for z in r5["zones6"]]
+    VsLv = [full(r5["VsLv"][j] if have else None) for j in range(3)]
+    VsRv = [full(r5["VsRv"][j] if have else None) for j in range(3)]
+    reason = r5["reason"].copy()
+    for k, (fl, fr, kind) in enumerate(_PLANAR5_RUNGS, start=1):
+        i = np.flatnonzero(~good)
+        if i.size == 0:
+            break
+        sl, sr, b = [c[i] for c in sL5], [c[i] for c in sR5], B5[i]
+        r = _planar_and_ray(P, gamma, sl, sr, b, accuracy=accuracy,
+                            max_iter=max_iter, flip=(fl, fr),
+                            unk3_init=_planar_seed(sl, sr, b, kind))
+        n_iter[i] += np.maximum(np.asarray(r["n_iter"]), 0)
+        g = r["good"]
+        if not g.any():
+            continue
+        w = i[g]
+        for j in range(7):
+            star[j][w] = r["star"][j][g]
+        region[w] = np.asarray(r["region"])[g]
+        for z, zr in zip(zones6, r["zones6"]):
+            for j in range(7):
+                z[j][w] = np.broadcast_to(zr[j], (i.size,))[g]
+        for j in range(3):
+            VsLv[j][w] = np.broadcast_to(r["VsLv"][j], (i.size,))[g]
+            VsRv[j][w] = np.broadcast_to(r["VsRv"][j], (i.size,))[g]
+        good[w] = True
+        rung[w] = k
+        reason[w] = 0
+    out = dict(r5)
+    out.update(good=good, star=star, region=region, zones6=zones6,
+               VsLv=VsLv, VsRv=VsRv, n_iter=n_iter, reason=reason, rung=rung)
+    return out
+
+
 def _run_pipeline(P, gamma, subL, subR, subBn, seed6, keys, seeds_extra, **kw):
     """In-process, or over the worker pool when RMHD_POOL asks for one."""
     from . import exact_pool
@@ -686,7 +859,13 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
         LAST_DIAG.update(**diag, n_attempted=0, n_exact=0,
                          n_hlld_fallback=N, frac_hlld_fallback=1.0,
                          frac_exact=0.0, compound_mask=routed,
-                         exact_mask=torch.zeros(N, dtype=torch.bool))
+                         exact_mask=torch.zeros(N, dtype=torch.bool),
+                         sel=sel, reason7=np.zeros(0, np.int8),
+                         reason5=np.zeros(0, np.int8),
+                         seven_attempts=np.zeros(0, int),
+                         seven_n_iter_total=np.zeros(0, int),
+                         planar_n_iter=np.zeros(0, int),
+                         planar_rung=np.zeros(0, np.int8))
         if harvester is not None:
             # nothing was attempted, so the map is all gate reasons -- which
             # is exactly what makes a sweep like the rotor's t = 0 x-sweep
@@ -823,6 +1002,16 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
     # and before the planar rescue, which may still answer it exactly.
     reclass = np.asarray(res["reclassified"], dtype=bool)
     n_reclass_refused = int((take & reclass).sum())
+    # Why the seven-wave path lost a lane, one code per attempted lane --
+    # diagnostics only, nothing below reads it: 0 accepted, 1 the Newton did
+    # not converge, 2 the ray could not be resolved, 3 unphysical state,
+    # 4 self-crossing fan, 5 degenerate answer refused (reclassified).
+    reason7 = np.zeros(sel.size, dtype=np.int8)
+    reason7[take & reclass] = 5
+    reason7[crossed] = 4
+    reason7[conv & ray_ok & ~physical] = 3
+    reason7[conv & ~ray_ok] = 2
+    reason7[~conv] = 1
     take = take & ~reclass
 
     # A self-crossing lane is NOT offered to the rescues below (hence the
@@ -880,36 +1069,35 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
     # rotations vanish, which is what `planar5_b.solve` has already verified.
     take5 = np.zeros(sel.size, dtype=bool)
     n5_att = 0
+    reason5 = np.full(sel.size, 7, dtype=np.int8)        # 7 = not offered
+    iters5 = np.full(sel.size, -1, dtype=int)
+    rung5 = np.full(sel.size, -1, dtype=np.int8)         # -1 = not by planar
     if _PLANAR5_FALLBACK:
-        cand = np.flatnonzero(~take & ~crossed & ~take3)
+        offered = ~take & ~take3
+        if not _PLANAR5_CROSSED:
+            offered &= ~crossed
+        cand = np.flatnonzero(offered)
         n5_att = int(cand.size)
         if cand.size:
             sL5 = [c[cand] for c in subL]
             sR5 = [c[cand] for c in subR]
             B5 = subBn[cand]
-            r5 = P["planar5"]["solve"](sL5, sR5, B5, accuracy=accuracy,
-                                       max_iter=max_iter,
-                                       planar_tol=_PLANAR_TOL,
-                                       verify_tol=_PLANAR5_VERIFY)
-            good = r5["converged"].astype(bool)
+            r5 = _planar_and_ray(P, gamma, sL5, sR5, B5, accuracy=accuracy,
+                                 max_iter=max_iter)
+            if _PLANAR5_LADDER and not r5["good"].all():
+                r5 = _planar_ladder(P, gamma, sL5, sR5, B5, r5,
+                                    accuracy=accuracy, max_iter=max_iter)
+                rung5[cand] = r5["rung"]
+            else:
+                rung5[cand] = np.where(r5["good"], 0, -1)
+            good = r5["good"]
+            reason5[cand] = r5["reason"]
+            iters5[cand] = r5["n_iter"]
             if good.any():
-                A, B_, C_, D = r5["zones"]
-                aspd = P["planar5"]["waves"]["alfven_speed"]
-                VsLv5 = [r5["speeds"][0], aspd(A, B5, "L"), r5["speeds"][1]]
-                VsRv5 = [r5["speeds"][4], aspd(D, B5, "R"), r5["speeds"][3]]
-                st5, reg5, e5 = RAY.state_at_xi(
-                    sL5, sR5, [A, A, B_, C_, D, D], VsLv5, VsRv5,
-                    B5, gamma, P["xi"], P["fan_p"], P["fan_n"])
-                good &= ~e5
-                rho5, P5_, vn5, vt15, vt25, Bt15, Bt25 = st5
-                v2_ = vn5 * vn5 + vt15 * vt15 + vt25 * vt25
-                W2_ = 1.0 / np.maximum(1.0 - v2_, 1e-300)
-                eta_ = B5 * vn5 + Bt15 * vt15 + Bt25 * vt25
-                b2_ = (B5 ** 2 + Bt15 ** 2 + Bt25 ** 2) / W2_ + eta_ ** 2
-                phys5 = (rho5 > 0.0) & (v2_ < 1.0) & (P5_ - 0.5 * b2_ > 0.0)
-                for c_ in st5:
-                    phys5 &= np.isfinite(c_)
-                good &= phys5
+                st5, reg5 = r5["star"], r5["region"]
+                # A2 is A and D2 is D unless a rung put a reversal there
+                A, A2, B_, C_, D2, D = r5["zones6"]
+                VsLv5, VsRv5 = r5["VsLv"], r5["VsRv"]
                 if good.any():
                     w = cand[good]
                     for j in range(7):
@@ -930,7 +1118,7 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
                         hL = [c[good] for c in sL5]
                         hR = [c[good] for c in sR5]
                         hz = [[c[good] for c in z]
-                              for z in (A, A, B_, C_, D, D)]
+                              for z in (A, A2, B_, C_, D2, D)]
                         harvester.record(
                             hL, hR, B5[good],
                             cls=np.full(k5, C.COPLANAR, dtype=np.int8),
@@ -1039,6 +1227,16 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
         **diag,
         exact_mask=exact_mask,
         compound_mask=routed,
+        # per attempted lane (index into the sweep: `sel`): why each solver
+        # lost it, and what it cost
+        sel=sel, reason7=reason7, reason5=reason5,
+        seven_attempts=np.asarray(res.get("attempts", np.ones(sel.size, int))),
+        seven_n_iter_total=np.asarray(
+            res.get("n_iter_total", res.get("n_iter", np.zeros(sel.size, int)))),
+        planar_n_iter=iters5,
+        # which start of the planar rescue answered: 0 its default, k the
+        # k-th rung of RMHD_PLANAR5_LADDER, -1 not answered by the rescue
+        planar_rung=rung5,
         n_attempted=int(sel.size),
         n_exact=n_exact,
         n_fan_interior=n_fan,

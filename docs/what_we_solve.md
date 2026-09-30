@@ -936,6 +936,266 @@ longer ideal MHD.
 
 ---
 
+## 5a. Toward 100%: the failure ledger (2026-09-29)
+
+The goal changed from explaining the failures to removing them. Before
+building anything, every interface production loses was offered -- offline,
+with a generous budget -- to every method this project has, and every answer
+was held to production's own acceptance (full residual to 1e-8, ray,
+physical state, wave order). 36 recorded sweeps of the 64² rotor (windows at
+t = 0.10, 0.25, 0.40, two steps each, fixed in advance); production replays
+its own recording bitwise (G0).
+
+| | interfaces | of the failures | of attempted |
+|---|---|---|---|
+| attempted | 24,429 | | |
+| exact in production | 23,058 | | 94.39% |
+| failing | 1,371 | | 5.61% |
+| **R1** recovered by a cheap method (more seven-wave retries, planar flips × seeds) | 198 | 14.4% | 0.81% |
+| **R2** recovered only by an expensive search (ε-ladder, tube-read seed) | 101 | 7.4% | 0.41% |
+| **R3** recovered only by the intermediate branch (slow-shock window opened) | 56 | 4.1% | 0.23% |
+| **R4** nothing found | 1,016 | 74.1% | 4.16% |
+
+If every recovery were a rung of the ladder the solved fraction would be
+95.61% (95.84% with the intermediate branch). **The ceiling of what we have
+is 96%, not 99%**, and three quarters of the failures are beyond every
+method. What follows is about those.
+
+Per method: seven-wave with 8 retries and diverse seeds recovers 11 (the
+seven-wave solver is not seed-limited here); the planar solver over 4 flip
+branches × 6 seeds recovers 192, **none of them from the start production
+uses**; the expensive searches 250; the intermediate branch 203. Of the 192,
+three starts on the unflipped branch (Bt_CD = +|Bt_L|, +|Bt_R|, -|Bt_L|)
+account for 163 and two flipped ones for 22 more. On 1,188 controls the
+planar sweep answers 1,183 and never with a different star pressure; the
+intermediate branch differs on 2 (0.2%) -- it can find another root.
+
+Two readings the cards settled:
+
+* **"Converged but fails the full residual"** (184 lanes in production) is
+  not a tolerance problem: the three planar equations close to 1e-12 and the
+  full system is off by O(1), all of it in the slow-wave slack -- the slow
+  wave cannot reach the tangential field it was asked for. 153 of them are
+  R4.
+* **The 16 self-crossing refusals** are all solved by the planar solver from
+  its default start; production does not offer them to it
+  (`RMHD_PLANAR5_CROSSED`, below).
+
+### What R4 is: mostly NOT compound waves
+
+The tube test calls 321 of the 1,016 compound (31.6%; 27.9% of all
+failures). **The other 695 -- 2.85% of attempted, half of everything
+production loses -- are elementary according to the PDE**: only magnetosonic
+jumps, no reversal, and jumps between the two states as small as on the
+interfaces production solves (median largest relative jump 3.5% against
+4.3%). For such a problem a solution of elementary waves exists. We do not
+find it.
+
+What distinguishes them is the field geometry: |B_n|/|B_t| has median 4.4
+against 0.85 on the controls -- the field is nearly NORMAL to the face, and
+where in addition the Alfven speed exceeds the sound speed the fast and the
+Alfven eigenvalue nearly coincide.
+
+`scripts/ledger_subwaves.py` evaluates the four waves the planar solver has
+to construct, at its default start:
+
+| group | n | a fast wave fails | a slow wave fails | any |
+|---|---|---|---|---|
+| controls (solved) | 1,188 | 0 | 10 | 1% |
+| R1 | 198 | 0 | 56 | 26% |
+| R2 | 101 | 4 | 42 | 46% |
+| R4, compound | 321 | 9 | 2 | 3% |
+| R4, elementary | 695 | 120 | 138 | 36% |
+
+Every one of the 120 failing fast waves is a weak SHOCK (dp/p median 0.4%).
+
+### A defect, found and repaired: the fast-shock scan steps over a pair of roots
+
+The fast-shock solver scans the Hugoniot residual on 500 uniform nodes
+between the light cone and the Alfven speed (plus 200 stretched towards the
+light cone) and bisects sign changes. On these 120 waves
+(`ledger_subwaves.py --pairs`, 30,000 nodes each):
+
+* the residual has **exactly two roots on every one of them**, never closer
+  than 1.01 fast-Alfven gaps and typically 1.9 apart, the outer one between
+  0.03 and 10⁴ gaps from the fast eigenvalue;
+* the gap is 0 to 0.8 of one scan step. The scan sees the same sign on both
+  sides of the pair and reports that there is no shock;
+* on 119 of 120 exactly one of the two is an evolutionary fast shock:
+  two-sided Lax on the fast family AND super-Alfvenic behind. The other root
+  leaves the flow behind it sub-Alfvenic -- an intermediate shock. Lax on the
+  fast family alone, which is what the solver checks, admits both.
+* the tangential field in the solver's frame is NOT a criterion: with a
+  tangential velocity it weakens across a genuine fast shock (to 0.956 of
+  its value on one of the test lanes).
+
+No scan is fine enough for a pair 10⁻⁷ apart, so `fast_edge_scan`
+(`rmhd/batched/shock_b.py`, `RMHD_FAST_EDGE_SCAN=1`, default off) SPLITS the
+pair instead: at the zero of `Vs - (Alfven speed behind)`, which has a simple
+zero and an O(1) range, and at the fast eigenvalue of the ahead state; from
+the split point outward the first sign change is the fast shock. It runs only
+on lanes the standard scan gave up on, so no existing answer can move. It
+finds 112 of the 120.
+
+Measured, paired against the 36 recorded sweeps: **exact 23,058 → 23,084
+(94.39% → 94.49%), gained 26, lost 0** (McNemar p = 3e-8); of the 23,058
+exact in both, one star pressure moved, by 7e-10.
+
+### Why the gain is small: the residual is not a function yet
+
+`scripts/newton_trace.py` prints one planar Newton iteration by iteration.
+On the unsolved elementary interfaces the iteration does not fail to
+converge in the usual sense -- the RESIDUAL JUMPS. Interface 719 (states
+equal to 1e-4 in total pressure, σ ≈ 1, |B_t|/|B_n| = 0.12):
+
+| iteration | right slow shock speed | right fast wave speed | |f| |
+|---|---|---|---|
+| 0 | +0.434 | +0.446256 | 1.0 |
+| 1 | +0.220 | +0.446256 | 7.8e-3 |
+| 2 | +0.446248 | +0.446256 | 3.9e-3 |
+| 3 | +0.492949 | +0.492837 | 3.3e-3 |
+
+The slow shock's speed hops between branches from one iterate to the next
+(0.220 is the slow wave; 0.446 sits on the Alfven speed), in the last row it
+is FASTER than the fast shock, and between iterations 2 and 3 the right
+fast-wave pressure moved by 28% while the residual barely changed (smallest
+singular value of the Jacobian 2e-7). A Newton iteration on a function that
+changes branch under it cannot converge, whatever its seed -- which is also
+why neither more seeds nor the tube-read seed (accurate to 1e-3) helped.
+
+`newton_trace.py` over 200 of these interfaces: the line search finds no
+smaller residual on 109, a wave cannot be constructed at the very start on
+71, 4 converge (with the edge scan: 131, 40 and 10).
+
+### The cause: the tangential field is the wrong coordinate for these slow waves
+
+The solver describes each slow wave by the tangential field it must reach
+(`Bt_CD`), and chooses shock or rarefaction by whether |B_t| has to fall or
+rise -- across a slow shock the field weakens. Both are properties of one
+regime. Followed along the slow family from the state behind the fast wave
+(`P` the total pressure):
+
+| interface, side | slow shock, P × 1.01 | slow shock, P × 1.10 | the solver's target |
+|---|---|---|---|
+| 1394 left | B_t × 0.920 | × −0.413 | +1.90% |
+| 1394 right | **B_t × 1.0014** | **× 1.056** | −0.77% |
+| 719 left | B_t × 0.926 | × 0.030 | −1.39% |
+| 719 right | B_t × 0.9937 | × 0.948 | −2.22% |
+| 1816 right | B_t × 0.9903 | × 0.897 | −13.8% |
+
+* On 1394 right the slow shock STRENGTHENS the field (the states are in the
+  solver's frame, with a tangential velocity of 0.52). The target asks for a
+  weaker field, the solver therefore builds a shock, and no slow shock
+  reaches it: the only root of its equations in the whole window lies at
+  0.585002, beyond the Alfven (0.581297) AND the fast speed (0.584756) of
+  the state ahead. That is the root it returns. The rarefaction that would
+  reach the target is never tried, and the |B_t|-parametrised fan cannot
+  integrate there either (P × 1.23, 0.82, 1.008 for B_t × 0.90, 0.99, 1.001
+  -- not a curve).
+* On 719 right and 1816 the field does weaken, but only by 0.6% to 1% for a
+  1% pressure jump: the targets, 2% and 14% away, ask for slow shocks of 3.5%
+  and 15% in pressure -- on 719 in a problem whose two states differ by
+  10⁻⁴ in total pressure. The targets are that far off because the FAST
+  waves moved the field: on 1816 a 3% pressure change across them changed
+  B_t by 25%.
+
+Along the slow family d ln P / d ln|B_t|, at the input states, is −0.005
+(median) on the interfaces production solves and −0.54 / −0.69 on the
+unsolved elementary ones (R2: −0.9): a hundred times less field per
+pressure. Where the Alfven speed exceeds the sound speed and the field is
+nearly normal, the roles are exchanged -- the fast waves carry the
+tangential field and the slow waves carry the pressure -- and a solver that
+steers the slow waves by the field is steering by the coordinate that does
+not move. It can be a different regime on the two sides of one interface
+(1394: left classical, right not), because the flow shifts the speeds of
+the two directions differently.
+
+Which quantity does move (`ledger_subwaves.py --slow-family`: the tangent
+of the slow wave curve at the input states, as relative changes, its largest
+component scaled to 1; the share of slow waves on which a component is below
+1e-2 of the largest):
+
+| component | solved | unsolved, elementary | unsolved, compound |
+|---|---|---|---|
+| tangential field | 0.1% | 8.1% | 5.6% |
+| total pressure | 42.5% | 12.4% | 56.1% |
+| gas pressure | 1.9% | 0.9% | 14.3% |
+| density | 2.6% | 1.4% | 19.6% |
+| velocity | 0.0% | 0.0% | 0.0% |
+
+The tangential field is a good coordinate exactly on the interfaces the
+solver solves (median share 0.92) and a poor one on the unsolved elementary
+ones (0.08). The total pressure is the worst choice everywhere. The gas
+pressure serves the elementary interfaces; only the velocity jump never
+stalls.
+
+So the unsolved elementary interfaces are, on this evidence, not a missing
+solution family and not a seeding problem -- which is why neither more
+starts nor the tube-read seed helped -- but a PARAMETRISATION problem: the
+unknown `Bt_CD` and the |B_t| branch rule. Repairing the root selection
+alone (evolutionary conditions on the slow-shock roots, tried on the two
+traced interfaces) does not help, because for these targets the slow shock
+asked for does not exist. What is needed is a strength parameter for the
+slow wave that moves in every regime (the table above). That is a change of
+the solver's formulation, not a rung, and it is the next step.
+
+### The pilot: four unknowns, one strength per wave (2026-09-29)
+
+`scripts/pilot_four_unknowns.py` tests the diagnosis in the crudest way that
+can refute it. Each slow wave gets its own strength, steered by whichever of
+(B_t, P_tot) moves along its family at the state it starts from (chosen once,
+from the tangent above); the fast waves keep the total pressure; the contact
+closes four conditions, [[vx]], [[vt]], [[B_t]], [[P]]. It starts from slow
+waves of ZERO strength and the mean total pressure -- no seed, no ML, no
+retries -- with a forward-difference Jacobian and twelve halvings. Random
+samples of the ledger's groups:
+
+| group | sample | converged | fan ordered | passes production's full residual |
+|---|---|---|---|---|
+| controls (production solves them) | 200 | **200** | 200 | 200 |
+| R1 | 60 | 50 | 50 | 49 |
+| R2 + R3 | 60 | 30 | 30 | 25 |
+| R4, elementary | 200 | **133** | 133 | 24 |
+| R4, compound | 100 | **0** | | |
+
+* Every interface production solves is solved, from a start that knows
+  nothing, and every answer passes production's own check.
+* Two thirds of the interfaces NOTHING solved converge, in 3 to 4 iterations
+  with a Jacobian of condition 5 to 13 (interfaces 1394 and 1816; production
+  stopped at 5e-3 on a condition of 10⁴ to 10⁷). 93 of the 133 have both
+  slow waves steered by the pressure.
+* Not one compound interface converges -- the pilot agrees with the PDE that
+  these have no solution of elementary waves, which is what a solver should
+  do with them.
+* Production's full residual passes only 24 of the 133, because it rebuilds
+  the waves through the B_t-method: it cannot be the certificate for these
+  answers. Each wave here satisfies its own jump conditions by construction
+  (a B_t-steered wave with slack counts as not constructed -- without that
+  rule 48 compound interfaces "converged" with a fan that reverses the
+  field), but a certificate independent of the parametrisation has to be
+  written before any of this may be called solved.
+
+What the numbers would mean if they hold on the population and through a
+proper acceptance -- a projection, not a measurement: R1 0.81% + two thirds
+of the elementary R4 1.9% + half of R2/R3 0.3% would take 94.4% to about
+97.4%; the compound interfaces (1.31%) stay with HLLD; about 1.3% remain
+elementary and unsolved (the pilot's line search stalls on them, 719 among
+them, where the chosen coordinate degenerates along the way).
+
+### The rungs so far (all default off)
+
+| switch | what it does | measured |
+|---|---|---|
+| `RMHD_FAST_EDGE_SCAN=1` | the pair-splitting fast-shock search, on lanes the scan lost | +26, −0 of 24,429 (ledger windows) |
+| `RMHD_PLANAR5_LADDER=1` | the planar rescue retries unsolved lanes from six more starts (the ledger's greedy cover) | ledger: up to 192 |
+| `RMHD_PLANAR5_CROSSED=1` | self-crossing seven-wave refusals are offered to the planar rescue | ledger: 16 of 16 |
+
+The ladder's starts were chosen on the ledger's windows, so its number there
+is in-sample; the held-out windows (t = 0.175, 0.325) are what it is judged
+on.
+
+---
+
 ## 5b. Is the answer UNIQUE?  Yes on the measured population — but the residual is a weaker certificate than it looks
 
 A zero residual proves the answer is *an* admissible elementary-wave
@@ -1382,6 +1642,11 @@ who wants to repeat this.
 | secant vs Newton for the HLLD p* (7) | `scripts/pstar_methods.py results/rotor_128_hlld_mc --times 0.1,0.25,0.4` |
 | the rotor's state and solver map (7) | `scripts/plot_rotor_output.py <run> --out figs/rotor_output` |
 | which solution a scheme picks (5) | `scripts/compound_wave.py --balsara1 --flux hlle --limiter mp5 --ncells 1024 2048 4096` |
+| the failure ledger (5a) | `sbatch scripts/calea_failure_ledger.sh` (from `ssh itp`; writes `ledger.txt`, `cards.txt`, `cards.csv`) |
+| a switch, paired against the ledger's recordings (5a) | `RMHD_FAST_EDGE_SCAN=1 scripts/failure_ledger.py collect <rec> pfa pfb pfc --paired --out <npz>` |
+| which wave fails, the fast-shock root pairs, the slow family's tangent (5a) | `scripts/ledger_subwaves.py results/failure_ledger_64 --pairs --slow-family` |
+| the four-unknown pilot (5a) | `scripts/pilot_four_unknowns.py results/failure_ledger_64 1394,719,1816` (samples: `--quiet`; calea, the numpy kernels are too slow for more than a lane) |
+| one planar Newton, iteration by iteration (5a) | `scripts/newton_trace.py results/failure_ledger_64 --lanes 719,1394` |
 | 128^2 census (5) | `RUN=results/rotor_128_exact TAG=128 sbatch scripts/calea_snapshot_census.sh` |
 | tube-resolution check (5) | `NSHARDS=1280 TAG=64_res512 EXTRA="--ncells 512" sbatch scripts/calea_snapshot_census.sh` |
 

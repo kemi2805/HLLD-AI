@@ -19,8 +19,13 @@ numpy fan + Alfven): five of six sweeps identical to machine precision, two
 marginal lanes in one x-sweep -- what a whole-run comparison had shown as
 5e-4 field differences and 128 vs 131 solved.
 
-Env: RMHD_ML_CKPT, RMHD_FAN/ALFVEN/SLOWSHOCK/SHOCK as for a run."""
-import sys, os, time, functools
+Env: RMHD_ML_CKPT, RMHD_FAN/ALFVEN/SLOWSHOCK/SHOCK as for a run.
+     record: N (32) the grid; T0 (0) pre-evolve with HLLD to this time, then
+             record NSTEP exact steps -- sweeps from the developed flow
+             instead of the initial disc; REC_DIR (/tmp) where they go.
+     replay: REC_DIR; WARMUP=k replays the first k sweeps silently first, so
+             first-call compilation is not billed to sweep 1."""
+import sys, os, re, time, functools
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # ^ the repo root, derived from this file -- not a hardcoded laptop path.
 # The clusters run this too, and a literal /Users/... here means the cluster
@@ -34,7 +39,7 @@ from src.physics.eos import hybrid_eos
 from src.physics.initial_data2d import b_from_potential, magnetic_rotor
 from src.physics.driver2d import prims_to_cons_2d, sync_state, rk_step_ct, compute_dt_2d
 from src.physics.state import EVOLVED_KEYS, State2D
-from src.physics.hlld import LAST_DIAG
+from src.physics.hlld import LAST_DIAG, hlld_flux
 from src.physics.exact_flux import exact_flux_batched
 from rmhd.util.stats import mcnemar_exact
 
@@ -43,6 +48,8 @@ if __name__ == "__main__":   # guarded: RMHD_POOL workers import this module
     MODE, TAG = sys.argv[1], sys.argv[2]
     RETRIES = int(os.environ.get("RETRIES", "0"))
     REPLAY_OUT = os.environ.get("REPLAY_OUT")          # replay: save masks/p* here
+    REC_DIR = os.environ.get("REC_DIR", "/tmp")
+    rec_path = lambda tag, k: os.path.join(REC_DIR, f"sweep_{tag}_{k}.pt")
     base = functools.partial(exact_flux_batched, tau_weak=1e-2, tau_bt=1e-9,
                              n_retries=RETRIES, max_iter=40)
     eos = hybrid_eos(K=0.0, gamma=5 / 3, gamma_th=5 / 3)
@@ -70,13 +77,24 @@ if __name__ == "__main__":   # guarded: RMHD_POOL workers import this module
     print(MODE, TAG, kern, flush=True)
 
     if MODE == "record":
-        N = 32
+        N = int(os.environ.get("N", "32"))
+        T0 = float(os.environ.get("T0", "0"))
+        os.makedirs(REC_DIR, exist_ok=True)
         g = Grid2D(-0.5, 0.5, N, -0.5, 0.5, N, ng=2)
         prims, Az = magnetic_rotor(g, eos)
         Bxf, Byf = b_from_potential(Az, g.dx, g.dy)
         c = prims_to_cons_2d(prims, g)
         st = sync_state(State2D(cons={k: c[k] for k in EVOLVED_KEYS}, Bxf=Bxf, Byf=Byf, prims=prims),
                         g, eos, "outflow", "outflow")
+        # the developed flow: HLLD to T0 (cheap), then the recorded exact steps
+        t_pre, n_pre = 0.0, 0
+        while t_pre < T0 - 1e-14:
+            dt = min(compute_dt_2d(st.prims, g, eos, 0.25), T0 - t_pre)
+            st, _ = rk_step_ct(st, g, eos, dt, scheme="rk3", bc_x="outflow",
+                               bc_y="outflow", flux_fn=hlld_flux, limiter="mc")
+            t_pre += dt; n_pre += 1
+        if n_pre:
+            print(f"pre-evolved with HLLD to t={t_pre:.4f} in {n_pre} steps", flush=True)
         k = [0]
 
         def flux(sL, sR, eos_, idir=0):
@@ -85,7 +103,8 @@ if __name__ == "__main__":   # guarded: RMHD_POOL workers import this module
             d = dict(LAST_DIAG)
             torch.save({"sL": sL, "sR": sR, "idir": idir, "F": out[0], "U": out[1], "p_star": out[2],
                         "exact_mask": d["exact_mask"], "n_exact": d["n_exact"],
-                        "n_attempted": d["n_attempted"]}, f"/tmp/sweep_{TAG}_{k[0]}.pt")
+                        "n_attempted": d["n_attempted"], "t0": T0, "n": N},
+                       rec_path(TAG, k[0]))
             print(f"sweep {k[0]} idir={idir} attempted={d['n_attempted']} exact={d['n_exact']} {w:.1f}s", flush=True)
             return out
 
@@ -97,9 +116,15 @@ if __name__ == "__main__":   # guarded: RMHD_POOL workers import this module
     else:
         REF = sys.argv[3]
         saved = {}
-        n_sweeps = len([f for f in os.listdir("/tmp") if f.startswith(f"sweep_{REF}_") and f.endswith(".pt")])
+        # by exact name, not by prefix: REF=base used to count the
+        # sweep_base_njit_* files as its own
+        pat = re.compile(r"^sweep_%s_(\d+)\.pt$" % re.escape(REF))
+        n_sweeps = len([f for f in os.listdir(REC_DIR) if pat.match(f)])
+        for k in range(1, min(int(os.environ.get("WARMUP", "0")), n_sweeps) + 1):
+            rec = torch.load(rec_path(REF, k))
+            base(rec["sL"], rec["sR"], eos, idir=rec["idir"])
         for k in range(1, n_sweeps + 1):
-            rec = torch.load(f"/tmp/sweep_{REF}_{k}.pt")
+            rec = torch.load(rec_path(REF, k))
             t0 = time.time(); F, U, p_star = base(rec["sL"], rec["sR"], eos, idir=rec["idir"]); w = time.time() - t0
             d = dict(LAST_DIAG); m2 = d["exact_mask"]; m1 = rec["exact_mask"]
             saved[f"mask_{k}"] = m2.numpy().copy(); saved[f"p_{k}"] = p_star.reshape(-1).numpy().copy()
