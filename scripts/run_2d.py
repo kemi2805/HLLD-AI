@@ -18,12 +18,13 @@ from src.physics.state import EVOLVED_KEYS, State2D
 from src.physics.envelope import EnvelopeRecorder, format_summary
 from src.physics.hlld import (hlld_flux, hlle_flux, hllc_flux,
                               LAST_DIAG)
+from src.physics.linearised import linearised_flux
 
 # `exact` is built lazily in main(): it needs tau_weak / n_retries bound in,
 # and importing exact_flux drags in the rmhd_final solver, which should not
 # happen for an ordinary HLLD run.
 SOLVERS = {"hlld": hlld_flux, "hlle": hlle_flux, "hllc": hllc_flux,
-           "exact": None}
+           "linear": linearised_flux, "exact": None}
 
 # problem -> (domain, gamma, default t_end, bc_x, bc_y, has pi-rotation symmetry)
 PROBLEMS = {
@@ -167,6 +168,10 @@ def main():
                 git=_git_rev(), started=time.strftime("%Y-%m-%dT%H:%M:%S"))
     if a.solver == "exact":
         meta.update(tau_weak=a.tau_weak, tau_bt=a.tau_bt,
+                    weak_flux=os.environ.get("RMHD_WEAK_FLUX", "hlld"),
+                    rungs={k: os.environ.get(k, "0") for k in
+                           ("RMHD_FAST_EDGE_SCAN", "RMHD_PLANAR5_LADDER",
+                            "RMHD_PLANAR5_CROSSED", "RMHD_PLANAR4")},
                     retries=a.exact_retries, max_iter=a.exact_max_iter)
     prev = os.path.join(out, "run_meta.json")
     if os.path.exists(prev) and not a.restart:

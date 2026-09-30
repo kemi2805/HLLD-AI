@@ -28,13 +28,18 @@
 # workers), POOL_THREADS (2 numba threads each), POOL_CHUNKS (= POOL),
 # TORCH_THREADS (8), RESUME (1: continue from $OUT/restart.npz when present),
 # MAX_STEPS (a pilot: stop after this many steps), RMHD_ML_CKPT/RMHD_ML_CKPTS,
-# PY, HLLD_DIR.  DRYRUN=1 runs the preflight only.
+# PY, HLLD_DIR, TAU_WEAK (1e-2: the weak-jump gate), TAG (a suffix for OUT
+# and LOG).  The rung switches (RMHD_PLANAR4, RMHD_PLANAR5_LADDER, ...) and
+# RMHD_WEAK_FLUX=linear (the linearised solver below the gate) pass through
+# the environment.  DRYRUN=1 runs the preflight only.
 set -u
 N=${N:-64}
 TEND=${TEND:-0.4}
 NSNAP=${NSNAP:-8}
 RETRIES=${RETRIES:-2}
-OUT=${OUT:-results/rotor_${N}_exact}
+TAU_WEAK=${TAU_WEAK:-1e-2}
+TAG=${TAG:-}
+OUT=${OUT:-results/rotor_${N}_exact${TAG}}
 POOL=${POOL:-32}
 POOL_THREADS=${POOL_THREADS:-2}
 POOL_CHUNKS=${POOL_CHUNKS:-$POOL}
@@ -65,7 +70,7 @@ export RMHD_POOL=$POOL RMHD_POOL_THREADS=$POOL_THREADS RMHD_POOL_CHUNKS=$POOL_CH
 [ "${DRYRUN:-0}" = 1 ] && { echo "dry run ok: rmhd at $RMHD, N=$N, pool=${POOL}x${POOL_THREADS}"; exit 0; }
 
 mkdir -p logs "$OUT"
-LOG=${LOG:-logs/rotor_${N}_exact_$(date +%Y%m%d_%H%M%S).log}
+LOG=${LOG:-logs/rotor_${N}_exact${TAG}_$(date +%Y%m%d_%H%M%S).log}
 exec > >(tee -a "$LOG") 2>&1
 
 RESTART=""
@@ -76,10 +81,11 @@ fi
 echo "== $(date)  host=$(hostname)  N=$N  tend=$TEND  retries=$RETRIES  out=$OUT  pool=${POOL}x${POOL_THREADS} chunks=$POOL_CHUNKS  ${RESTART:-fresh start}"
 echo "== HLLD $(git rev-parse --short HEAD)   rmhd_final $("$PY" -c 'import rmhd.paths as p; print(p.git_rev())')"
 echo "== ckpt=$RMHD_ML_CKPT  extra=$RMHD_ML_CKPTS  kernels: FAN=$RMHD_FAN ALFVEN=$RMHD_ALFVEN SLOWSHOCK=$RMHD_SLOWSHOCK SHOCK=$RMHD_SHOCK"
+echo "== tau_weak=$TAU_WEAK  weak flux=${RMHD_WEAK_FLUX:-hlld}  rungs: EDGE=${RMHD_FAST_EDGE_SCAN:-0} LADDER=${RMHD_PLANAR5_LADDER:-0} CROSSED=${RMHD_PLANAR5_CROSSED:-0} PLANAR4=${RMHD_PLANAR4:-0}"
 $PY -c "import numpy, numba, torch; print('numpy', numpy.__version__, 'numba', numba.__version__, 'torch', torch.__version__)"
 
 $PY -u scripts/run_2d.py --problem rotor --n "$N" --solver exact --tend "$TEND" \
-    --nsnap "$NSNAP" --tau-weak 1e-2 --tau-bt 1e-9 --exact-retries "$RETRIES" \
+    --nsnap "$NSNAP" --tau-weak "$TAU_WEAK" --tau-bt 1e-9 --exact-retries "$RETRIES" \
     --exact-max-iter 40 --out "$OUT" --harvest "$OUT/harvest" \
     --restart-every "$RESTART_EVERY" --log-every "$LOG_EVERY" $RESTART \
     $( [ -n "$MAX_STEPS" ] && echo --max-steps "$MAX_STEPS" ) \

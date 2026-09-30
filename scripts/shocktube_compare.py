@@ -138,11 +138,29 @@ def contact_width(x, rho, x_contact, frac=0.8):
     return float(band.sum())
 
 
+def shrink(cfg, s):
+    """The same tube with its discontinuity scaled by ``s`` about the mean
+    state, variable by variable (the normal field is single-valued and stays)."""
+    import copy
+    cfg = copy.deepcopy(cfg)
+    L, R = cfg["run"]["primL"], cfg["run"]["primR"]
+    for k in ("rho", "p", "vx", "vy", "vz", "By", "Bz"):
+        m = 0.5 * (float(L[k]) + float(R[k]))
+        L[k] = m + s * (float(L[k]) - m)
+        R[k] = m + s * (float(R[k]) - m)
+    return cfg
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("configs", nargs="+")
     ap.add_argument("--ncells", type=int, default=200)
     ap.add_argument("--solvers", default="hlld,exact")
+    ap.add_argument("--shrink", type=float, default=1.0,
+                    help="scale the discontinuity about the mean state by "
+                         "this factor (0 < s <= 1): the weak-jump regime the "
+                         "gate hands to HLLD, where the linearised solver "
+                         "(--solvers linear) claims second order")
     ap.add_argument("--progress-every", type=int, default=25,
                     help="steps between progress lines on each arm; the "
                          "exact arm is ~300x slower than HLLD, so a run "
@@ -153,12 +171,17 @@ def main():
     for cpath in args.configs:
         cfg0 = yaml.safe_load(open(cpath))
         name = Path(cpath).stem
+        if args.shrink != 1.0:
+            cfg0 = shrink(cfg0, args.shrink)
+            name += "_s%g" % args.shrink
         t_end = float(cfg0["run"]["t_end"])
         print(f"\n{'='*72}\n{name}   ncells={args.ncells}  t_end={t_end}")
 
         out = {}
         for solver in args.solvers.split(","):
             cfg = yaml.safe_load(open(cpath))
+            if args.shrink != 1.0:
+                cfg = shrink(cfg, args.shrink)
             cfg["grid"]["ncells"] = args.ncells
             cfg["run"]["solver"] = solver
             cfg["output"]["dir"] = f"/tmp/tube_{name}_{solver}"
@@ -180,7 +203,23 @@ def main():
         g = out[list(out)[0]]["grid"]
         ng = getattr(g, "ng", 2)
         x = g.x[ng:-ng].numpy()
-        ref, region, rerr = exact_profile(cfg0, x, t_end)
+        try:
+            ref, region, rerr = exact_profile(cfg0, x, t_end)
+        except RuntimeError as e:
+            # no truth for this tube (a compound-wave case has no unique
+            # exact solution; a gamma outside the seed's range may not
+            # converge): report the runs against each other and move on
+            print("  NO REFERENCE: %s" % str(e).splitlines()[0])
+            base = list(out)[-1]
+            print("  L1 against the %s arm:" % base)
+            for v in VARS:
+                row = f"  {v:<8}"
+                pb = out[base]["prims"][v][ng:-ng].numpy()
+                for sname in out:
+                    p = out[sname]["prims"][v][ng:-ng].numpy()
+                    row += f"{np.abs(p - pb).mean():14.4e}"
+                print(row)
+            continue
 
         print(f"\n  {'variable':<8}" + "".join(f"{s:>14}" for s in out))
         for v in VARS:

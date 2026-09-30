@@ -159,6 +159,16 @@ _PLANAR5_LADDER = os.environ.get("RMHD_PLANAR5_LADDER", "0") not in ("0", "", "o
 # Offer the planar rescue the lanes whose seven-wave answer was refused as a
 # self-crossing fan (opt-in, default off; ledger: 16 of 16 then solved).
 _PLANAR5_CROSSED = os.environ.get("RMHD_PLANAR5_CROSSED", "0") not in ("0", "", "off")
+# The four-unknown planar solver (opt-in, default off): one strength per
+# wave, each slow wave steered by whichever of (B_t, P_tot) moves along its
+# family, its own certificate (every shock's Rankine-Hugoniot conditions,
+# the contact, the fan's order).  Offered the lanes every rescue above lost.
+# See rmhd.batched.planar4_b and docs/what_we_solve.md 5a.
+_PLANAR4 = os.environ.get("RMHD_PLANAR4", "0") not in ("0", "", "off")
+# What the faces BELOW the weak-jump gate get: HLLD (the default) or the
+# linearised solver (`linearised.py`, exact to second order in the jump where
+# HLLD is first order).  Never counted as exact.
+_WEAK_FLUX = os.environ.get("RMHD_WEAK_FLUX", "hlld").lower()
 _PLANAR_TOL = float(os.environ.get("RMHD_PLANAR_TOL", "1e-6"))
 _PLANAR5_VERIFY = float(os.environ.get("RMHD_PLANAR5_VERIFY", "1e-8"))
 # Verify every exact flux against the full seven-wave system and report the
@@ -547,10 +557,12 @@ def _batched_parts(gamma):
     xi_fn, fan_p, fan_n = PR.make_sampler(gamma)
     from rmhd.batched import contact_b as CB
     from rmhd.batched import planar5_b as P5
+    from rmhd.batched import planar4_b as P4
     parts = dict(solve=API.make_solver(gamma), ray=RAY, xi=xi_fn,
                  fan_p=fan_p, fan_n=fan_n, np=np,
                  reduced=CB.make_solver(gamma),
-                 planar5=P5.make_solver(gamma))
+                 planar5=P5.make_solver(gamma),
+                 planar4=P4.make_solver(gamma))
     _SOLVER_CACHE[gamma] = parts
     return parts
 
@@ -767,6 +779,59 @@ def _planar_ladder(P, gamma, sL5, sR5, B5, r5, *, accuracy, max_iter):
     return out
 
 
+def _planar4_and_ray(P, gamma, sL4, sR4, B4, *, accuracy, max_iter):
+    """The four-unknown planar solve, the xi = 0 ray and the physical check
+    -- the rung's body, so that the failure ledger can offer lanes to it
+    under exactly production's acceptance.
+
+    Returns a dict: ``good``, ``star``, ``region``, ``zones6``
+    (``[A, A, B, C, D, D]``), ``VsLv``, ``VsRv``, ``n_iter``, ``kinds`` (2, N),
+    ``reason`` (0 accepted, 1 not converged, 2 not planar, 3 fails the
+    certificate, 4 fan not ordered, 5 cannot start, 6 ray, 7 unphysical),
+    ``cert_resid``, ``full_resid``.
+    """
+    import numpy as np
+    from rmhd.batched import planar4_b as P4B
+    RAY = P["ray"]
+    S4 = P["planar4"]
+    r = S4["solve"](sL4, sR4, B4, accuracy=accuracy, max_iter=max_iter,
+                    planar_tol=_PLANAR_TOL, verify_tol=_PLANAR5_VERIFY)
+    good = r["converged"].astype(bool)
+    reason = r["reason"].astype(np.int8).copy()
+    A, B_, C_, D = r["zones"]
+    zones6 = [A, A, B_, C_, D, D]
+    out = dict(good=good, star=None, region=None, zones6=zones6,
+               VsLv=None, VsRv=None, n_iter=np.asarray(r["n_iter"]),
+               kinds=r["kinds"], reason=reason, unk=r["unk"],
+               cert_resid=np.asarray(r["cert_resid"]),
+               full_resid=np.asarray(r["full_resid"]),
+               resid=np.asarray(r["nrm"]))
+    if not good.any():
+        return out
+    VsLv = [r["speeds"][0], S4["alfven_speed"](A, B4, "L"), r["speeds"][1]]
+    VsRv = [r["speeds"][4], S4["alfven_speed"](D, B4, "R"), r["speeds"][3]]
+    sh = r["shocks"]
+    st, reg, e = RAY.state_at_xi(
+        sL4, sR4, zones6, VsLv, VsRv, B4, gamma, P["xi"], P["fan_p"],
+        P["fan_n"], kinds={"LF": sh[0], "LS": sh[1], "RS": sh[2], "RF": sh[3]},
+        slow_by_pressure=(r["kinds"][0] == P4B.KIND_P,
+                          r["kinds"][1] == P4B.KIND_P))
+    reason[good & e] = 6
+    good = good & ~e
+    rho, Pt, vn, vt1, vt2, Bt1, Bt2 = st
+    v2_ = vn * vn + vt1 * vt1 + vt2 * vt2
+    W2_ = 1.0 / np.maximum(1.0 - v2_, 1e-300)
+    eta_ = B4 * vn + Bt1 * vt1 + Bt2 * vt2
+    b2_ = (B4 ** 2 + Bt1 ** 2 + Bt2 ** 2) / W2_ + eta_ ** 2
+    phys = (rho > 0.0) & (v2_ < 1.0) & (Pt - 0.5 * b2_ > 0.0)
+    for c_ in st:
+        phys &= np.isfinite(c_)
+    reason[good & ~phys] = 7
+    good = good & phys
+    out.update(good=good, star=st, region=reg, VsLv=VsLv, VsRv=VsRv)
+    return out
+
+
 def _run_pipeline(P, gamma, subL, subR, subBn, seed6, keys, seeds_extra, **kw):
     """In-process, or over the worker pool when RMHD_POOL asks for one."""
     from . import exact_pool
@@ -822,6 +887,21 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
     v2R = sR["vx"] ** 2 + sR["vy"] ** 2 + sR["vz"] ** 2
     bad = (v2L >= 1.0) | (v2R >= 1.0) | (sL["rho"] <= 0) | (sR["rho"] <= 0)
     weak = (~bad) & (jump < tau_weak)
+    n_weak_linear = 0
+    weak_linear = torch.zeros(N, dtype=torch.bool)
+    if _WEAK_FLUX == "linear" and bool(weak.any()):
+        from .linearised import linearised_flux
+        wi = torch.nonzero(weak.reshape(-1)).reshape(-1)
+        Fw, Uw, pw, okw = linearised_flux(
+            {k: v.reshape(-1)[wi] for k, v in sL.items()},
+            {k: v.reshape(-1)[wi] for k, v in sR.items()}, eos, idir=idir,
+            fallback=fallback, return_mask=True)
+        for k in F:
+            F[k].reshape(-1)[wi] = Fw[k]
+            U[k].reshape(-1)[wi] = Uw[k]
+        p_star.reshape(-1)[wi] = pw
+        n_weak_linear = int(okw.sum())
+        weak_linear[wi[okw.reshape(-1)]] = True
     # the fan lies entirely on one side: HLLD already returns the exact flux
     upwind = torch.zeros_like(weak)
     if _UPWIND_SKIP:
@@ -865,7 +945,14 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
                          seven_attempts=np.zeros(0, int),
                          seven_n_iter_total=np.zeros(0, int),
                          planar_n_iter=np.zeros(0, int),
-                         planar_rung=np.zeros(0, np.int8))
+                         planar_rung=np.zeros(0, np.int8),
+                         reason4=np.zeros(0, np.int8),
+                         planar4_n_iter=np.zeros(0, int),
+                         planar4_kinds=np.zeros((2, 0), np.int8),
+                         n_planar4_attempted=0, n_planar4_exact=0,
+                         planar4_mask=np.zeros(0, bool),
+                         n_weak=int(weak.sum()), n_weak_linear=n_weak_linear,
+                         weak_linear_mask=weak_linear)
         if harvester is not None:
             # nothing was attempted, so the map is all gate reasons -- which
             # is exactly what makes a sweep like the rotor's t = 0 x-sweep
@@ -1131,7 +1218,38 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
                             seven_wave=np.ones(k5, dtype=bool),
                             source=1)
 
-    take_all = take | take3 | take5
+    # ── the four-unknown planar solver (opt-in) ───────────────────────────
+    # Last: only the lanes every rescue above lost.  Its certificate is its
+    # own (each shock's jump conditions, the contact, the fan's order), not
+    # the seven-wave residual, which cannot judge these answers -- see
+    # planar4_b's module doc.
+    take4 = np.zeros(sel.size, dtype=bool)
+    n4_att = 0
+    reason4 = np.full(sel.size, 8, dtype=np.int8)        # 8 = not offered
+    iters4 = np.full(sel.size, -1, dtype=int)
+    kinds4 = np.full((2, sel.size), -1, dtype=np.int8)
+    if _PLANAR4:
+        offered = ~take & ~take3 & ~take5
+        if not _PLANAR5_CROSSED:
+            offered &= ~crossed
+        cand = np.flatnonzero(offered)
+        n4_att = int(cand.size)
+        if cand.size:
+            r4 = _planar4_and_ray(P, gamma, [c[cand] for c in subL],
+                                  [c[cand] for c in subR], subBn[cand],
+                                  accuracy=accuracy, max_iter=max_iter)
+            reason4[cand] = r4["reason"]
+            iters4[cand] = r4["n_iter"]
+            kinds4[:, cand] = r4["kinds"]
+            good = r4["good"]
+            if good.any():
+                w = cand[good]
+                for j in range(7):
+                    star[j][w] = r4["star"][j][good]
+                region[w] = np.asarray(r4["region"])[good]
+                take4[w] = True
+
+    take_all = take | take3 | take5 | take4
     g = sel[take_all]
     if g.size:
         tt = lambda a: torch.tensor(a[take_all], dtype=dt)
@@ -1195,6 +1313,10 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
     # 0.0% of its answers reach 1e-6 on this residual); the planar path
     # verifies inside `solve` before it reports convergence
     verified |= take5
+    # the four-unknown path certifies inside `solve` (each shock's
+    # Rankine-Hugoniot conditions to the same tolerance, the contact, the
+    # fan's order); the seven-wave residual is not its certificate
+    verified |= take4
     # Degenerate-class lanes answered by solve_batch's three-wave solver are
     # counted apart: exact in the limit their class names (B_n -> 0, or an
     # Alfven wave merged with a magnetosonic one), not verified -- 3 of ~2000
@@ -1213,7 +1335,7 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
         seven_ok = take & np.isin(cls, (C.FULL7, C.COPLANAR))
         harvester.record_coverage(
             idir, N, sel, g, np.flatnonzero(routed),
-            seven=seven_ok, planar5=take5, three_wave=take3,
+            seven=seven_ok, planar5=take5, three_wave=take3, planar4=take4,
             degenerate=degen, verified=verified,
             bad=to_np(bad).astype(bool), weak=to_np(weak).astype(bool),
             upwind=to_np(upwind).astype(bool))
@@ -1237,6 +1359,16 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
         # which start of the planar rescue answered: 0 its default, k the
         # k-th rung of RMHD_PLANAR5_LADDER, -1 not answered by the rescue
         planar_rung=rung5,
+        # the four-unknown rung: why each offered lane was refused, its
+        # iterations, and how each slow wave was steered (0 field, 1 pressure)
+        reason4=reason4, planar4_n_iter=iters4, planar4_kinds=kinds4,
+        n_planar4_attempted=n4_att,
+        n_planar4_exact=int(take4.sum()),
+        planar4_mask=take4,
+        # faces below the weak-jump gate, and how many of them the linearised
+        # solver answered (RMHD_WEAK_FLUX=linear; 0 with HLLD there)
+        n_weak=int(weak.sum()), n_weak_linear=n_weak_linear,
+        weak_linear_mask=weak_linear,
         n_attempted=int(sel.size),
         n_exact=n_exact,
         n_fan_interior=n_fan,

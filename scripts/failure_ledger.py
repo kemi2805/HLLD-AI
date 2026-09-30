@@ -435,6 +435,8 @@ def collect(a):
             src = np.zeros(sel.size, np.int8)             # 0 fell back
             src[d["reason7"] == 0] = 1                    # seven-wave family
             src[np.asarray(d["planar5_mask"], bool)] = 2  # planar rescue
+            if "planar4_mask" in d:
+                src[np.asarray(d["planar4_mask"], bool)] = 3  # four-unknown
             src[~ex] = 0
             fail = np.flatnonzero(~ex)
             ctrl = np.flatnonzero(ex)

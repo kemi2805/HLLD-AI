@@ -228,6 +228,29 @@ residual, so they are exact in the same sense as any other.
 On the rotor, 93.5% of solved interfaces carry exactly five waves (both fast,
 both slow, the contact); the Alfvén waves are silent.
 
+**The four-unknown planar solver** (`rmhd/batched/planar4_b.py`, 2026-09-30)
+is the same five-wave picture with one strength per wave. The five-wave
+solver gives both slow waves ONE field to reach, and decides shock or fan by
+whether |B_t| has to fall. Where the field is nearly normal to the face and
+the Alfvén speed exceeds the sound speed, that is the wrong coordinate: there
+the fast waves move the tangential field and the slow waves move the
+pressure, so the target the slow wave is given hardly responds to it — on
+one traced interface a slow shock even *strengthens* the field. Half of what
+production lost on the rotor (695 of 1,371 interfaces) sits in that regime.
+So
+
+    unk4 = [ ln p_LF,  s_L,  s_R,  ln p_RF ]      against
+    fvec4 = [ [[vx]], [[vt]], [[B_t]], [[P_tot]] ]
+
+with `s` the signed field (kind B) or `ln P_tot` (kind P) behind the slow
+wave, chosen per wave from the tangent of the slow family at the state it
+starts from. Its certificate is its own: every shock's full
+Rankine–Hugoniot conditions, the contact, the order of the fan. (The
+seven-wave residual rebuilds the waves through the field and fails right
+answers on exactly these interfaces.) It starts from slow waves of zero
+strength and needs no seed. It runs last, only on faces every other rescue
+lost (`RMHD_PLANAR4=1`).
+
 ### 1.7 Degenerate structures
 
 When a wave family disappears (section 1.2), the interface is classified
@@ -483,7 +506,9 @@ keeps a valid flux.
       │
       ├─ RESCUES on the faces the seven-wave path lost
       │     five-wave planar solver   (RMHD_PLANAR5_FALLBACK=1, production)
+      │       + six more starts       (RMHD_PLANAR5_LADDER=1, off)
       │     three-wave solver         (off: it is not exact)
+      │     four-unknown planar solver, last  (RMHD_PLANAR4=1, off)
       │
       ├─ FLUX = flux of the state at xi = 0, where a solver succeeded
       │
@@ -638,6 +663,7 @@ and an extension of the solution family at the ones that do not.
 | `batched/classify.py` | structure classes |
 | `batched/fullcontact_b.py` | the six-unknown Newton |
 | `batched/planar5_b.py` | the five-wave planar solver |
+| `batched/planar4_b.py` | the four-unknown planar solver: one strength per wave, its own certificate |
 | `batched/contact_b.py` | the three-wave solver |
 | `batched/ray_b.py` | the state at xi = 0 |
 | `batched/ml_b.py` | batched prediction and the retry ladder |

@@ -233,7 +233,7 @@ class Harvester:
     # what answered a face, in the order the flux assembly decides it
     COVERAGE_KEYS = ("attempted", "exact", "routed", "seven", "planar5",
                      "three_wave", "degenerate", "verified",
-                     "bad", "weak", "upwind")
+                     "bad", "weak", "upwind", "planar4")
 
     def record_coverage(self, idir, n_interfaces, attempted_idx, exact_idx,
                         routed_idx=None, **masks):
@@ -252,6 +252,7 @@ class Harvester:
             seven       the seven-wave Newton's own answer was taken
             planar5     the five-wave planar rescue answered it
             three_wave  the reduced three-wave rescue answered it
+            planar4     the four-unknown planar solver answered it
             degenerate  answered in a degenerate class (exact in its limit)
             verified    the answer passed the full seven-wave residual
             bad, weak, upwind   why a face was never attempted

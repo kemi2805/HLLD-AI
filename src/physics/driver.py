@@ -375,9 +375,9 @@ def run(cfg: dict):
             harvester=harvester,
         )
     else:
-        flux_fn = {"hlld": hlld_flux, "hlle": hlle_flux, "hllc": hllc_flux}.get(
-            solver, hlld_flux
-        )
+        from src.physics.linearised import linearised_flux
+        flux_fn = {"hlld": hlld_flux, "hlle": hlle_flux, "hllc": hllc_flux,
+                   "linear": linearised_flux}.get(solver, hlld_flux)
 
     print(
         f"Starting {problem}  ncells={grid.ncells}  t_end={t_end}  solver={solver}  device={device}"

@@ -389,6 +389,68 @@ negligible against a 32.8% resolution gap, for ~6x the compute. That is a
 scaling argument from measured quantities, not a run comparison; measuring it
 directly means a `tau_weak = 0` run, which has not been done.
 
+## 4c. Below the weak-jump gate, measured (2026-10-01)
+
+Section 4b argued from a scaling that the gate costs ~0.02% of the solution
+for a sevenfold saving in compute, and said a direct measurement had not been
+done. The recordings of the held-out windows hold every face of each sweep
+(112,608 over 24 sweeps), so the gate can be replayed at any threshold
+(`scripts/weak_gate_study.py`, calea job 33198, production settings):
+
+| jump | faces | attempted at 1e-2 | solved when attempted | exact vs HLLD, p50 / p90 / max | wall |
+|---|---|---|---|---|---|
+| ≥ 1e-1 | 1,683 | 1,017 | 82.2% | 2.8e-3 / 7.6e-2 / 1.9e-1 | |
+| 1e-2 .. 1e-1 | 17,385 | 15,765 | 94.7% | 3.7e-4 / 4.5e-3 / 3.7e-1 | |
+| 1e-3 .. 1e-2 | 16,522 | 0 | 94.7% | 1.0e-4 / 8.4e-4 / 1.1e-2 | |
+| 1e-4 .. 1e-3 | 6,322 | 0 | 96.7% | 1.2e-5 / 2.1e-4 / 3.6e-3 | |
+| < 1e-4 | 70,696 | 0 | 77.9% | 1.2e-8 / 2.2e-7 / 6.0e-4 | |
+| gate at 1e-2 | | 16,782 (14.9%) | 93.97% | | ~560 s |
+| gate at 1e-3 | | 33,032 (29.3%) | 94.31% | | 883 s |
+| gate at 0 | | 110,050 (97.7%) | 83.89% | | 1,156 s |
+
+(the flux difference is `||F_exact - F_HLLD|| / ||F_HLLD||` over the eight
+conserved components, on the faces that came out exact.)
+
+Three things the scaling argument did not know:
+
+* **The solver solves the weak faces**: 94.7% and 96.7% in the two decades
+  below the gate, the same rate as above it. Below 1e-4 the rate drops to
+  77.9% -- there the Newton's 1e-8 tolerance is no longer small against the
+  problem, and HLLD is within 1e-8 of the exact flux anyway.
+* **The flux difference falls linearly with the jump**, as 4b measured on
+  shrunk problems: 1e-4 in the first decade below the gate, 1e-5 in the
+  second, 1e-8 below that. The 4b extrapolation holds on real faces.
+* **Opening the gate is cheaper than estimated**: the replay's wall time
+  grows 1.6x at 1e-3 and 2.1x at 0, not 7x, because a weak face solves in a
+  few iterations and the wall is set by the failing lanes' retry ladders.
+
+### The linearised solver below the gate
+
+`src/physics/linearised.py`: the jump decomposed into the characteristic
+fields of the mean state (the flux Jacobian by central differences in the
+primitive variables, one 7×7 eigenproblem per face), the state on the ray
+built from the waves that run left, its physical flux returned -- the exact
+solution to second order in the jump, where HLLD's error is first order. No
+root-finding; a face whose eigenproblem cannot be trusted keeps HLLD. Never
+counted as exact. `RMHD_WEAK_FLUX=linear` gives it the faces below the
+gate; `--solver linear` runs it everywhere (the 1D driver and `run_2d.py`).
+
+Against the saved exact fluxes of the replay above (calea job 33667):
+
+| jump | faces | linearised vs exact, p50 / p90 | HLLD vs exact, p50 / p90 | ratio at p50 |
+|---|---|---|---|---|
+| 1e-2 .. 1e-1 | 14,934 | 1.0e-4 / 8.0e-4 | 3.7e-4 / 4.5e-3 | 3.7 |
+| 1e-3 .. 1e-2 | 15,384 | 4.0e-6 / 2.7e-5 | 1.0e-4 / 8.4e-4 | 25 |
+| 1e-4 .. 1e-3 | 6,115 | 1.0e-7 / 1.1e-6 | 1.2e-5 / 2.1e-4 | 120 |
+| < 1e-4 | 55,051 | 1.0e-8 / 8.0e-8 | 1.2e-8 / 2.2e-7 | 1.2 |
+
+The ratio grows by ~10 per decade of jump, as a second-order error against a
+first-order one must, until both meet the exact solver's own tolerance below
+1e-4. It answered 100% of the faces above 1e-4 and 99.5% below. On the
+shrunk 1D problems of `tests/test_linearised.py` the same holds: its
+distance from the exact flux falls 25 times or more over two levels of 1/3
+where HLLD's falls three times.
+
 ## 5. How much does not
 
 **19.9% of attempted interfaces get no exact flux** — about 2.8% of all
@@ -1182,6 +1244,63 @@ of the elementary R4 1.9% + half of R2/R3 0.3% would take 94.4% to about
 elementary and unsolved (the pilot's line search stalls on them, 719 among
 them, where the chosen coordinate degenerates along the way).
 
+### The four-unknown solver, built and measured (2026-09-30)
+
+`rmhd/batched/planar4_b.py` is the pilot made a solver: batched, one
+strength per wave, the slow waves steered by whichever of (B_t, P_tot)
+moves along their family (chosen per wave from the tangent at the state the
+wave starts from), four contact conditions, a zero-strength start. Its
+certificate is its own -- every shock's full Rankine-Hugoniot conditions to
+1e-8 (each component scaled by its own flux magnitudes, the vanishing
+out-of-plane components against the lane's largest), the contact to 1e-8,
+the fan ordered, the input planar -- because the seven-wave residual
+rebuilds the waves through the field and fails right answers here. The ray
+sampler takes the solver's own shock masks and integrates a pressure-steered
+slow fan in the pressure (`ray_b.state_at_xi(kinds=, slow_by_pressure=)`).
+In the flux it is the LAST rung, offered only the lanes every rescue before
+it lost (`RMHD_PLANAR4=1`, default off), and it marks its answers verified
+on its own certificate.
+
+On the ledger's groups (batched, calea job 33055; `p4_check.py`):
+
+| group | sample | certified | ray failed | of the certified, seven-wave residual passes |
+|---|---|---|---|---|
+| controls (production solves them) | 200 | 200 | 0 | 199 |
+| R1 | 60 | 51 | 0 | 49 |
+| R2 + R3 | 60 | 33 | 0 | 27 |
+| R4, elementary | 200 | 135 | 0 | 31 |
+| R4, compound | 100 | 0 | | |
+
+On the controls the ray's star pressure agrees with production's to 1e-8 on
+199 of 200 and the contact pressure with the five-wave solver's to 1e-8;
+median 3 iterations, at most 5. The certificate, applied to the five-wave
+solver's own accepted answers, passes every one of them.
+
+**Paired against production's recordings** (the rung alone, and with the
+three rungs of the previous section):
+
+| | ledger windows (24,429) | held-out windows (16,782) |
+|---|---|---|
+| production | 94.39% | 93.97% |
+| `RMHD_PLANAR4=1` alone | **96.81%** (+592 / 0, p = 1e-178) | **96.69%** (+457 / 0, p = 5e-138) |
+| all four switches | **97.39%** (+734 / 0, p = 2e-221) | **97.13%** (+530 / 0, p = 6e-160) |
+| all four, with the pressure-steered retry | **97.86%** (+847 / 0, p = 2e-255) | **97.63%** (+614 / 0, p = 3e-185) |
+
+No lane production solved changed its answer (one star pressure by 7e-10 on
+the ledger windows, from the edge scan). Every gained answer passed the
+rung's certificate, the ray and the physical check.
+
+What is left: the stalls. Of 200 unsolved elementary interfaces the rung
+certifies 135; 61 stop with the contact residual at 1e-3 to 1e-1, 33 of
+them with both slow waves steered by the field (the five-wave solver's own
+waves, which failed there too), 23 by the pressure. Solving the stalled
+lanes again with both slow waves steered by the pressure certifies 11 more;
+with the field, 1; re-choosing the steering at the stopped state, 1. The
+evolutionary selection of slow-shock roots (parked, `RMHD_EVOLUTIONARY`)
+takes the stalls from 61 to 52 in its strict form and is the next thing to
+measure on a population. The pressure-steered retry is in the solver
+(`retry=True`; the last row of the table above, calea job 33073).
+
 ### The rungs, measured on held-out windows (2026-09-30)
 
 Two windows production had never been recorded on (t = 0.175 and 0.325,
@@ -1652,9 +1771,12 @@ who wants to repeat this.
 | secant vs Newton for the HLLD p* (7) | `scripts/pstar_methods.py results/rotor_128_hlld_mc --times 0.1,0.25,0.4` |
 | the rotor's state and solver map (7) | `scripts/plot_rotor_output.py <run> --out figs/rotor_output` |
 | which solution a scheme picks (5) | `scripts/compound_wave.py --balsara1 --flux hlle --limiter mp5 --ncells 1024 2048 4096` |
+| the weak-jump gate replayed, and the linearised flux against it (4c) | `scripts/weak_gate_study.py <rec> pfd pfe --tau 1e-3 0 --out <dir>`, then `--linear --from-saved` |
+| 1D tubes, weak regime (4c) | `scripts/shocktube_compare.py configs/mignone/st1.yaml --solvers hlld,linear,exact --shrink 0.03` |
 | the failure ledger (5a) | `sbatch scripts/calea_failure_ledger.sh` (from `ssh itp`; writes `ledger.txt`, `cards.txt`, `cards.csv`) |
 | a switch, paired against the ledger's recordings (5a) | `RMHD_FAST_EDGE_SCAN=1 scripts/failure_ledger.py collect <rec> pfa pfb pfc --paired --out <npz>` |
 | which wave fails, the fast-shock root pairs, the slow family's tangent (5a) | `scripts/ledger_subwaves.py results/failure_ledger_64 --pairs --slow-family` |
+| the four-unknown rung, paired (5a) | `RMHD_PLANAR4=1 scripts/failure_ledger.py collect <rec> <tags> --paired --out <npz>` |
 | the four-unknown pilot (5a) | `scripts/pilot_four_unknowns.py results/failure_ledger_64 1394,719,1816` (samples: `--quiet`; calea, the numpy kernels are too slow for more than a lane) |
 | one planar Newton, iteration by iteration (5a) | `scripts/newton_trace.py results/failure_ledger_64 --lanes 719,1394` |
 | 128^2 census (5) | `RUN=results/rotor_128_exact TAG=128 sbatch scripts/calea_snapshot_census.sh` |

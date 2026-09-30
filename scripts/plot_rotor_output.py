@@ -46,6 +46,8 @@ import failure_map_2d as FM                                    # noqa: E402
 CATEGORIES = [
     ("seven", "exact: seven-wave", "#1d4ed8"),
     ("planar5", "exact: five-wave planar", "#0891b2"),
+    # lime: separated from the teal by lightness, not hue (not re-validated)
+    ("planar4", "exact: four-unknown planar", "#84cc16"),
     ("three_wave", "three-wave rescue", "#7c3aed"),
     ("degenerate", "degenerate class", "#a16207"),
     ("failed", "attempted, fell back to HLLD", "#dc2626"),
@@ -87,8 +89,9 @@ def coverage_maps(rundir, snaps, nx, ny, ng):
               1: ((nxt, nyt + 1), (slice(ng, ng + nx), slice(ng, ng + ny + 1)))}
     have = [k for k in np.load(files[0]).files
             if k in {c[0] for c in CATEGORIES}]
-    keys = [k for k in ("seven", "planar5", "three_wave", "degenerate",
-                        "routed", "weak", "upwind", "bad") if k in have]
+    keys = [k for k in ("seven", "planar5", "planar4", "three_wave",
+                        "degenerate", "routed", "weak", "upwind", "bad")
+            if k in have]
     legacy = "seven" not in have
     out = {d: {k: np.zeros((T.size,) + ((nx + 1, ny) if d == 0 else (nx, ny + 1)),
                            np.int32)
@@ -119,9 +122,10 @@ def coverage_maps(rundir, snaps, nx, ny, ng):
             for key in keys:
                 out[d][key][k[0]] += FM._unpack(z[key][r], n).reshape(shp)[phys]
     return out, (["exact", "failed"] if legacy
-                 else [k for k in ("seven", "planar5", "three_wave",
-                                   "degenerate", "failed", "routed", "weak",
-                                   "upwind", "bad") if k in out[0]])
+                 else [k for k in ("seven", "planar5", "planar4",
+                                   "three_wave", "degenerate", "failed",
+                                   "routed", "weak", "upwind", "bad")
+                       if k in out[0]])
 
 
 def face_xy(x, y, d, ii, jj):
