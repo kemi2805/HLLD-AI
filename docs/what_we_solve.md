@@ -1182,17 +1182,27 @@ of the elementary R4 1.9% + half of R2/R3 0.3% would take 94.4% to about
 elementary and unsolved (the pilot's line search stalls on them, 719 among
 them, where the chosen coordinate degenerates along the way).
 
-### The rungs so far (all default off)
+### The rungs, measured on held-out windows (2026-09-30)
 
-| switch | what it does | measured |
-|---|---|---|
-| `RMHD_FAST_EDGE_SCAN=1` | the pair-splitting fast-shock search, on lanes the scan lost | +26, −0 of 24,429 (ledger windows) |
-| `RMHD_PLANAR5_LADDER=1` | the planar rescue retries unsolved lanes from six more starts (the ledger's greedy cover) | ledger: up to 192 |
-| `RMHD_PLANAR5_CROSSED=1` | self-crossing seven-wave refusals are offered to the planar rescue | ledger: 16 of 16 |
+Two windows production had never been recorded on (t = 0.175 and 0.325,
+24 sweeps, 16,782 attempted, 93.97% exact), recorded with every switch off
+and replayed with each switch on, paired lane by lane (calea job 33036;
+the recording replays bitwise with the switches off, G0):
 
-The ladder's starts were chosen on the ledger's windows, so its number there
-is in-sample; the held-out windows (t = 0.175, 0.325) are what it is judged
-on.
+| switch | what it does | held-out: gained / lost | ledger windows |
+|---|---|---|---|
+| `RMHD_PLANAR5_LADDER=1` + `RMHD_PLANAR5_CROSSED=1` | six more planar starts on unsolved lanes; self-crossing refusals offered to the rescue | **+174 / 0** (93.97 → 95.01%, p = 8e-53) | |
+| `RMHD_FAST_EDGE_SCAN=1` | the pair-splitting fast-shock search, on lanes the scan lost | **+12 / 0** (p = 5e-4) | +26 / 0 |
+| all three | | **+188 / 0** (93.97 → 95.09%, p = 5e-57) | +222 / 0 (94.39 → 95.30%) |
+
+No lane production solved changed its answer (largest star-pressure change
+7e-10, on one lane of the ledger windows). Every gained answer went through
+production's acceptance, since the switches only add starts and a search
+the standard scan had already given up on. Gate G2 is met by all three;
+they stay default-off until the user decides.
+
+The ladder's starts were chosen on the ledger's windows, so its number
+there (+192 possible) is in-sample; the held-out +174 is the one to quote.
 
 ---
 
