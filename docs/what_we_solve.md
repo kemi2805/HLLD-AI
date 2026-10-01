@@ -451,6 +451,48 @@ shrunk 1D problems of `tests/test_linearised.py` the same holds: its
 distance from the exact flux falls 25 times or more over two levels of 1/3
 where HLLD's falls three times.
 
+### 1D tubes and the rotor with the linearised flux (2026-10-01)
+
+Shock tubes, 200 cells, HLLD / linearised / exact against the analytic
+profile (`shocktube_compare.py`, calea jobs 33662-33666), L1 of rho:
+
+| tube | full strength: HLLD / linearised / exact | shrunk to 3%: HLLD / linearised / exact |
+|---|---|---|
+| Balsara 2 | 1.722e-1 / 1.722e-1 / 1.722e-1 | 1.476e-3 / 1.4745e-3 / 1.4743e-3 |
+| Balsara 5 | 6.24e-2 / 6.05e-2 / 6.11e-2 | 1.7641e-2 / 1.7637e-2 / 1.7640e-2 |
+| Mignone st1 (no reference converged; against the exact arm) | 7.4e-4 / 1.8e-3 / 0 | 3.3e-5 / 6.0e-7 / 0 |
+
+At full strength the linearised solver is as accurate as the exact flux on
+these tubes and never worse than HLLD -- a reassurance about stability, not a
+claim: a strong shock is outside what it is for. Shrunk to 3%, all three
+agree to 1e-4 of their own error on the Balsara tubes (the scheme's
+truncation error dominates), and on st1 the linearised run sits 55x closer
+to the exact run than HLLD does.
+
+**The 64² rotor with `RMHD_WEAK_FLUX=linear`** (calea job 33659, 284
+steps), against production (`results/rotor_64_exact_prov`, same code with
+HLLD below the gate) and against the 512² reference:
+
+| | L1 rho vs production at t = 0.4 | L1 rho vs the 512² reference | front radius | symmetry error, final |
+|---|---|---|---|---|
+| production | | 0.2874 | 0.4881 | 1.6e-2 |
+| linearised below the gate | 2.9e-3 (core 8.7e-3) | 0.2880 | 0.4881 | 4.5e-3 |
+
+Covering the 86% of faces below the gate with a second-order flux moves the
+64² solution by 0.3% in L1(rho) and the gap to the reference by 0.2% of
+itself -- in the direction of a larger gap, i.e. noise. The per-face flux
+differences of 1e-4 do not accumulate into anything the resolution gap can
+see, which is what section 4b's scaling predicted (0.02% there, from a
+cruder measure). The one visible change is the symmetry error, three
+times smaller: HLLD's root-finder below the gate was breaking the
+π-rotation symmetry more than the linearised solver does.
+
+So, measured on the rotor: neither opening the gate nor replacing HLLD below
+it changes the result at 64². The linearised solver is the right flux for
+those faces if one wants the exact solution's accuracy everywhere -- at
+second order, for a few percent of the run's cost -- but the rotor does not
+need it. The decision whether to make it production is the user's.
+
 ## 5. How much does not
 
 **19.9% of attempted interfaces get no exact flux** — about 2.8% of all
