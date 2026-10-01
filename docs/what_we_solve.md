@@ -480,7 +480,10 @@ HLLD below the gate) and against the 512² reference:
 
 Covering the 86% of faces below the gate with a second-order flux moves the
 64² solution by 0.3% in L1(rho) and the gap to the reference by 0.2% of
-itself -- in the direction of a larger gap, i.e. noise. The per-face flux
+itself -- in the direction of a larger gap, i.e. noise. (Production default
+since 2026-10-01 nonetheless, by the user's decision: the exact solution's
+accuracy everywhere, at second order, for a few percent of the cost.) The
+per-face flux
 differences of 1e-4 do not accumulate into anything the resolution gap can
 see, which is what section 4b's scaling predicted (0.02% there, from a
 cruder measure). The one visible change is the symmetry error, three
@@ -1344,6 +1347,12 @@ measure on a population. The pressure-steered retry is in the solver
 (`retry=True`; the last row of the table above, calea job 33073).
 
 ### The rungs, measured on held-out windows (2026-09-30)
+
+*(All of the rungs in this section, the four-unknown solver and the
+linearised flux below the gate are production defaults since 2026-10-01,
+the user's decision; each is switched off with the value 0, the weak flux
+with `RMHD_WEAK_FLUX=hlld`. The bitwise baseline was re-recorded on that
+day.)*
 
 Two windows production had never been recorded on (t = 0.175 and 0.325,
 24 sweeps, 16,782 attempted, 93.97% exact), recorded with every switch off

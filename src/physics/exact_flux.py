@@ -143,7 +143,7 @@ _BN_3WX_MAX = float(os.environ.get("RMHD_BN_3WX_MAX", "0.1"))
 # above, whose answers never reach 1e-6 on the same test, which is why that one
 # stays off and this one is worth having.
 _PLANAR5_FALLBACK = os.environ.get("RMHD_PLANAR5_FALLBACK", "0") not in ("0", "", "off")
-# The planar rescue's LADDER (opt-in, default off).  The rescue starts the
+# The planar rescue's LADDER (production default; see the note below _WEAK_FLUX).  The rescue starts the
 # planar Newton once, from the mean state, on the unflipped branch.  The
 # failure ledger (2026-09-29, 36 sweeps, 1371 failing interfaces) offered
 # every failing lane 4 flip branches x 6 seeds under production's own
@@ -155,20 +155,27 @@ _PLANAR5_FALLBACK = os.environ.get("RMHD_PLANAR5_FALLBACK", "0") not in ("0", ""
 _PLANAR5_RUNGS = ((False, False, "+L"), (False, False, "+R"),
                   (False, False, "-L"), (False, True, None),
                   (True, False, None), (False, False, "s2p"))
-_PLANAR5_LADDER = os.environ.get("RMHD_PLANAR5_LADDER", "0") not in ("0", "", "off")
+_PLANAR5_LADDER = os.environ.get("RMHD_PLANAR5_LADDER", "1") not in ("0", "", "off")
 # Offer the planar rescue the lanes whose seven-wave answer was refused as a
-# self-crossing fan (opt-in, default off; ledger: 16 of 16 then solved).
-_PLANAR5_CROSSED = os.environ.get("RMHD_PLANAR5_CROSSED", "0") not in ("0", "", "off")
-# The four-unknown planar solver (opt-in, default off): one strength per
+# self-crossing fan (production default; ledger: 16 of 16 then solved).
+_PLANAR5_CROSSED = os.environ.get("RMHD_PLANAR5_CROSSED", "1") not in ("0", "", "off")
+# The four-unknown planar solver (production default): one strength per
 # wave, each slow wave steered by whichever of (B_t, P_tot) moves along its
 # family, its own certificate (every shock's Rankine-Hugoniot conditions,
 # the contact, the fan's order).  Offered the lanes every rescue above lost.
 # See rmhd.batched.planar4_b and docs/what_we_solve.md 5a.
-_PLANAR4 = os.environ.get("RMHD_PLANAR4", "0") not in ("0", "", "off")
-# What the faces BELOW the weak-jump gate get: HLLD (the default) or the
-# linearised solver (`linearised.py`, exact to second order in the jump where
+_PLANAR4 = os.environ.get("RMHD_PLANAR4", "1") not in ("0", "", "off")
+# What the faces BELOW the weak-jump gate get: the linearised solver (the
+# default) or HLLD (`linearised.py`, exact to second order in the jump where
 # HLLD is first order).  Never counted as exact.
-_WEAK_FLUX = os.environ.get("RMHD_WEAK_FLUX", "hlld").lower()
+_WEAK_FLUX = os.environ.get("RMHD_WEAK_FLUX", "linear").lower()
+# All five -- the edge scan (rmhd_final shock_b), the ladder, the crossed
+# offer, the four-unknown rung and the linearised flux below the gate -- are
+# production defaults since 2026-10-01, the user's decision after the paired
+# measurements in docs/what_we_solve.md 4c and 5a (together: 93.97 -> 97.63%
+# of attempted interfaces exact on held-out windows, lost 0; the linearised
+# flux moves the 64^2 rotor by 0.3% and halves nothing but the symmetry
+# error).  Each is switched off with the value 0 (RMHD_WEAK_FLUX=hlld).
 _PLANAR_TOL = float(os.environ.get("RMHD_PLANAR_TOL", "1e-6"))
 _PLANAR5_VERIFY = float(os.environ.get("RMHD_PLANAR5_VERIFY", "1e-8"))
 # Verify every exact flux against the full seven-wave system and report the
@@ -1218,7 +1225,7 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
                             seven_wave=np.ones(k5, dtype=bool),
                             source=1)
 
-    # ── the four-unknown planar solver (opt-in) ───────────────────────────
+    # ── the four-unknown planar solver (production default) ──────────────
     # Last: only the lanes every rescue above lost.  Its certificate is its
     # own (each shock's jump conditions, the contact, the fan's order), not
     # the seven-wave residual, which cannot judge these answers -- see

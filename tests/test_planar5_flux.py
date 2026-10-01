@@ -64,8 +64,11 @@ def problems(eos):
     return prim(0), prim(7), len(sols)
 
 
+from conftest import PINNED                                   # noqa: E402
+
+
 def _run(sL, sR, eos, *, planar5, tol=None, extra=None):
-    extra = extra or {}
+    extra = dict(PINNED, **(extra or {}))
     old = {k: os.environ.get(k) for k in
            ("RMHD_PLANAR5_FALLBACK", "RMHD_PLANAR_TOL") + tuple(extra)}
     os.environ["RMHD_PLANAR5_FALLBACK"] = "1" if planar5 else "0"
@@ -233,10 +236,15 @@ def test_the_planar_helper_is_what_the_rescue_runs(eos, problems):
     assert np.array_equal(r["star"][1], ps.numpy().reshape(-1)[took])
 
 
-def test_the_ladder_and_the_crossed_offer_are_off_by_default():
+def test_the_ladder_and_the_crossed_offer_are_on_by_default():
     import src.physics.exact_flux as EF
-    EF = importlib.reload(EF)
-    assert EF._PLANAR5_LADDER is False and EF._PLANAR5_CROSSED is False
+    saved = {k: os.environ.pop(k, None) for k in PINNED}
+    try:
+        EF = importlib.reload(EF)
+        assert EF._PLANAR5_LADDER is True and EF._PLANAR5_CROSSED is True
+    finally:
+        os.environ.update({k: v for k, v in saved.items() if v is not None})
+        importlib.reload(EF)
 
 
 def test_the_ladder_only_adds(eos, problems):

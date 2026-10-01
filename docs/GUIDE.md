@@ -249,7 +249,10 @@ Rankine–Hugoniot conditions, the contact, the order of the fan. (The
 seven-wave residual rebuilds the waves through the field and fails right
 answers on exactly these interfaces.) It starts from slow waves of zero
 strength and needs no seed. It runs last, only on faces every other rescue
-lost (`RMHD_PLANAR4=1`).
+lost. Production default since 2026-10-01 (`RMHD_PLANAR4=0` turns it off),
+as are the planar ladder, the crossed offer, the fast-shock edge scan and
+the linearised flux below the gate: together 93.97% → 97.63% of attempted
+interfaces exact on held-out windows, nothing lost.
 
 ### 1.7 Degenerate structures
 
@@ -506,9 +509,13 @@ keeps a valid flux.
       │
       ├─ RESCUES on the faces the seven-wave path lost
       │     five-wave planar solver   (RMHD_PLANAR5_FALLBACK=1, production)
-      │       + six more starts       (RMHD_PLANAR5_LADDER=1, off)
+      │       + six more starts, and the self-crossing refusals
+      │                                 (RMHD_PLANAR5_LADDER / _CROSSED, on)
       │     three-wave solver         (off: it is not exact)
-      │     four-unknown planar solver, last  (RMHD_PLANAR4=1, off)
+      │     four-unknown planar solver, last  (RMHD_PLANAR4, on)
+      │
+      ├─ the faces BELOW the weak-jump gate: the linearised solver
+      │                                 (RMHD_WEAK_FLUX=linear, on; never "exact")
       │
       ├─ FLUX = flux of the state at xi = 0, where a solver succeeded
       │

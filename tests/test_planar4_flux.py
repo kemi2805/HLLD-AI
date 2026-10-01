@@ -20,10 +20,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test_planar5_flux import eos, problems, _run, MAX_ITER, GAMMA  # noqa: E402,F401
 
 
-def test_off_is_the_default():
+def test_on_is_the_default():
     import src.physics.exact_flux as EF
-    EF = importlib.reload(EF)
-    assert EF._PLANAR4 is False
+    saved = os.environ.pop("RMHD_PLANAR4", None)
+    try:
+        EF = importlib.reload(EF)
+        assert EF._PLANAR4 is True
+    finally:
+        if saved is not None:
+            os.environ["RMHD_PLANAR4"] = saved
+        importlib.reload(EF)
 
 
 def test_the_rung_only_adds(eos, problems):
@@ -58,10 +64,12 @@ def test_the_rung_only_adds(eos, problems):
     assert np.asarray(d0["reason4"]).size == sel.size and (np.asarray(d0["reason4"]) == 8).all()
 
 
-def test_off_and_default_are_bitwise(eos, problems):
+def test_on_and_default_are_bitwise(eos, problems):
+    """`_run` pins the rung off; the value 1 and the module's default must
+    give the same fluxes to the bit."""
     sL, sR, n = problems
-    F0, p0, d0 = _run(sL, sR, eos, planar5=True)
-    F1, p1, d1 = _run(sL, sR, eos, planar5=True, extra={"RMHD_PLANAR4": "0"})
+    F0, p0, d0 = _run(sL, sR, eos, planar5=True, extra={"RMHD_PLANAR4": "1"})
+    F1, p1, d1 = _run(sL, sR, eos, planar5=True, extra={"RMHD_PLANAR4": "on"})
     for k in F0:
         assert np.array_equal(F0[k].numpy(), F1[k].numpy())
     assert np.array_equal(p0.numpy(), p1.numpy())

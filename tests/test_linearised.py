@@ -134,17 +134,20 @@ def test_second_order_where_hlld_is_first(eos, pairs):
     assert (e_lin[2] < e_hlld[2]).mean() >= 0.75
 
 
-def test_off_by_default_and_only_the_weak_faces_change(eos, pairs):
+def test_on_by_default_and_only_the_weak_faces_change(eos, pairs):
     import src.physics.exact_flux as EF
+    old = os.environ.get("RMHD_WEAK_FLUX")
+    os.environ.pop("RMHD_WEAK_FLUX", None)
     EF = importlib.reload(EF)
-    assert EF._WEAK_FLUX == "hlld"
+    assert EF._WEAK_FLUX == "linear"
     L, R = pairs
     Ls, Rs = _shrink(eos, L, R, 0.01)
-    Fh, _, ph = EF.exact_flux_batched(Ls, Rs, eos, idir=0, tau_weak=1e-2)
-    weak = np.asarray(EF.LAST_DIAG["n_weak"])
-    old = os.environ.get("RMHD_WEAK_FLUX")
-    os.environ["RMHD_WEAK_FLUX"] = "linear"
     try:
+        os.environ["RMHD_WEAK_FLUX"] = "hlld"
+        EF = importlib.reload(EF)
+        Fh, _, ph = EF.exact_flux_batched(Ls, Rs, eos, idir=0, tau_weak=1e-2)
+        weak = np.asarray(EF.LAST_DIAG["n_weak"])
+        os.environ.pop("RMHD_WEAK_FLUX", None)
         EF = importlib.reload(EF)
         Fl, _, pl = EF.exact_flux_batched(Ls, Rs, eos, idir=0, tau_weak=1e-2)
         d = dict(EF.LAST_DIAG)
