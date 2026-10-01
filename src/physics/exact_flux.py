@@ -142,7 +142,13 @@ _BN_3WX_MAX = float(os.environ.get("RMHD_BN_3WX_MAX", "0.1"))
 # verification is what keeps those out.  Contrast the three-wave fallback
 # above, whose answers never reach 1e-6 on the same test, which is why that one
 # stays off and this one is worth having.
-_PLANAR5_FALLBACK = os.environ.get("RMHD_PLANAR5_FALLBACK", "0") not in ("0", "", "off")
+# On by default since 2026-10-01.  It was "production" before that only by
+# the environment of each launcher and replay script (RMHD_PLANAR5_FALLBACK=1);
+# the first run with the five rungs as defaults was submitted without it and
+# ran with the five-wave rescue OFF -- the four-unknown solver covered those
+# lanes, but it was not the configuration measured.  The bitwise gate sets
+# it explicitly, so its recording is unaffected.
+_PLANAR5_FALLBACK = os.environ.get("RMHD_PLANAR5_FALLBACK", "1") not in ("0", "", "off")
 # The planar rescue's LADDER (production default; see the note below _WEAK_FLUX).  The rescue starts the
 # planar Newton once, from the mean state, on the unflipped branch.  The
 # failure ledger (2026-09-29, 36 sweeps, 1371 failing interfaces) offered

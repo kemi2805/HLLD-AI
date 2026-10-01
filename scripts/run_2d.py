@@ -173,7 +173,8 @@ def main():
         from rmhd.batched import shock_b as _SB
         meta.update(tau_weak=a.tau_weak, tau_bt=a.tau_bt,
                     weak_flux=_EF._WEAK_FLUX,
-                    rungs=dict(RMHD_FAST_EDGE_SCAN=int(_SB.edge_scan_wanted()),
+                    rungs=dict(RMHD_PLANAR5_FALLBACK=int(_EF._PLANAR5_FALLBACK),
+                               RMHD_FAST_EDGE_SCAN=int(_SB.edge_scan_wanted()),
                                RMHD_PLANAR5_LADDER=int(_EF._PLANAR5_LADDER),
                                RMHD_PLANAR5_CROSSED=int(_EF._PLANAR5_CROSSED),
                                RMHD_PLANAR4=int(_EF._PLANAR4)),

@@ -508,7 +508,8 @@ keeps a valid flux.
       │     accept if: converged, ray resolved, state physical, fan ordered
       │
       ├─ RESCUES on the faces the seven-wave path lost
-      │     five-wave planar solver   (RMHD_PLANAR5_FALLBACK=1, production)
+      │     five-wave planar solver   (RMHD_PLANAR5_FALLBACK, on since 2026-10-01;
+      │                                 before that by each launcher's environment)
       │       + six more starts, and the self-crossing refusals
       │                                 (RMHD_PLANAR5_LADDER / _CROSSED, on)
       │     three-wave solver         (off: it is not exact)

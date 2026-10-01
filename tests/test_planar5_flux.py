@@ -90,10 +90,16 @@ def _run(sL, sR, eos, *, planar5, tol=None, extra=None):
         importlib.reload(EF)
 
 
-def test_off_is_the_default():
+def test_on_is_the_default():
     import src.physics.exact_flux as EF
-    EF = importlib.reload(EF)
-    assert EF._PLANAR5_FALLBACK is False
+    saved = os.environ.pop("RMHD_PLANAR5_FALLBACK", None)
+    try:
+        EF = importlib.reload(EF)
+        assert EF._PLANAR5_FALLBACK is True
+    finally:
+        if saved is not None:
+            os.environ["RMHD_PLANAR5_FALLBACK"] = saved
+        importlib.reload(EF)
 
 
 def test_seven_wave_lanes_are_untouched(eos, problems):

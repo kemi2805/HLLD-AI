@@ -81,7 +81,7 @@ fi
 echo "== $(date)  host=$(hostname)  N=$N  tend=$TEND  retries=$RETRIES  out=$OUT  pool=${POOL}x${POOL_THREADS} chunks=$POOL_CHUNKS  ${RESTART:-fresh start}"
 echo "== HLLD $(git rev-parse --short HEAD)   rmhd_final $("$PY" -c 'import rmhd.paths as p; print(p.git_rev())')"
 echo "== ckpt=$RMHD_ML_CKPT  extra=$RMHD_ML_CKPTS  kernels: FAN=$RMHD_FAN ALFVEN=$RMHD_ALFVEN SLOWSHOCK=$RMHD_SLOWSHOCK SHOCK=$RMHD_SHOCK"
-echo "== tau_weak=$TAU_WEAK  weak flux=${RMHD_WEAK_FLUX:-(default)}  rungs: EDGE=${RMHD_FAST_EDGE_SCAN:-(default)} LADDER=${RMHD_PLANAR5_LADDER:-(default)} CROSSED=${RMHD_PLANAR5_CROSSED:-(default)} PLANAR4=${RMHD_PLANAR4:-(default)}   (unset = the module's production default, recorded resolved in run_meta.json)"
+echo "== tau_weak=$TAU_WEAK  weak flux=${RMHD_WEAK_FLUX:-(default)}  five-wave rescue=${RMHD_PLANAR5_FALLBACK:-(default)}  rungs: EDGE=${RMHD_FAST_EDGE_SCAN:-(default)} LADDER=${RMHD_PLANAR5_LADDER:-(default)} CROSSED=${RMHD_PLANAR5_CROSSED:-(default)} PLANAR4=${RMHD_PLANAR4:-(default)}   (unset = the module's production default, recorded resolved in run_meta.json)"
 $PY -c "import numpy, numba, torch; print('numpy', numpy.__version__, 'numba', numba.__version__, 'torch', torch.__version__)"
 
 $PY -u scripts/run_2d.py --problem rotor --n "$N" --solver exact --tend "$TEND" \
