@@ -167,11 +167,16 @@ def main():
                 torch_threads=torch.get_num_threads(),
                 git=_git_rev(), started=time.strftime("%Y-%m-%dT%H:%M:%S"))
     if a.solver == "exact":
+        # what the solver will actually do: the module's resolved values,
+        # not the environment (unset means the production default)
+        import src.physics.exact_flux as _EF
+        from rmhd.batched import shock_b as _SB
         meta.update(tau_weak=a.tau_weak, tau_bt=a.tau_bt,
-                    weak_flux=os.environ.get("RMHD_WEAK_FLUX", "hlld"),
-                    rungs={k: os.environ.get(k, "0") for k in
-                           ("RMHD_FAST_EDGE_SCAN", "RMHD_PLANAR5_LADDER",
-                            "RMHD_PLANAR5_CROSSED", "RMHD_PLANAR4")},
+                    weak_flux=_EF._WEAK_FLUX,
+                    rungs=dict(RMHD_FAST_EDGE_SCAN=int(_SB.edge_scan_wanted()),
+                               RMHD_PLANAR5_LADDER=int(_EF._PLANAR5_LADDER),
+                               RMHD_PLANAR5_CROSSED=int(_EF._PLANAR5_CROSSED),
+                               RMHD_PLANAR4=int(_EF._PLANAR4)),
                     retries=a.exact_retries, max_iter=a.exact_max_iter)
     prev = os.path.join(out, "run_meta.json")
     if os.path.exists(prev) and not a.restart:
