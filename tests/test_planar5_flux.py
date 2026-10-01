@@ -68,10 +68,11 @@ from conftest import PINNED                                   # noqa: E402
 
 
 def _run(sL, sR, eos, *, planar5, tol=None, extra=None):
-    extra = dict(PINNED, **(extra or {}))
+    # the pins first, then this run's own flag, then what the test asks for
+    extra = dict(PINNED, RMHD_PLANAR5_FALLBACK="1" if planar5 else "0",
+                 **(extra or {}))
     old = {k: os.environ.get(k) for k in
-           ("RMHD_PLANAR5_FALLBACK", "RMHD_PLANAR_TOL") + tuple(extra)}
-    os.environ["RMHD_PLANAR5_FALLBACK"] = "1" if planar5 else "0"
+           ("RMHD_PLANAR_TOL",) + tuple(extra)}
     os.environ.update(extra)
     if tol is not None:
         os.environ["RMHD_PLANAR_TOL"] = tol
