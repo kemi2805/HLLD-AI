@@ -424,6 +424,34 @@ Three things the scaling argument did not know:
   grows 1.6x at 1e-3 and 2.1x at 0, not 7x, because a weak face solves in a
   few iterations and the wall is set by the failing lanes' retry ladders.
 
+### Does the gate miss a field that turns at equal energy? (2026-10-02)
+
+The gate's field term is a VECTOR jump, |B_L − B_R| over |B_L| + |B_R| + √p,
+so a turn at equal magnitude counts: 2|B| sin(Δψ/2) against 2|B| + 2√p. A
+strong field passes the 1% threshold at a turn of 2°; a full reversal is
+gated out only when the magnetic energy is below ~1e-4 of the gas pressure.
+Measured on the held-out windows against the exact fluxes of the gate-at-0
+replay (the induction flux = the flux of the two tangential field
+components, compared relative to its own size, on faces where it is at
+least 1e-3 of the total flux):
+
+| tangential turn, below the gate | faces | HLLD induction flux vs exact, p50 / p90 / p99 |
+|---|---|---|
+| < 2° | 18,674 | 4e-5 / 2e-4 / 1e-3 |
+| 2° .. 135° | 0 | (the rotor is coplanar: fields are parallel or antiparallel) |
+| reversal, > 135° | 104 | 4e-5 / 2e-4 / **1.4** |
+
+All 104 gated reversals have a tangential magnetic pressure below 1e-3 of
+the gas pressure (97 below 1e-4). HLLD's induction flux is within 2e-4 of
+the exact one on nine in ten of them and off by order one on about one in a
+hundred -- one or two faces per 112,608, on a flux that is itself below
+1e-3 of the total; the linearised solver does no better on those. Above the
+gate, 119 reversals, HLLD's induction flux is off by 2e-4 (median) to 2e-2.
+So the gate's blind spot for turns is real but confined to fields too weak
+to carry energy, and cheap to close if wanted: attempting every face whose
+tangential field turns by more than, say, 45° would add 104 faces per 24
+sweeps.
+
 ### The linearised solver below the gate
 
 `src/physics/linearised.py`: the jump decomposed into the characteristic
