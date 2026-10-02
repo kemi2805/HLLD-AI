@@ -35,7 +35,7 @@ import numpy as np
 import torch
 
 from .c2p import conservative_to_primitive
-from .hlld import hlld_flux, hlle_flux, primitive_to_conserved
+from .hlld import hlld_flux, hlle_flux, hllc_flux, primitive_to_conserved
 from .reconstruction import reconstruct_prims
 
 _KEYS = ("D", "Sx", "Sy", "Sz", "tau")
@@ -75,7 +75,7 @@ def _bc(d, ng):
         v[-ng:] = v[-ng - 1:-ng]
 
 
-_FLUX = {"hlld": hlld_flux, "hlle": hlle_flux}
+_FLUX = {"hlld": hlld_flux, "hlle": hlle_flux, "hllc": hllc_flux}
 
 
 def _rhs(prims, eos, dx, ng, limiter, flux="hlld"):

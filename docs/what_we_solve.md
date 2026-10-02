@@ -1374,6 +1374,42 @@ takes the stalls from 61 to 52 in its strict form and is the next thing to
 measure on a population. The pressure-steered retry is in the solver
 (`retry=True`; the last row of the table above, calea job 33073).
 
+### Every face of one run, and what is still lost (2026-10-02)
+
+From the coverage maps of the 64² run with the production defaults (first
+210 of 284 steps, 5.9 M face-evaluations) and production on the same steps:
+
+| what happens to a face | share of all face-evaluations |
+|---|---|
+| below the weak-jump gate: the linearised flux (production: HLLD) | 88.1% |
+| fan entirely on one side: HLLD, which is exact there | 2.5% |
+| attempted by the exact solver | 9.4% |
+
+| of the attempted, answered by | defaults | production |
+|---|---|---|
+| seven-wave Newton (ML seed, retries) | 43.5% | 43.7% |
+| five-wave planar rescue (with the extra starts) | 51.2% | 50.1% |
+| four-unknown planar solver | 2.2% | 0 |
+| degenerate class | 1.0% | 1.0% |
+| **HLLD fallback** | **2.14%** | **5.11%** |
+
+What the full ladder still loses on the ledger windows: 524 of 24,429
+attempted faces (2.1%); the tube test calls 290 of them compound, 234
+elementary (all but 35 were ledger R4). Two of them, run as 1D Riemann
+problems with HLLE, HLLC and HLLD (`scripts/plot_two_faces.py`; the tube
+runner takes `flux="hllc"` now):
+
+![compound](figs/two_faces_compound.png)
+![elementary](figs/two_faces_elementary.png)
+
+Interface 0 (compound): the slow waves carry the tangential field to −0.004,
+reversed and fifteen times the left value -- a reversal fused to a jump,
+not an elementary-wave structure. Interface 2518 (elementary): the states
+differ by 6% in normal velocity, but between two strong slow waves the
+density rises 27% and the field falls to a seventh. The three approximate
+solvers differ by ~1% of each feature at 800 cells and a few percent at 100;
+the HLLD fallback on these faces tracks the structure the PDE builds.
+
 ### The rungs, measured on held-out windows (2026-09-30)
 
 *(All of the rungs in this section, the four-unknown solver and the
