@@ -73,3 +73,27 @@ def test_on_and_default_are_bitwise(eos, problems):
     for k in F0:
         assert np.array_equal(F0[k].numpy(), F1[k].numpy())
     assert np.array_equal(p0.numpy(), p1.numpy())
+
+
+def test_skipping_the_compound_lanes_only_removes(eos, problems):
+    """`RMHD_PLANAR4_SKIP_COMPOUND=1` (opt-in): the rung is not offered the
+    lanes the compound rule flags.  With the rule widened to every lane it
+    is offered nothing -- the lanes the rescues before it lost are counted
+    as skipped (all but the self-crossing ones, which the pinned-off crossed
+    offer keeps from it anyway) -- and the run is the rung-off run to the
+    bit.  (Two runs: the rule as it ships is measured on populations, docs
+    5a.)"""
+    sL, sR, n = problems
+    F0, p0, d0 = _run(sL, sR, eos, planar5=True)
+    Fa, pa, da = _run(sL, sR, eos, planar5=True, extra={
+        "RMHD_PLANAR4": "1", "RMHD_PLANAR4_SKIP_COMPOUND": "1",
+        "RMHD_COMPOUND_BT_MAX": "1e300", "RMHD_COMPOUND_DPSI_MIN": "-1"})
+    sel = np.asarray(da["sel"])
+    lost = ~np.asarray(da["exact_mask"], bool).reshape(-1)[sel]
+    assert lost.any()
+    assert da["n_planar4_attempted"] == 0
+    assert 0 < da["n_planar4_skipped_compound"] <= int(lost.sum())
+    assert (np.asarray(da["reason4"]) == 8).all()
+    for k in F0:
+        assert np.array_equal(F0[k].numpy(), Fa[k].numpy())
+    assert np.array_equal(p0.numpy(), pa.numpy())

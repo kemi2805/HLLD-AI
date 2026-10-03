@@ -218,6 +218,11 @@ _UPWIND_SKIP = os.environ.get("RMHD_UPWIND_SKIP", "1") not in ("0", "", "off")
 _COMPOUND_SKIP = os.environ.get("RMHD_COMPOUND_SKIP", "0") not in ("0", "", "off")
 _COMPOUND_BT_MAX = float(os.environ.get("RMHD_COMPOUND_BT_MAX", "0.3"))
 _COMPOUND_DPSI_MIN = float(os.environ.get("RMHD_COMPOUND_DPSI_MIN", str(_math.pi / 2)))
+# Do not offer the four-unknown solver the lanes the compound rule flags
+# (opt-in): it certified 0 of 100 tube-labelled compound interfaces and burns
+# its full budget on each, serially, in the main process.  Measured on the
+# cost replay before deciding.
+_PLANAR4_SKIP_COMPOUND = os.environ.get("RMHD_PLANAR4_SKIP_COMPOUND", "0") not in ("0", "", "off")
 # The jump conditions do not order the waves.  A fan whose rotational
 # discontinuity sits on the far side of its slow wave is self-crossing and is
 # not a Riemann solution, however small its residual -- verification cannot
@@ -924,7 +929,8 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
     # the compound rule, on the solver-frame tangential fields (see
     # _COMPOUND_SKIP): weak against the normal field, and reversing
     routed = np.zeros(N, dtype=bool)
-    if _COMPOUND_SKIP:
+    compound = np.zeros(N, dtype=bool)
+    if _COMPOUND_SKIP or _PLANAR4_SKIP_COMPOUND:
         BtL = np.hypot(left[5], left[6])
         BtR = np.hypot(right[5], right[6])
         # the wrapped difference of the two field angles, NOT atan2 of the
@@ -934,8 +940,10 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
         psiL = np.arctan2(left[6], left[5])
         psiR = np.arctan2(right[6], right[5])
         dpsi = np.abs((psiR - psiL + _math.pi) % (2.0 * _math.pi) - _math.pi)
-        routed = live & (np.minimum(BtL, BtR)
-                         < _COMPOUND_BT_MAX * np.abs(Bn)) & (dpsi > _COMPOUND_DPSI_MIN)
+        compound = live & (np.minimum(BtL, BtR)
+                           < _COMPOUND_BT_MAX * np.abs(Bn)) & (dpsi > _COMPOUND_DPSI_MIN)
+    if _COMPOUND_SKIP:
+        routed = compound
         live = live & ~routed
     sel = np.flatnonzero(live)
 
@@ -1241,10 +1249,14 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
     reason4 = np.full(sel.size, 8, dtype=np.int8)        # 8 = not offered
     iters4 = np.full(sel.size, -1, dtype=int)
     kinds4 = np.full((2, sel.size), -1, dtype=np.int8)
+    n4_skipped = 0
     if _PLANAR4:
         offered = ~take & ~take3 & ~take5
         if not _PLANAR5_CROSSED:
             offered &= ~crossed
+        if _PLANAR4_SKIP_COMPOUND:
+            n4_skipped = int((offered & compound[sel]).sum())
+            offered &= ~compound[sel]
         cand = np.flatnonzero(offered)
         n4_att = int(cand.size)
         if cand.size:
@@ -1378,6 +1390,7 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
         n_planar4_attempted=n4_att,
         n_planar4_exact=int(take4.sum()),
         planar4_mask=take4,
+        n_planar4_skipped_compound=n4_skipped,
         # faces below the weak-jump gate, and how many of them the linearised
         # solver answered (RMHD_WEAK_FLUX=linear; 0 with HLLD there)
         n_weak=int(weak.sum()), n_weak_linear=n_weak_linear,

@@ -252,7 +252,13 @@ strength and needs no seed. It runs last, only on faces every other rescue
 lost. Production default since 2026-10-01 (`RMHD_PLANAR4=0` turns it off),
 as are the planar ladder, the crossed offer, the fast-shock edge scan and
 the linearised flux below the gate: together 93.97% → 97.63% of attempted
-interfaces exact on held-out windows, nothing lost.
+interfaces exact on held-out windows, nothing lost; over a whole 64² rotor
+run 97.72% against production's 94.57%. They cost: the five-wave rescue,
+its ladder and this rung run in the main process, not over the worker
+pool, and that run took 411 s per step against 51 s without the new rungs
+(`what_we_solve.md` 5a). `RMHD_PLANAR4_SKIP_COMPOUND=1` (opt-in) keeps the
+lanes the compound rule flags from this rung: 9% of the wall, 37–53
+faces lost on the held-out windows.
 
 ### 1.7 Degenerate structures
 

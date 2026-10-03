@@ -1374,24 +1374,86 @@ takes the stalls from 61 to 52 in its strict form and is the next thing to
 measure on a population. The pressure-steered retry is in the solver
 (`retry=True`; the last row of the table above, calea job 33073).
 
-### Every face of one run, and what is still lost (2026-10-02)
+### Every face of one run, and what is still lost (2026-10-02, completed 2026-10-03)
 
-From the coverage maps of the 64² run with the production defaults (first
-210 of 284 steps, 5.9 M face-evaluations) and production on the same steps:
+From the coverage maps of the 64² run with the production defaults
+(`results/rotor_64_exact_defaults`, calea job 33761, all 284 steps, 1,704
+sweeps, 8.0 M face-evaluations) and of production on the same steps
+(`results/rotor_64_exact_prov`):
 
 | what happens to a face | share of all face-evaluations |
 |---|---|
-| below the weak-jump gate: the linearised flux (production: HLLD) | 88.1% |
-| fan entirely on one side: HLLD, which is exact there | 2.5% |
-| attempted by the exact solver | 9.4% |
+| below the weak-jump gate: the linearised flux (production: HLLD) | 85.9% |
+| fan entirely on one side: HLLD, which is exact there | 2.0% |
+| attempted by the exact solver | 12.1% |
 
 | of the attempted, answered by | defaults | production |
 |---|---|---|
-| seven-wave Newton (ML seed, retries) | 43.5% | 43.7% |
-| five-wave planar rescue (with the extra starts) | 51.2% | 50.1% |
-| four-unknown planar solver | 2.2% | 0 |
-| degenerate class | 1.0% | 1.0% |
-| **HLLD fallback** | **2.14%** | **5.11%** |
+| seven-wave Newton (ML seed, retries) | 43.8% | 43.9% |
+| five-wave planar rescue (with the extra starts) | 50.5% | 49.6% |
+| four-unknown planar solver | 2.3% | 0 |
+| degenerate class | 1.1% | 1.1% |
+| **HLLD fallback** | **2.28%** | **5.43%** |
+| **solved** | **97.72%** (942,247 of 964,232) | **94.57%** (912,072 of 964,492) |
+
+The attempted share grows from 2.9% of the faces in the first tenth of the
+run to 20.8% in the last; the solved fraction stays between 97.2% and 98.8%
+from the second tenth on (94.4% in the first, `scripts/harvest_summary.py`).
+Where the remaining fallbacks sit, at t = 0.4 (`scripts/plot_rotor_output.py`):
+in the inner shell, on the y-faces, beside the four-unknown solver's answers.
+
+![solver map, t = 0.4](figs/rotor_64_defaults_solver_t0.40.png)
+
+**The solution.** L1 against the 512² HLLD reference at t = 0.4
+(`scripts/rotor_compare.py --regions`):
+
+| 64² run | L1 rho | core | shell | outer | L1 p | front radius | symmetry error, final |
+|---|---|---|---|---|---|---|---|
+| HLLD | 0.2881 | 0.5726 | 0.3574 | 0.0745 | 0.2359 | 0.4882 | 5.9e-3 |
+| production (exact; HLLD below the gate) | 0.2874 | 0.5724 | 0.3565 | 0.0740 | 0.2348 | 0.4881 | 1.6e-2 |
+| linearised below the gate, no new rungs | 0.2880 | 0.5732 | 0.3573 | 0.0741 | 0.2351 | 0.4881 | 4.5e-3 |
+| **defaults** | **0.2874** | 0.5728 | 0.3565 | 0.0738 | 0.2345 | 0.4879 | 1.1e-2 |
+
+The defaults run differs from production by 1.3e-3 in L1(rho) (core 3.0e-3),
+ten times the host-to-host noise but 1/200 of the gap to the reference,
+which it leaves where production left it. Solving 3.2 points
+more of the attempted faces is the claim this run measures. It does not
+make the solution closer to the reference, as section 7 found for coverage
+in general.
+
+**The cost.** 411 s per step (calea01) against 50.6 s for the same weak flux
+without the new rungs (`rotor_64_exact_linweak`, calea10, job 33659; same
+pool, same harvest): 3.6x over the first 150 steps, 11.3x over the last 134,
+where the attempted share is largest. The run kept 5.9 of its 64 cores busy
+on average (Slurm TotalCPU / elapsed), the linearised run 34.6. The reason
+is in the code: only the seven-wave Newton runs over the worker pool; the
+five-wave rescue, its ladder and the four-unknown rung run in the main
+process, lane after lane. Production's own 96 s per step
+(`rotor_64_exact_prov`, older code 07dd058) is not the like-for-like
+comparison.
+
+What each rung costs, paired on the held-out windows (calea jobs 33951 and
+33953; `failure_ledger.py collect --paired`, HLLD below the gate in all of
+them, so the walls are the rungs' alone):
+
+| configuration | rescue | ladder | crossed | four-unknown | edge scan | compound not offered to it | solved | gained / lost | wall |
+|---|---|---|---|---|---|---|---|---|---|
+| production | 1 | 0 | 0 | 0 | 0 | | 93.97% | | 569 s |
+| **defaults** | 1 | 1 | 1 | 1 | 1 | 0 | **97.63%** | +614 / 0 | 1561 s |
+| no ladder | 1 | 0 | 1 | 1 | 1 | 0 | 97.47% | +587 / 0 | 1114 s |
+| no ladder, compound skipped | 1 | 0 | 1 | 1 | 1 | 1 | 97.15% | +534 / 0 | 1012 s |
+| defaults, compound skipped | 1 | 1 | 1 | 1 | 1 | 1 | 97.41% | +577 / 0 | 1422 s |
+| four-unknown rung without the five-wave rescue | 0 | 0 | 1 | 1 | 1 | 0 | 97.34% | +587 / −21 | 1062 s |
+| the same without the edge scan | 0 | 0 | 1 | 1 | 0 | 0 | 97.18% | +559 / −21 | 985 s |
+
+- The ladder buys 27 faces (+0.16 points) for 40% of the wall.
+- Keeping the compound lanes from the four-unknown rung
+  (`RMHD_PLANAR4_SKIP_COMPOUND=1`, opt-in) saves 9% of the wall and
+  loses 37–53 faces. It answers compound lanes after all, though it
+  certified none of the 100 tube-labelled ones (the rule is not the tube
+  test). It stays off.
+- The five-wave rescue cannot be replaced by the four-unknown rung: without
+  it, 21 faces production solves are lost.
 
 What the full ladder still loses on the ledger windows: 524 of 24,429
 attempted faces (2.1%); the tube test calls 290 of them compound, 234
@@ -1892,6 +1954,7 @@ who wants to repeat this.
 | a switch, paired against the ledger's recordings (5a) | `RMHD_FAST_EDGE_SCAN=1 scripts/failure_ledger.py collect <rec> pfa pfb pfc --paired --out <npz>` |
 | which wave fails, the fast-shock root pairs, the slow family's tangent (5a) | `scripts/ledger_subwaves.py results/failure_ledger_64 --pairs --slow-family` |
 | the four-unknown rung, paired (5a) | `RMHD_PLANAR4=1 scripts/failure_ledger.py collect <rec> <tags> --paired --out <npz>` |
+| the defaults' run: tally, solution, cost (5a) | `scripts/harvest_summary.py results/rotor_64_exact_defaults/harvest`; `scripts/rotor_compare.py results/rotor_64_exact_defaults results/rotor_512_hlld --regions`; a rung's cost: `RMHD_WEAK_FLUX=hlld RMHD_PLANAR5_LADDER=0 scripts/failure_ledger.py collect <held-out rec> pfd pfe --paired --out <npz>` timed, one configuration per call |
 | the four-unknown pilot (5a) | `scripts/pilot_four_unknowns.py results/failure_ledger_64 1394,719,1816` (samples: `--quiet`; calea, the numpy kernels are too slow for more than a lane) |
 | one planar Newton, iteration by iteration (5a) | `scripts/newton_trace.py results/failure_ledger_64 --lanes 719,1394` |
 | 128^2 census (5) | `RUN=results/rotor_128_exact TAG=128 sbatch scripts/calea_snapshot_census.sh` |
