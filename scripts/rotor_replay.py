@@ -22,7 +22,10 @@ marginal lanes in one x-sweep -- what a whole-run comparison had shown as
 Env: RMHD_ML_CKPT, RMHD_FAN/ALFVEN/SLOWSHOCK/SHOCK as for a run.
      record: N (32) the grid; T0 (0) pre-evolve with HLLD to this time, then
              record NSTEP exact steps -- sweeps from the developed flow
-             instead of the initial disc; REC_DIR (/tmp) where they go.
+             instead of the initial disc; REC_DIR (/tmp) where they go;
+             PROBLEM (rotor) or orszag_tang -- box, gamma and boundaries as
+             in run_2d.py; each recording carries its problem and gamma,
+             and replay solves it with that gamma.
      replay: REC_DIR; WARMUP=k replays the first k sweeps silently first, so
              first-call compilation is not billed to sweep 1."""
 import sys, os, re, time, functools
@@ -36,7 +39,7 @@ import numpy as np, torch
 torch.set_num_threads(1); np.seterr(all='ignore')
 from src.physics.grid import Grid2D
 from src.physics.eos import hybrid_eos
-from src.physics.initial_data2d import b_from_potential, magnetic_rotor
+from src.physics.initial_data2d import b_from_potential, magnetic_rotor, orszag_tang
 from src.physics.driver2d import prims_to_cons_2d, sync_state, rk_step_ct, compute_dt_2d
 from src.physics.state import EVOLVED_KEYS, State2D
 from src.physics.hlld import LAST_DIAG, hlld_flux
@@ -52,7 +55,20 @@ if __name__ == "__main__":   # guarded: RMHD_POOL workers import this module
     rec_path = lambda tag, k: os.path.join(REC_DIR, f"sweep_{tag}_{k}.pt")
     base = functools.partial(exact_flux_batched, tau_weak=1e-2, tau_bt=1e-9,
                              n_retries=RETRIES, max_iter=40)
-    eos = hybrid_eos(K=0.0, gamma=5 / 3, gamma_th=5 / 3)
+    # box, gamma and boundaries per problem, as run_2d.py has them
+    PROBLEMS = {"rotor": ((-0.5, 0.5), 5.0 / 3.0, "outflow", magnetic_rotor),
+                "orszag_tang": ((0.0, 1.0), 4.0 / 3.0, "periodic", orszag_tang)}
+    PROBLEM = os.environ.get("PROBLEM", "rotor")
+    if MODE == "record" and PROBLEM not in PROBLEMS:
+        sys.exit(f"PROBLEM={PROBLEM}: not one of {', '.join(PROBLEMS)}")
+    GAMMA = PROBLEMS.get(PROBLEM, PROBLEMS["rotor"])[1]
+    if MODE == "replay":
+        # the recording says which gamma it was made with (rotor ones predate
+        # the field and are 5/3)
+        first = os.path.join(REC_DIR, f"sweep_{sys.argv[3]}_1.pt")
+        if os.path.exists(first):
+            GAMMA = float(torch.load(first).get("gamma", 5.0 / 3.0))
+    eos = hybrid_eos(K=0.0, gamma=GAMMA, gamma_th=GAMMA)
     kern = {k: os.environ.get(k, "numpy") for k in ("RMHD_FAN", "RMHD_ALFVEN", "RMHD_SLOWSHOCK", "RMHD_SHOCK")}
     kern["retries"] = RETRIES
     kern["ckpt"] = os.environ.get("RMHD_ML_CKPT", "(default)")
@@ -80,18 +96,19 @@ if __name__ == "__main__":   # guarded: RMHD_POOL workers import this module
         N = int(os.environ.get("N", "32"))
         T0 = float(os.environ.get("T0", "0"))
         os.makedirs(REC_DIR, exist_ok=True)
-        g = Grid2D(-0.5, 0.5, N, -0.5, 0.5, N, ng=2)
-        prims, Az = magnetic_rotor(g, eos)
+        (lo, hi), _, BC, init = PROBLEMS[PROBLEM]
+        g = Grid2D(lo, hi, N, lo, hi, N, ng=2)
+        prims, Az = init(g, eos)
         Bxf, Byf = b_from_potential(Az, g.dx, g.dy)
         c = prims_to_cons_2d(prims, g)
         st = sync_state(State2D(cons={k: c[k] for k in EVOLVED_KEYS}, Bxf=Bxf, Byf=Byf, prims=prims),
-                        g, eos, "outflow", "outflow")
+                        g, eos, BC, BC)
         # the developed flow: HLLD to T0 (cheap), then the recorded exact steps
         t_pre, n_pre = 0.0, 0
         while t_pre < T0 - 1e-14:
             dt = min(compute_dt_2d(st.prims, g, eos, 0.25), T0 - t_pre)
-            st, _ = rk_step_ct(st, g, eos, dt, scheme="rk3", bc_x="outflow",
-                               bc_y="outflow", flux_fn=hlld_flux, limiter="mc")
+            st, _ = rk_step_ct(st, g, eos, dt, scheme="rk3", bc_x=BC,
+                               bc_y=BC, flux_fn=hlld_flux, limiter="mc")
             t_pre += dt; n_pre += 1
         if n_pre:
             print(f"pre-evolved with HLLD to t={t_pre:.4f} in {n_pre} steps", flush=True)
@@ -103,14 +120,15 @@ if __name__ == "__main__":   # guarded: RMHD_POOL workers import this module
             d = dict(LAST_DIAG)
             torch.save({"sL": sL, "sR": sR, "idir": idir, "F": out[0], "U": out[1], "p_star": out[2],
                         "exact_mask": d["exact_mask"], "n_exact": d["n_exact"],
-                        "n_attempted": d["n_attempted"], "t0": T0, "n": N},
+                        "n_attempted": d["n_attempted"], "t0": T0, "n": N,
+                        "problem": PROBLEM, "gamma": GAMMA},
                        rec_path(TAG, k[0]))
             print(f"sweep {k[0]} idir={idir} attempted={d['n_attempted']} exact={d['n_exact']} {w:.1f}s", flush=True)
             return out
 
         for _step in range(int(os.environ.get("NSTEP", "1"))):
             dt = compute_dt_2d(st.prims, g, eos, 0.25)
-            st, _ = rk_step_ct(st, g, eos, dt, scheme="rk3", bc_x="outflow", bc_y="outflow",
+            st, _ = rk_step_ct(st, g, eos, dt, scheme="rk3", bc_x=BC, bc_y=BC,
                                flux_fn=flux, limiter="mc")
         print("recorded", k[0], "sweeps", flush=True)
     else:

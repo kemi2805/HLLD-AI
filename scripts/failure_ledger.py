@@ -393,7 +393,9 @@ def method_e(L, R, Bn, log):
 # ── collect ───────────────────────────────────────────────────────────────
 
 def collect(a):
-    eos = hybrid_eos(K=0.0, gamma=GAMMA, gamma_th=GAMMA)
+    # each recording carries the gamma it was made with (the rotor's predate
+    # the field: 5/3); the stages after `collect` are the rotor's only
+    eoses = {}
     rows = {k: [] for k in ("UL", "UR", "group", "tag", "sweep", "lane", "idir",
                             "t0", "reason7", "reason5", "src", "pstar",
                             "attempts", "iters7", "iters5")}
@@ -409,6 +411,8 @@ def collect(a):
             raise SystemExit("no recordings sweep_%s_*.pt in %s" % (tag, a.rec))
         for k in ks:
             rec = torch.load(os.path.join(a.rec, "sweep_%s_%d.pt" % (tag, k)))
+            gam = float(rec.get("gamma", GAMMA))
+            eos = eoses.setdefault(gam, hybrid_eos(K=0.0, gamma=gam, gamma_th=gam))
             F, U, ps = EF.exact_flux_batched(
                 rec["sL"], rec["sR"], eos, idir=rec["idir"], tau_weak=1e-2,
                 tau_bt=1e-9, n_retries=2, max_iter=40)

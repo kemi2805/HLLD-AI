@@ -18,7 +18,8 @@
 #   N=128 LIMITER=mp5 sbatch scripts/calea_rotor_hlld.sh
 #   N=512 LIMITER=mp5 MAX_STEPS=3 sbatch --time=0:30:00 scripts/calea_rotor_hlld.sh
 #
-# Knobs (env): N (128), LIMITER (mc), SOLVER (hlld; hlle/hllc also work),
+# Knobs (env): PROBLEM (rotor; orszag_tang -- OUT and LOG then start with ot_,
+# TEND defaults to 1.0), N (128), LIMITER (mc), SOLVER (hlld; hlle/hllc also work),
 # TEND (0.4), NSNAP (8), CFL (0.25), OUT (derived, and run_2d appends the
 # limiter for anything but mc), TORCH_THREADS (8), RESUME (1: continue from
 # $OUT/restart.npz when present), MAX_STEPS, RESTART_EVERY (10), LOG_EVERY
@@ -28,10 +29,15 @@
 # the preflight asks the code for it: --limiter is a free string in
 # run_2d.py, and a typo would otherwise die only after the node is allocated.
 set -u
+PROBLEM=${PROBLEM:-rotor}
+case "$PROBLEM" in
+    rotor)       SHORT=rotor; TEND=${TEND:-0.4} ;;
+    orszag_tang) SHORT=ot;    TEND=${TEND:-1.0} ;;
+    *) echo "PREFLIGHT FAILED: PROBLEM must be rotor or orszag_tang"; exit 2 ;;
+esac
 N=${N:-128}
 LIMITER=${LIMITER:-mc}
 SOLVER=${SOLVER:-hlld}
-TEND=${TEND:-0.4}
 NSNAP=${NSNAP:-8}
 CFL=${CFL:-0.25}
 RESUME=${RESUME:-1}
@@ -49,15 +55,15 @@ trap 'rm -f "$TMPDIR_ERR"' EXIT
 NG=$("$PY" -c "from src.physics.reconstruction import ghosts_needed; print(ghosts_needed('$LIMITER'))" 2>$TMPDIR_ERR) || {
     echo "PREFLIGHT FAILED for limiter '$LIMITER':"; sed 's/^/    /' $TMPDIR_ERR
     echo "    (known limiters: pcm, mc, minmod, weno5z, mp5, mp7)"; exit 2; }
-OUT=${OUT:-results/rotor_${N}_${SOLVER}$([ "$LIMITER" = mc ] || echo "_$LIMITER")}
+OUT=${OUT:-results/${SHORT}_${N}_${SOLVER}$([ "$LIMITER" = mc ] || echo "_$LIMITER")}
 export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1
 export NUMBA_NUM_THREADS=1
 export TORCH_THREADS=${TORCH_THREADS:-8}
 [ "${DRYRUN:-0}" = 1 ] && {
-    echo "dry run ok: N=$N solver=$SOLVER limiter=$LIMITER (ng $NG) -> $OUT"; exit 0; }
+    echo "dry run ok: $PROBLEM N=$N solver=$SOLVER limiter=$LIMITER (ng $NG) tend=$TEND -> $OUT"; exit 0; }
 
 mkdir -p logs "$OUT"
-LOG=${LOG:-logs/rotor_${N}_${SOLVER}_${LIMITER}_$(date +%Y%m%d_%H%M%S).log}
+LOG=${LOG:-logs/${SHORT}_${N}_${SOLVER}_${LIMITER}_$(date +%Y%m%d_%H%M%S).log}
 exec > >(tee -a "$LOG") 2>&1
 
 RESTART=""
@@ -65,11 +71,11 @@ if [ "$RESUME" = 1 ] && [ -f "$OUT/restart.npz" ]; then
     RESTART="--restart $OUT/restart.npz"
 fi
 
-echo "== $(date)  host=$(hostname)  N=$N  solver=$SOLVER  limiter=$LIMITER (ng $NG)  tend=$TEND  out=$OUT  ${RESTART:-fresh start}"
+echo "== $(date)  host=$(hostname)  problem=$PROBLEM  N=$N  solver=$SOLVER  limiter=$LIMITER (ng $NG)  tend=$TEND  out=$OUT  ${RESTART:-fresh start}"
 echo "== HLLD $(git rev-parse --short HEAD)"
 $PY -c "import numpy, torch; print('numpy', numpy.__version__, 'torch', torch.__version__)"
 
-$PY -u scripts/run_2d.py --problem rotor --n "$N" --solver "$SOLVER" \
+$PY -u scripts/run_2d.py --problem "$PROBLEM" --n "$N" --solver "$SOLVER" \
     --limiter "$LIMITER" --tend "$TEND" --nsnap "$NSNAP" --cfl "$CFL" \
     --out "$OUT" --restart-every "$RESTART_EVERY" --log-every "$LOG_EVERY" \
     $RESTART $( [ -n "$MAX_STEPS" ] && echo --max-steps "$MAX_STEPS" )
