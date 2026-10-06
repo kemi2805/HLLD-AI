@@ -11,9 +11,16 @@ Primitive variables output (dict keys):
     rho, vx, vy, vz, p, eps, Bx, By, Bz
 
 The scheme reduces the inversion to a 1-D root-find in mu ∈ (0, mu_+],
-where mu = 1 / (rho * h * W).  A bracketed Illinois / Brent-style
-secant+bisection is used, identical in spirit to the pure-hydro solver of
-the deleted physics_utils.py, extended for MHD.
+where mu = 1 / (rho * h * W).  A bracketed secant+bisection is used,
+identical in spirit to the pure-hydro solver of the deleted
+physics_utils.py, extended for MHD.
+
+The secant creeps on one side of the root for hot, fast gas (measured on
+rho = 0.1, p = 1, v = 0.99: 60 iterations leave a 1e-6 relative error in
+rho and p, 120 converge it), so the cells it leaves unconverged are solved
+again by plain bisection, whose error halves every iteration whatever the
+master function's shape.  Cells the secant converged are not touched, so
+their primitives are bitwise what they were before the continuation existed.
 """
 
 import torch
@@ -152,9 +159,14 @@ class KastaunC2P:
 
     # ── find mu_+ (upper bracket) ─────────────────────────────────────────────
 
-    def _find_mu_plus(self, n_iter: int = 50, tol: float = 1e-15) -> torch.Tensor:
+    def _find_mu_plus(self, n_iter: int = 50, tol: float = 1e-15,
+                      early_stop: bool = True) -> torch.Tensor:
         """
         Find mu_+ as root of fa(mu) = 0 in (0, 1/h_min] via bisection.
+
+        ``early_stop`` ends the loop once EVERY cell's bracket is below
+        ``tol`` -- which makes a cell's result depend on its batch mates.
+        The continuation passes False so that it does not.
         """
         mu_lo = torch.zeros_like(self.D)
         mu_hi = 1.0 / (self.h_min + _TINY)
@@ -166,7 +178,7 @@ class KastaunC2P:
             lft    = (f_lo * f_mid) <= 0.0
             mu_hi  = torch.where(lft, mu_mid, mu_hi)
             mu_lo  = torch.where(lft, mu_lo,  mu_mid)
-            if torch.all((mu_hi - mu_lo).abs() < tol):
+            if early_stop and torch.all((mu_hi - mu_lo).abs() < tol):
                 break
 
         return mu_hi  # return upper bound (slightly above root)
@@ -221,6 +233,40 @@ class KastaunC2P:
 
         mu = x1
         converged = f1.abs() < tol
+        return self._finish(mu, converged, good_bracket)
+
+    def invert_bisection(self, n_iter: int = 200, tol: float = 1e-15
+                         ) -> dict[str, torch.Tensor]:
+        """Plain bisection of the master function on (0, mu_+].
+
+        Slower per cell than `invert`'s secant but unconditionally
+        convergent: the continuation for the cells `invert` leaves
+        unconverged (see the module docstring).  Same status and output.
+
+        Every cell gets exactly ``n_iter`` halvings and the bracket search
+        runs its full length: no early exit on the batch, so a cell's result
+        is a function of its own conserved variables alone (the tube tests
+        require a column to be bitwise the same alone and beside another).
+        """
+        mu_plus = self._find_mu_plus(early_stop=False)
+        x0 = torch.zeros_like(self.D)
+        x1 = mu_plus * (1.0 - 1e-10)
+        f0, *_ = self._master(x0)
+        f1, *_ = self._master(x1)
+        good_bracket = (f0 * f1) < 0.0
+        for _ in range(n_iter):
+            xm = 0.5 * (x0 + x1)
+            fm, *_ = self._master(xm)
+            left = (f0 * fm) <= 0.0
+            x1 = torch.where(left, xm, x1); f1 = torch.where(left, fm, f1)
+            x0 = torch.where(left, x0, xm); f0 = torch.where(left, f0, fm)
+        pick = f0.abs() < f1.abs()
+        mu = torch.where(pick, x0, x1)
+        fmu = torch.where(pick, f0, f1)
+        return self._finish(mu, fmu.abs() < tol, good_bracket)
+
+    def _finish(self, mu, converged, good_bracket) -> dict[str, torch.Tensor]:
+        """The primitives, velocity and status at the root ``mu``."""
         _, rhohat, epshat, What, vhat2 = self._master(mu)
 
         # ── Recover velocity vector ───────────────────────────────────────────
@@ -272,6 +318,7 @@ def conservative_to_primitive(
     n_iter: int = 60,
     tol: float = 1e-15,
     return_status: bool = False,
+    n_iter_bisect: int = 200,
 ):
     """
     Top-level C2P wrapper.
@@ -285,6 +332,20 @@ def conservative_to_primitive(
     """
     solver = KastaunC2P(cons, eos)
     prims  = solver.invert(n_iter=n_iter, tol=tol)
+    status = dict(solver.status)
+
+    # the cells the secant did not converge, re-solved by bisection on their
+    # own (converged cells are untouched, hence bitwise unchanged)
+    redo = ~status["converged"] & status["bracket_ok"]
+    if bool(redo.any()):
+        idx = torch.nonzero(redo).reshape(-1)
+        sub = KastaunC2P({k: cons[k][idx] for k in
+                          ("D", "Sx", "Sy", "Sz", "tau", "Bx", "By", "Bz")}, eos)
+        p2 = sub.invert_bisection(n_iter=n_iter_bisect, tol=tol)
+        for k in prims:
+            prims[k][idx] = p2[k]
+        for k in ("converged", "v_clamped"):
+            status[k][idx] = sub.status[k]
 
     # Atmosphere floor
     atmo_mask = prims["rho"] < atmo_rho
@@ -297,7 +358,6 @@ def conservative_to_primitive(
     prims["p"]   = eos.press__eps_rho(prims["eps"], prims["rho"])
 
     if return_status:
-        status = dict(solver.status)
         status["atmo_floored"] = atmo_mask
         return prims, status
     return prims

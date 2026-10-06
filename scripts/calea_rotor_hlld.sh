@@ -19,7 +19,7 @@
 #   N=512 LIMITER=mp5 MAX_STEPS=3 sbatch --time=0:30:00 scripts/calea_rotor_hlld.sh
 #
 # Knobs (env): PROBLEM (rotor; orszag_tang -- OUT and LOG then start with ot_,
-# TEND defaults to 1.0), N (128), LIMITER (mc), SOLVER (hlld; hlle/hllc also work),
+# TEND defaults to 1.0; riemann2d -- r2d_, TEND 0.4, B0 the field, 0.5), N (128), LIMITER (mc), SOLVER (hlld; hlle/hllc also work),
 # TEND (0.4), NSNAP (8), CFL (0.25), OUT (derived, and run_2d appends the
 # limiter for anything but mc), TORCH_THREADS (8), RESUME (1: continue from
 # $OUT/restart.npz when present), MAX_STEPS, RESTART_EVERY (10), LOG_EVERY
@@ -33,7 +33,8 @@ PROBLEM=${PROBLEM:-rotor}
 case "$PROBLEM" in
     rotor)       SHORT=rotor; TEND=${TEND:-0.4} ;;
     orszag_tang) SHORT=ot;    TEND=${TEND:-1.0} ;;
-    *) echo "PREFLIGHT FAILED: PROBLEM must be rotor or orszag_tang"; exit 2 ;;
+    riemann2d)   SHORT=r2d;   TEND=${TEND:-0.4} ;;
+    *) echo "PREFLIGHT FAILED: PROBLEM must be rotor, orszag_tang or riemann2d"; exit 2 ;;
 esac
 N=${N:-128}
 LIMITER=${LIMITER:-mc}
@@ -75,7 +76,7 @@ echo "== $(date)  host=$(hostname)  problem=$PROBLEM  N=$N  solver=$SOLVER  limi
 echo "== HLLD $(git rev-parse --short HEAD)"
 $PY -c "import numpy, torch; print('numpy', numpy.__version__, 'torch', torch.__version__)"
 
-$PY -u scripts/run_2d.py --problem "$PROBLEM" --n "$N" --solver "$SOLVER" \
+$PY -u scripts/run_2d.py --problem "$PROBLEM" ${B0:+--b0 "$B0"} --n "$N" --solver "$SOLVER" \
     --limiter "$LIMITER" --tend "$TEND" --nsnap "$NSNAP" --cfl "$CFL" \
     --out "$OUT" --restart-every "$RESTART_EVERY" --log-every "$LOG_EVERY" \
     $RESTART $( [ -n "$MAX_STEPS" ] && echo --max-steps "$MAX_STEPS" )

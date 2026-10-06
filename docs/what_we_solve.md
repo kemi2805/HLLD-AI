@@ -2011,6 +2011,55 @@ selected at 0.390–0.402 on the proxy, network size and warm start
 notwithstanding.) One face in the small-network arm converged to a
 different exact root, its star pressure 0.85% from production's: one in
 27,760, not investigated.
+
+### The four-quadrant Riemann problem with a field (2026-10-06)
+
+Kiuchi et al. (2022) show the relativistic four-quadrant Riemann problem of
+Del Zanna & Bucciantini (2002) resolving tangential discontinuities under
+HLLC that HLLE smears. No RMHD version of it is published (the RMHD codes
+checked -- Mignone & Bodo 2006, Zanotti et al. 2015, Balsara & Kim 2016,
+Mattia & Mignone 2022, CAFE -- run the hydro one or none), so
+`initial_data2d.riemann2d` makes one: the published quadrants, (rho, p, vx,
+vy) = (0.1, 1, 0.99, 0) top left, (0.1, 0.01, 0, 0) top right, (0.5, 1, 0, 0)
+bottom left, (0.1, 1, 0, 0.99) bottom right, on [−0.5, 0.5]² with outflow
+boundaries, γ = 5/3, to t = 0.4, threaded by a uniform in-plane field
+B = B₀ (cos 45°, sin 45°, 0) from a vector potential (div B = 0 to
+round-off). B₀ = 0.5 puts the magnetic pressure between the two gas
+pressures: magnetisation 0.05 in the moving quadrants, 2 in the top right
+(plasma β 0.08). Every face carries a normal and a tangential field; the
+flow is coplanar like the rotor's. The two shear layers become Alfvén and
+slow structures once the field threads them, and the jumps along both axes
+are strong from the first step (W = 7 across the shear), so the exact
+solver is exercised at once. `--problem riemann2d --b0 0.5` in `run_2d.py`,
+`PROBLEM=riemann2d` in the launchers and the sweep recorder.
+
+**What the first run exposed: the primitive recovery.** The 16² smoke run
+flagged half its cells as unconverged recoveries at every step. The cause
+is in `c2p.py`, not the problem: the Kastaun inversion's bracketed secant
+creeps on one side of the root for hot, fast gas, and its 60-iteration cap
+stops it at a 1.2e-6 relative error in rho and p on (rho, p, v) = (0.1, 1,
+0.99), with or without a field, at any tolerance; 120 iterations converge
+it. On 2,000 random states (rho 0.1–10, p 0.01–10, v < 0.995, |B| < 2) the
+secant left 187 (9.4%) at up to 2.1e-5 -- W median 1.8, p/rho 2.5, so not
+only the relativistic corner. That is what `c2p_bad` had been counting in
+every run (the rotor: ~3% of cells late in the run; the 512² Orszag–Tang
+reference: ~400 cells at t ≈ 0.75), and what `test_c2p_highly_relativistic`'s
+expected failure since 2026-09-16 was. The fix re-solves the cells the
+secant leaves unconverged by plain bisection on that subset
+(`KastaunC2P.invert_bisection`); the cells it converges are untouched and
+bitwise what they were (checked on the same batch). The hot states now
+recover to 1e-11, the random batch's leftovers to 2e-13, the smoke run and
+the 32² pilot report no failed recovery, and the old expected failure
+passes. Old runs with `c2p_bad > 0` are not bitwise reproducible with the
+fix; the OT and rotor numbers above stand as measured. One subtlety kept:
+the secant steps a converged cell on while its batch mates converge and can
+push it back off the tolerance, so which cells reach the continuation can
+depend on the batch (as the flag always did); the continuation itself runs
+a fixed number of halvings and is batch-independent, which the tube tests
+require of a column.
+
+The 64² exact run of the problem (every rung on), its 64² and 512² HLLD
+references and the solver map are in progress (calea, 2026-10-06).
 ---
 
 ## Reproducing the numbers
@@ -2039,6 +2088,8 @@ different exact root, its star pressure 0.85% from production's: one in
 | the defaults' run: tally, solution, cost (5a) | `scripts/harvest_summary.py results/rotor_64_exact_defaults/harvest`; `scripts/rotor_compare.py results/rotor_64_exact_defaults results/rotor_512_hlld --regions`; a rung's cost: `RMHD_WEAK_FLUX=hlld RMHD_PLANAR5_LADDER=0 scripts/failure_ledger.py collect <held-out rec> pfd pfe --paired --out <npz>` timed, one configuration per call |
 | Orszag–Tang (7): the runs | `PROBLEM=orszag_tang N=64 sbatch scripts/calea_rotor_exact.sh`; `PROBLEM=orszag_tang N=64` and `N=512 TORCH_THREADS=24 sbatch scripts/calea_rotor_hlld.sh` |
 | Orszag–Tang (7): recorded windows | `PROBLEM=orszag_tang N=64 T0=<t> NSTEP=2 REC_DIR=<dir> scripts/rotor_replay.py record <tag>`, then `failure_ledger.py collect <dir> <tags> --paired` (the recording carries gamma) |
+| the four-quadrant problem (7): the runs | `PROBLEM=riemann2d N=64 sbatch scripts/calea_rotor_exact.sh` (B0 sets the field); `PROBLEM=riemann2d N=64` and `N=512 TORCH_THREADS=24 sbatch scripts/calea_rotor_hlld.sh` |
+| the recovery's creeping secant (7) | `pytest tests/test_c2p.py` (the hot-fast-gas and bitwise tests); the random-batch census is the module docstring's recipe |
 | the four-unknown pilot (5a) | `scripts/pilot_four_unknowns.py results/failure_ledger_64 1394,719,1816` (samples: `--quiet`; calea, the numpy kernels are too slow for more than a lane) |
 | one planar Newton, iteration by iteration (5a) | `scripts/newton_trace.py results/failure_ledger_64 --lanes 719,1394` |
 | 128^2 census (5) | `RUN=results/rotor_128_exact TAG=128 sbatch scripts/calea_snapshot_census.sh` |

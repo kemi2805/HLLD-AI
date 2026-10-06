@@ -23,8 +23,8 @@ Env: RMHD_ML_CKPT, RMHD_FAN/ALFVEN/SLOWSHOCK/SHOCK as for a run.
      record: N (32) the grid; T0 (0) pre-evolve with HLLD to this time, then
              record NSTEP exact steps -- sweeps from the developed flow
              instead of the initial disc; REC_DIR (/tmp) where they go;
-             PROBLEM (rotor) or orszag_tang -- box, gamma and boundaries as
-             in run_2d.py; each recording carries its problem and gamma,
+             PROBLEM (rotor), orszag_tang or riemann2d -- box, gamma and
+             boundaries as in run_2d.py (riemann2d at its default field); each recording carries its problem and gamma,
              and replay solves it with that gamma.
      replay: REC_DIR; WARMUP=k replays the first k sweeps silently first, so
              first-call compilation is not billed to sweep 1."""
@@ -39,7 +39,7 @@ import numpy as np, torch
 torch.set_num_threads(1); np.seterr(all='ignore')
 from src.physics.grid import Grid2D
 from src.physics.eos import hybrid_eos
-from src.physics.initial_data2d import b_from_potential, magnetic_rotor, orszag_tang
+from src.physics.initial_data2d import b_from_potential, magnetic_rotor, orszag_tang, riemann2d
 from src.physics.driver2d import prims_to_cons_2d, sync_state, rk_step_ct, compute_dt_2d
 from src.physics.state import EVOLVED_KEYS, State2D
 from src.physics.hlld import LAST_DIAG, hlld_flux
@@ -57,7 +57,8 @@ if __name__ == "__main__":   # guarded: RMHD_POOL workers import this module
                              n_retries=RETRIES, max_iter=40)
     # box, gamma and boundaries per problem, as run_2d.py has them
     PROBLEMS = {"rotor": ((-0.5, 0.5), 5.0 / 3.0, "outflow", magnetic_rotor),
-                "orszag_tang": ((0.0, 1.0), 4.0 / 3.0, "periodic", orszag_tang)}
+                "orszag_tang": ((0.0, 1.0), 4.0 / 3.0, "periodic", orszag_tang),
+                "riemann2d": ((-0.5, 0.5), 5.0 / 3.0, "outflow", riemann2d)}
     PROBLEM = os.environ.get("PROBLEM", "rotor")
     if MODE == "record" and PROBLEM not in PROBLEMS:
         sys.exit(f"PROBLEM={PROBLEM}: not one of {', '.join(PROBLEMS)}")

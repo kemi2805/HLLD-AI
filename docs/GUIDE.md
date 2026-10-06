@@ -385,6 +385,15 @@ sweeps per step. CFL number 0.25.
 root-find per cell. Cells where it fails are counted (`c2p_bad` in
 `diag.csv`) and floored.
 
+The root-find is a bracketed secant with a 60-iteration cap, and on hot,
+fast gas it creeps on one side of the root: on (rho, p, v) = (0.1, 1, 0.99)
+it stopped at a 1.2e-6 relative error, flagged unconverged, and on 9% of
+random states at up to 2e-5 (found 2026-10-06 when the four-quadrant
+problem flagged half its grid). The cells the secant leaves unconverged are
+now re-solved by plain bisection on their own (`invert_bisection`); the
+cells it converges are bitwise unchanged. `c2p_bad` should read 0 on a
+healthy run; before the fix it counted these cells.
+
 ### 2.7 The magnetic rotor
 
 The production problem (`initial_data2d.py::magnetic_rotor`): a dense
@@ -397,6 +406,15 @@ The field winds up and brakes the rotor, launching fast and slow waves into
 the ambient medium. The solution is invariant under a rotation by π about the
 axis — exactly, in the continuum — which gives a free measure of numerical
 error (`sym_err`).
+
+Two more problems share the pipeline (`--problem` in `run_2d.py`,
+`PROBLEM=` in the launchers): the relativistic Orszag–Tang vortex
+(`orszag_tang`: periodic unit square, `gamma = 4/3`, to `t = 1`, measured
+in `what_we_solve.md` section 7) and the four-quadrant Riemann problem of
+Del Zanna & Bucciantini with a uniform in-plane field (`riemann2d`,
+`--b0`): two shocks and two shear layers from `t = 0`, outflow boundaries,
+`gamma = 5/3`, to `t = 0.4`. All three keep the field and velocity in the
+plane, so every face is coplanar (section 1.6).
 
 ---
 
@@ -688,7 +706,7 @@ and an extension of the solution family at the ones that do not.
 | file | what |
 |---|---|
 | `grid.py`, `state.py` | grid, ghost cells, boundary conditions, the state container |
-| `initial_data2d.py` | the rotor and Orszag–Tang |
+| `initial_data2d.py` | the rotor, Orszag–Tang and the four-quadrant Riemann problem |
 | `reconstruction.py` | PCM, PLM, WENO5-Z, MP5, MP7 |
 | `hlld.py` | HLLE, HLLC, HLLD and the primitive/conserved algebra |
 | `exact_flux.py` | **the hybrid exact flux** |

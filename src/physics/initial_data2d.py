@@ -125,6 +125,57 @@ def magnetic_rotor(grid, eos, r0: float = 0.1, rho_in: float = 10.0,
     return prims, Az
 
 
+def riemann2d(grid, eos, B0: float = 0.5, angle_deg: float = 45.0):
+    """The four-quadrant Riemann problem of Del Zanna & Bucciantini (2002),
+    threaded by a uniform in-plane field.
+
+    The hydro states are the relativistic form of Lax & Liu's configuration
+    -- two shocks and two tangential discontinuities -- as run by the CAFE
+    code paper and by Kiuchi et al. (2022), (rho, p, vx, vy):
+
+        top left      (0.1, 1,    0.99, 0   )    x < 0, y > 0
+        top right     (0.1, 0.01, 0,    0   )    x > 0, y > 0
+        bottom left   (0.5, 1,    0,    0   )    x < 0, y < 0
+        bottom right  (0.1, 1,    0,    0.99)    x > 0, y < 0
+
+    on [-0.5, 0.5]^2 with outflow boundaries, gamma = 5/3, to t = 0.4.  No
+    published RMHD version of it was found (2026-10-06), so the field is
+    ours: ``B = B0 (cos a, sin a, 0)``, uniform, hence div B = 0 trivially,
+    and at the default 45 degrees every face carries both a normal and a
+    tangential field.  ``B0 = 0.5`` puts the magnetic pressure (0.125)
+    between the two gas pressures; the magnetisation runs from ~0.05 (the
+    fast quadrants) to ~2 (top right), the plasma beta down to 0.08 there.
+    ``vz = Bz = 0``: coplanar, like the rotor and Orszag-Tang.
+    """
+    X, Y = grid.X, grid.Y
+    zeros = torch.zeros(grid.shape, dtype=torch.float64, device=grid.device)
+    right, top = X > 0.0, Y > 0.0
+    full = lambda v: torch.full_like(zeros, float(v))
+
+    def pick(tl, tr, bl, br):
+        return torch.where(top, torch.where(right, full(tr), full(tl)),
+                           torch.where(right, full(br), full(bl)))
+
+    a = math.radians(angle_deg)
+    bx, by = B0 * math.cos(a), B0 * math.sin(a)
+    prims = {
+        "rho": pick(0.1, 0.1, 0.5, 0.1),
+        "p": pick(1.0, 0.01, 1.0, 1.0),
+        "vx": pick(0.99, 0.0, 0.0, 0.0),
+        "vy": pick(0.0, 0.0, 0.0, 0.99),
+        "vz": zeros.clone(),
+        "Bx": full(bx),
+        "By": full(by),
+        "Bz": zeros.clone(),
+    }
+    prims["eps"] = eos.eps__press_rho(prims["p"], prims["rho"])
+
+    # uniform (bx, by)  ->  Az = bx*y - by*x
+    XF, YF = _corner_mesh(grid)
+    Az = bx * YF - by * XF
+    return prims, Az
+
+
 def orszag_tang(grid, eos, v_max: float = 0.99, B0: float | None = None,
                 press: float | None = None, rho: float | None = None):
     """Relativistic Orszag-Tang vortex on the periodic unit square.

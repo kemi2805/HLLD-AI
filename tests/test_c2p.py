@@ -180,8 +180,11 @@ def test_c2p_mildly_relativistic():
 
 # ── Test 4 – highly relativistic ─────────────────────────────────────────────
 
-@pytest.mark.xfail(strict=True, reason=
-    "baseline a738bca, measured 2026-09-16: rho relative error 9.34e-03 against a 1e-05 bar at W in [2,10], N=2000. The Kastaun c2p loses accuracy in the highly relativistic corner; unrelated to the p_star failures in test_hlld_physics.py. Pre-existing.")
+# Was xfail(strict) from baseline a738bca (2026-09-16: rho relative error
+# 9.34e-03 against a 1e-05 bar at W in [2, 10], N = 2000, "the Kastaun c2p
+# loses accuracy in the highly relativistic corner").  It was the bracketed
+# secant creeping on one side of the root, not the method: passes since the
+# bisection continuation (2026-10-06).
 def test_c2p_highly_relativistic():
     prims = _make_prims(2000, EOS_HOT, W_range=(2.0, 10.0), B_mag=3.0, seed=6)
     _roundtrip(prims, EOS_HOT, label="W=[2,10]", rho_tol=1e-5, v_tol=1e-5, eps_tol=1e-4)
@@ -267,3 +270,69 @@ if __name__ == "__main__":
     print(f"Results: {passed}/{passed+failed} passed")
     if failed:
         sys.exit(1)
+
+
+# ── the bisection continuation (2026-10-06) ─────────────────────────────────
+# Hot, fast gas -- rho = 0.1, p = 1, v = 0.99, the four-quadrant Riemann
+# problem's moving quadrants -- is where the bracketed secant creeps: 60
+# iterations leave a 1e-6 relative error with the status unconverged.  The
+# cells it leaves are re-solved by bisection; the cells it converged must
+# come out bitwise as before.
+
+def _hot_fast_batch():
+    eos = hybrid_eos(K=0.0, gamma=5/3, gamma_th=5/3)
+    t = lambda *v: torch.tensor(v, dtype=DTYPE)
+    # the four quadrants with a 45-degree field, the hot fast state without
+    # a field, and three easy states
+    b = 0.5 * math.cos(math.radians(45))
+    prims = {"rho": t(0.1, 0.1, 0.5, 0.1, 0.1, 1.0, 10.0, 0.22),
+             "p":   t(1.0, 0.01, 1.0, 1.0, 1.0, 1.0, 1.0, 0.13),
+             "vx":  t(0.99, 0.0, 0.0, 0.0, 0.99, 0.3, 0.995, 0.7),
+             "vy":  t(0.0, 0.0, 0.0, 0.99, 0.0, 0.1, 0.0, 0.7),
+             "vz":  t(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+             "Bx":  t(b, b, b, b, 0.0, 0.5, 1.0, 0.28),
+             "By":  t(b, b, b, b, 0.0, 0.0, 0.0, 0.28),
+             "Bz":  t(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)}
+    prims["eps"] = eos.eps__press_rho(prims["p"], prims["rho"])
+    return eos, prims, primitive_to_conserved(prims)
+
+
+def test_hot_fast_gas_converges_by_the_continuation():
+    from src.physics.c2p import KastaunC2P
+    eos, prims, cons = _hot_fast_batch()
+    first = KastaunC2P(cons, eos)
+    first.invert()
+    assert not bool(first.status["converged"][0]), "the secant alone now converges this state; the test's premise moved"
+    out, st = conservative_to_primitive(cons, eos, return_status=True)
+    assert bool(st["converged"].all())
+    for k in ("rho", "p"):
+        rel = (out[k] - prims[k]).abs() / prims[k].abs()
+        assert float(rel.max()) < 1e-9, (k, rel)
+    for k in ("vx", "vy"):
+        assert float((out[k] - prims[k]).abs().max()) < 1e-10
+
+
+def test_the_continuation_leaves_converged_cells_bitwise():
+    from src.physics.c2p import KastaunC2P
+    eos, prims, cons = _hot_fast_batch()
+    first = KastaunC2P(cons, eos)
+    before = first.invert()
+    conv = first.status["converged"]
+    assert conv.any() and not conv.all()
+    after = conservative_to_primitive(cons, eos)
+    for k in ("rho", "p", "vx", "vy", "vz", "eps"):
+        assert torch.equal(before[k][conv], after[k][conv]), k
+
+
+def test_the_continuation_is_batch_independent():
+    """`invert_bisection` gives a cell bitwise the same answer alone and
+    beside other cells: no early exit on the batch.  (The secant pass keeps
+    its historical batch dependence -- it steps a converged cell on while
+    its batch mates converge, and can push it back off the tolerance -- so
+    this is asserted of the continuation, not of the whole recovery.)"""
+    from src.physics.c2p import KastaunC2P
+    eos, prims, cons = _hot_fast_batch()
+    alone = KastaunC2P({k: v[:1] for k, v in cons.items()}, eos).invert_bisection()
+    together = KastaunC2P(cons, eos).invert_bisection()
+    for k in ("rho", "p", "vx", "vy", "vz", "eps"):
+        assert torch.equal(alone[k][0], together[k][0]), k

@@ -13,7 +13,7 @@ from src.physics.ct import div_b
 from src.physics.driver2d import (compute_dt_2d, prims_to_cons_2d, rk_step_ct,
                                   sync_state)
 from src.physics.initial_data2d import (b_from_potential, magnetic_rotor,
-                                        orszag_tang)
+                                        orszag_tang, riemann2d)
 from src.physics.state import EVOLVED_KEYS, State2D
 from src.physics.envelope import EnvelopeRecorder, format_summary
 from src.physics.hlld import (hlld_flux, hlle_flux, hllc_flux,
@@ -32,6 +32,9 @@ PROBLEMS = {
                         bc=("outflow", "outflow"), sym=True),
     "orszag_tang": dict(box=(0.0, 1.0), gamma=4.0 / 3.0, tend=1.0,
                         bc=("periodic", "periodic"), sym=False),
+    # the four-quadrant Riemann problem with a uniform in-plane field (--b0)
+    "riemann2d":   dict(box=(-0.5, 0.5), gamma=5.0 / 3.0, tend=0.4,
+                        bc=("outflow", "outflow"), sym=False),
 }
 
 
@@ -84,6 +87,9 @@ def symmetry_error(st, g):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--problem", default="rotor", choices=list(PROBLEMS))
+    ap.add_argument("--b0", type=float, default=0.5,
+                    help="riemann2d: strength of the uniform in-plane field "
+                         "(at 45 degrees); ignored by the other problems")
     ap.add_argument("--n", type=int, default=128)
     ap.add_argument("--tend", type=float, default=None)
     ap.add_argument("--cfl", type=float, default=0.25)
@@ -159,7 +165,7 @@ def main():
     # ghost count, and until now neither the snapshots nor the restart file
     # carried them -- so an mp5 run could be analysed with PLM faces and
     # nobody would see it.
-    meta = dict(problem=a.problem, n=a.n, solver=a.solver, limiter=a.limiter,
+    meta = dict(problem=a.problem, b0=(a.b0 if a.problem == "riemann2d" else None), n=a.n, solver=a.solver, limiter=a.limiter,
                 ng=ghosts_needed(a.limiter), cfl=a.cfl, tend=tend,
                 nsnap=a.nsnap, emf_mode=a.emf_mode,
                 upwind_emf=not a.no_upwind_emf, bc=[bc_x, bc_y],
@@ -199,8 +205,10 @@ def main():
 
     if a.problem == "rotor":
         prims, Az = magnetic_rotor(g, eos)
-    else:
+    elif a.problem == "orszag_tang":
         prims, Az = orszag_tang(g, eos)
+    else:
+        prims, Az = riemann2d(g, eos, B0=a.b0)
 
     Bxf, Byf = b_from_potential(Az, g.dx, g.dy)
     c = prims_to_cons_2d(prims, g)
