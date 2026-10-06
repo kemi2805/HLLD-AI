@@ -2012,6 +2012,22 @@ notwithstanding.) One face in the small-network arm converged to a
 different exact root, its star pressure 0.85% from production's: one in
 27,760, not investigated.
 
+**How low the loss can go: a second-order optimizer (2026-10-06).** The
+small and mid γ 4/3 networks were continued from their Adam checkpoints
+with full-batch L-BFGS (strong-Wolfe line search, the same data, split,
+scaler and loss; `rmhd_final/scripts/finetune_lbfgs.py`, calea job 36031).
+Nothing moves: the small network's validation loss 0.03411 → 0.03408 and
+training loss 0.03300 → 0.03286 over 335 L-BFGS iterations (1,548 loss
+evaluations: the line searches fail, the loss is flat to float32 at the
+Adam point), the mid network's 0.01704 → 0.01704 over 510 iterations; the
+validation errors are the Adam checkpoint's to three digits (log p 0.082,
+log |B_t| 0.225). The Adam solutions sit at the minimum these
+architectures and this data admit, so the seed error is capacity- and
+data-limited, not optimizer-limited -- and the seed test above says a
+lower seed error would buy retries, not faces.
+
+![loss under Adam, then L-BFGS](figs/ot43_lbfgs_curves.png)
+
 ### The four-quadrant Riemann problem with a field (2026-10-06)
 
 Kiuchi et al. (2022) show the relativistic four-quadrant Riemann problem of
