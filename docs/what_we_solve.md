@@ -1929,6 +1929,88 @@ for bolder steps, and the bolder steps land on neighbouring roots.
 exact seven-wave flux does (0.5%), and fifty times the cross-host noise.
 The secant stays the default; Newton remains available, opt-in, for anyone
 who wants to repeat this.
+
+### Orszag–Tang: the second problem, measured (2026-10-03 to 10-06)
+
+The relativistic Orszag–Tang vortex (γ = 4/3, periodic, v_max = 0.99,
+`initial_data2d.orszag_tang`), 64², every rescue step on, to t = 1: 654
+steps in 61.6 h on one calea node (339 s per step; HLLD at 64² takes 0.82 s
+per step, the 512² HLLD reference 7.9 s). Like the rotor, every face is
+coplanar (no z-components), so the planar solvers answer half of what is
+attempted; unlike the rotor, the magnetisation stays below ~1.6, and the
+exact solver is offered about twice the share of faces.
+
+**Every face of the run** (`results/ot_64_exact`, 3,924 sweeps, 18.4 M
+face-evaluations; the rotor's numbers from 5a beside them):
+
+| | Orszag–Tang | rotor |
+|---|---|---|
+| below the weak-jump gate / fan entirely upwind | 72.6% / 4.6% | 85.9% / 2.0% |
+| attempted by the exact solver | 22.8% | 12.1% |
+| of the attempted: seven-wave / planar / four-unknown / degenerate | 45.2 / 50.7 / 0.8 / 0.6% | 43.8 / 50.5 / 2.3 / 1.1% |
+| left to HLLD | 2.71% | 2.28% |
+| **solved** | **97.29%** (4,083,387 of 4,197,235) | 97.72% |
+
+Recorded windows paired the way the rotor's were (t = 0.25, 0.5, 1.0; 36
+sweeps, 46,270 attempted; `results/ot_ledger_64`, calea job 34694): the
+production settings of 2026-09 solve 97.30%, every rung on 97.84% (+251 /
+−0). The remaining failures look like the rotor's: the field nearly normal
+to the face (median |Bn|/|Bt| 5.3 against 1.0 on solved faces), about half
+reversing, and at LOW magnetisation (median 0.014 against 0.084).
+
+![Orszag–Tang solver map, t = 1](figs/ot_64_exact_solver_t1.00.png)
+
+**The solution.** L1(rho) against the 512² HLLD reference, cell-averaged to
+64² (`scripts/rotor_compare.py`, global; the rotor's annuli do not apply):
+
+| t | exact 64² | HLLD 64² | exact vs HLLD at 64² |
+|---|---|---|---|
+| 0.25 | 0.0205 | 0.0201 | 0.09% |
+| 0.375 | 0.168 | 0.171 | 1.5% |
+| 0.5 | 0.191 | 0.195 | 1.4% |
+| 0.75 | 0.250 | 0.252 | 1.8% |
+| 1.0 | 0.264 | 0.263 | 2.3% |
+
+The exact flux moves the 64² solution by up to 2.3% -- four times what it
+does to the rotor -- and between t = 0.375 and 0.875 that move is towards
+the reference, by 0.2–2% of the gap; at t = 1 it is not. The gap itself,
+26%, is resolution, as for the rotor (section 7's conclusion stands for a
+second problem). Caveat on the reference: in up to ~400 of its 262,144
+cells (0.15%, around t = 0.75; 38 at the end) the primitive recovery did not
+converge to its tolerance; the 64² runs had none.
+
+**Networks at γ = 4/3.** The production networks were trained at γ = 5/3.
+A million coplanar Orszag–Tang solutions at γ = 4/3 (rmhd_final
+`data/dataset_ot43_coplanar.npz`) trained ten networks (two on calea's CPUs,
+eight on one Goethe GPU node; small, mid and 25M, from scratch and warm
+started). On 600 real Orszag–Tang faces (`data/proxy_ot43_600.npz`, one
+seven-wave attempt at γ = 4/3) the production networks already converge on
+37.3–38.5% against a ceiling of ~40.5% -- only the faces the seven-wave
+solver can solve at all count, 92–95% of which they already get -- and every
+new network lands at 39.0–40.2%. Paired on fresh windows (t = 0.375, 0.75;
+27,760 attempted; production settings of 2026-09):
+
+| networks | solved | vs recording | wall | seven-wave iterations per solved face |
+|---|---|---|---|---|
+| production (γ 5/3) | 26,655 (96.02%) | identical | 764 s | 12.4 |
+| small γ 4/3 primary | 26,648 | +20 / −27 | 739 s | 11.7 |
+| mid γ 4/3 primary | 26,646 | +13 / −22 | 738 s | 11.6 |
+| three 25M γ 4/3 | 26,638 | +40 / −57 | 748 s | 10.3 |
+
+The new networks save retries and iterations, not faces: each loses a few
+more than it gains (none significant), all of them seven-wave answers
+refused as self-crossing fans. With every rung on (the production defaults;
+calea job 35849) the crossed offer hands those to the planar solver and the
+arms become indistinguishable: 26,975 solved (97.17%) with production's
+networks and with the small γ 4/3 one -- the same faces, the same first-guess
+share of 41.8% -- 26,974 with the 25M trio; walls 1664 / 1659 / 1661 s. No
+network is promoted. The rotor's lesson holds for the second problem: where
+the seed matters the production networks are already at the ceiling, and
+where they fail no seed helps. (Goethe's eight runs, job 1788856, all
+selected at 0.390–0.402 on the proxy, network size and warm start
+notwithstanding.) One face in the small-network arm converged to a
+different exact root, its star pressure 0.85% from production's: one in
+27,760, not investigated.
 ---
 
 ## Reproducing the numbers
@@ -1955,6 +2037,8 @@ who wants to repeat this.
 | which wave fails, the fast-shock root pairs, the slow family's tangent (5a) | `scripts/ledger_subwaves.py results/failure_ledger_64 --pairs --slow-family` |
 | the four-unknown rung, paired (5a) | `RMHD_PLANAR4=1 scripts/failure_ledger.py collect <rec> <tags> --paired --out <npz>` |
 | the defaults' run: tally, solution, cost (5a) | `scripts/harvest_summary.py results/rotor_64_exact_defaults/harvest`; `scripts/rotor_compare.py results/rotor_64_exact_defaults results/rotor_512_hlld --regions`; a rung's cost: `RMHD_WEAK_FLUX=hlld RMHD_PLANAR5_LADDER=0 scripts/failure_ledger.py collect <held-out rec> pfd pfe --paired --out <npz>` timed, one configuration per call |
+| Orszag–Tang (7): the runs | `PROBLEM=orszag_tang N=64 sbatch scripts/calea_rotor_exact.sh`; `PROBLEM=orszag_tang N=64` and `N=512 TORCH_THREADS=24 sbatch scripts/calea_rotor_hlld.sh` |
+| Orszag–Tang (7): recorded windows | `PROBLEM=orszag_tang N=64 T0=<t> NSTEP=2 REC_DIR=<dir> scripts/rotor_replay.py record <tag>`, then `failure_ledger.py collect <dir> <tags> --paired` (the recording carries gamma) |
 | the four-unknown pilot (5a) | `scripts/pilot_four_unknowns.py results/failure_ledger_64 1394,719,1816` (samples: `--quiet`; calea, the numpy kernels are too slow for more than a lane) |
 | one planar Newton, iteration by iteration (5a) | `scripts/newton_trace.py results/failure_ledger_64 --lanes 719,1394` |
 | 128^2 census (5) | `RUN=results/rotor_128_exact TAG=128 sbatch scripts/calea_snapshot_census.sh` |
