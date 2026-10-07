@@ -2074,8 +2074,60 @@ depend on the batch (as the flag always did); the continuation itself runs
 a fixed number of halvings and is batch-independent, which the tube tests
 require of a column.
 
-The 64² exact run of the problem (every rung on), its 64² and 512² HLLD
-references and the solver map are in progress (calea, 2026-10-06).
+**The run (2026-10-07, calea job 36227).** 64², every rung on, 369 steps to
+t = 0.4 in 24.1 h (235 s per step; the 64² HLLD run 1.4 s, the 512² HLLD
+reference 15.7 s). Every face of it (2,214 sweeps, 10.4 M face-evaluations),
+beside the rotor and Orszag–Tang:
+
+| | four-quadrant | rotor | Orszag–Tang |
+|---|---|---|---|
+| attempted by the exact solver | 10.4% of faces | 12.1% | 22.8% |
+| of the attempted: seven-wave / planar / four-unknown / degenerate | 38.9 / 53.4 / 0.7 / 0.1% | 43.8 / 50.5 / 2.3 / 1.1% | 45.2 / 50.7 / 0.8 / 0.6% |
+| left to HLLD | **6.97%** | 2.28% | 2.71% |
+| **solved** | **93.03%** (1,003,070 of 1,078,248) | 97.72% | 97.29% |
+
+Three times the rotor's loss, and it is not the field strength: the solver
+map puts the fallbacks on one column of faces along each shear layer -- the
+x-faces at x ≈ 0 for y < 0 and the y-faces at y ≈ 0 for x < 0 -- from
+the first steps to the last, in equal measure on x- and y-sweeps (93.07% /
+92.99%). Those are the faces across which the initial tangential velocity
+jumps by 0.99 c with the field threading them: the shear layers the problem
+was built to put under a field, and the exact solver loses one face in two
+of them. The solved fraction dips to 86% in the third tenth of the run, when
+the shear layers meet the shocks, and recovers to 95% by the end. What the
+exact solution of such a face looks like -- an Alfvén/slow structure the
+seven-wave or planar families cannot close, or a basin problem -- is the next
+thing to find out with the ledger on recorded windows, as for the rotor.
+
+![four-quadrant solver map, t = 0.4](figs/r2d_64_exact_solver_t0.40.png)
+
+**The solution.** L1 against the 512² HLLD reference (`rotor_compare.py`,
+global):
+
+| t | exact 64² | HLLD 64² | exact vs HLLD at 64² |
+|---|---|---|---|
+| 0.05 | 0.0332 | 0.0441 | 2.5% |
+| 0.10 | 0.0541 | 0.0617 | 2.7% |
+| 0.20 | 0.0931 | 0.0921 | 2.8% |
+| 0.30 | 0.1019 | 0.1055 | 3.1% |
+| 0.40 | **0.1019** | **0.1100** | 3.1% |
+
+The first problem where the exact flux moves the solution toward the
+reference by a visible amount: 7% of the gap at t = 0.4 (25% at t = 0.05,
+while the shear layers and shocks are still sharp), against the rotor's
+0.1% and Orszag–Tang's 0.2–2%. The exact flux moves the 64² solution by 3%
+here -- the strong initial discontinuities are where a flux function has
+something to resolve. The same caveat on the reference as for Orszag–Tang:
+135 of its 262,144 cells end with an unconverged recovery, and single cells
+in the rarefaction into the low-pressure quadrant (ρ ≈ 2–6e-3) reported
+transient Lorentz factors of 25–185 at logged steps (the snapshots show at
+most 8.1) -- near-vacuum cells where the recovery's bracket fails and the
+velocity is clamped. The exact run reports one or two unconverged cells
+from step 248 on (of 4,096), the 64² HLLD run none.
+
+Max Lorentz factor 20.7 in the exact run's last snapshot (the 64² HLLD run
+9.3, the 512² reference 8.1), in the rarefaction fan at the low-pressure
+corner; density down to 0.010.
 ---
 
 ## Reproducing the numbers
