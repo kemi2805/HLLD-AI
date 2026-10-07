@@ -2128,6 +2128,56 @@ from step 248 on (of 4,096), the 64² HLLD run none.
 Max Lorentz factor 20.7 in the exact run's last snapshot (the 64² HLLD run
 9.3, the 512² reference 8.1), in the rarefaction fan at the low-pressure
 corner; density down to 0.010.
+
+#### HLLE, HLLC, HLLD and the exact flux at 64² and 512² (2026-10-07)
+
+The comparison Kiuchi et al. (2022) draw for the hydro problem, made for
+the magnetised one: HLLE and HLLC at 64² and 512² beside the HLLD runs and
+the exact flux (calea jobs 37750–37753; `SOLVER=hlle` / `hllc` in
+`calea_rotor_hlld.sh`). L1(rho) at t = 0.4, each run against the 512² HLLD
+reference and against its own flux at 512²:
+
+| flux | 64² vs HLLD 512² | 64² vs own 512² | 512² vs HLLD 512² | 64² wall |
+|---|---|---|---|---|
+| HLLE | 0.1343 | 0.1310 | 0.0191 | 0.46 s/step |
+| HLLC | 0.1120 | 0.1104 | 0.0177 | 0.48 |
+| HLLD | 0.1100 | (reference) | — | 1.82 |
+| exact | **0.1019** | — | — | 235 |
+
+(L1(p): 0.126 / 0.115 / 0.104 / 0.104; L1(|B|): 0.168 / 0.157 / 0.142 /
+0.139, same order.) The order is the one the Riemann solvers' wave content
+predicts -- HLLE (two waves) worst, HLLC (the contact restored) and HLLD
+(the Alfvén waves too) close together, the exact flux best -- and the
+exact flux's gain over HLLD, 7% of the gap, is a third of HLLC's gain over
+HLLE. At 512² the three approximate fluxes agree to 1.8–1.9% in L1(rho), a
+seventh of any 64² run's distance from them: the flux function still
+matters at 512², but the 64²–512² gap is resolution.
+
+![log density at t = 0.4, four fluxes, two resolutions](figs/r2d_contours_solvers.png)
+
+The contours tell the same story as the hydro figure, with the tangential
+discontinuities now magnetised: at 512² the shear layers along x = 0 and
+y = 0 stay sharp under all three fluxes and the diagonal structure through
+the dense lens is one thin line; at 64² every flux spreads the shear layers
+to about 16 cells, HLLE most, and none resolves the diagonal.
+
+![cuts across the left shear layer](figs/r2d_shear_cuts.png)
+
+Cuts along y across the left shear layer show where the exact flux earns
+its 7%: at x = −0.15 the 512² runs resolve a slow-shock pair with the
+contact between them at y ≈ −0.03 (density 1.4, |B| 3.5), and the 64²
+fluxes reach it in the L1 order -- density 0.3 (HLLE), 0.5 (HLLC), 0.6
+(HLLD), 0.8 (exact); |B| 1.8, 2.2, 2.4, 2.6. The width of the main v_x
+transition is the same 0.25 in every run (16 cells at 64², 130 at 512²): by
+t = 0.4 it is a fan the waves have opened, not a smeared discontinuity.
+
+Caveats of the 512² runs, as for the HLLD reference: unconverged
+recoveries at the end 55 (HLLE), 62 (HLLC), 135 (HLLD) of 262,144 cells,
+transient single-cell Lorentz factors up to 58–69 at logged steps in the
+near-vacuum rarefaction (the snapshots stay below 16), density minima
+0.004–0.013. The HLLE and HLLC runs took 3.1–3.3 h against HLLD's 13.2
+(3.8–3.9 s per step against 15.7; HLLD's star-pressure root-find is the
+cost).
 ---
 
 ## Reproducing the numbers
@@ -2157,6 +2207,7 @@ corner; density down to 0.010.
 | Orszag–Tang (7): the runs | `PROBLEM=orszag_tang N=64 sbatch scripts/calea_rotor_exact.sh`; `PROBLEM=orszag_tang N=64` and `N=512 TORCH_THREADS=24 sbatch scripts/calea_rotor_hlld.sh` |
 | Orszag–Tang (7): recorded windows | `PROBLEM=orszag_tang N=64 T0=<t> NSTEP=2 REC_DIR=<dir> scripts/rotor_replay.py record <tag>`, then `failure_ledger.py collect <dir> <tags> --paired` (the recording carries gamma) |
 | the four-quadrant problem (7): the runs | `PROBLEM=riemann2d N=64 sbatch scripts/calea_rotor_exact.sh` (B0 sets the field); `PROBLEM=riemann2d N=64` and `N=512 TORCH_THREADS=24 sbatch scripts/calea_rotor_hlld.sh` |
+| the four fluxes at two resolutions (7) | the same with `SOLVER=hlle` and `SOLVER=hllc`; `scripts/rotor_compare.py results/r2d_64_<flux> results/r2d_512_hlld` per pair; the contour panel and the cuts were drawn from the final snapshots (levels at 0.125 dex; cuts along y at x = −0.3 and −0.15) |
 | the recovery's creeping secant (7) | `pytest tests/test_c2p.py` (the hot-fast-gas and bitwise tests); the random-batch census is the module docstring's recipe |
 | the four-unknown pilot (5a) | `scripts/pilot_four_unknowns.py results/failure_ledger_64 1394,719,1816` (samples: `--quiet`; calea, the numpy kernels are too slow for more than a lane) |
 | one planar Newton, iteration by iteration (5a) | `scripts/newton_trace.py results/failure_ledger_64 --lanes 719,1394` |
