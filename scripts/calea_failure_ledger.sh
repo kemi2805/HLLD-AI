@@ -17,7 +17,9 @@
 #   sbatch scripts/calea_failure_ledger.sh
 #   CHECK=1 sbatch --time=1:00:00 -c 8 --exclusive=no scripts/calea_failure_ledger.sh
 #
-# Knobs (env): N (64), NSTEP (2), WINDOWS ("pfa:0.10 pfb:0.25 pfc:0.40"; the
+# Knobs (env): PROBLEM (rotor; orszag_tang, riemann2d -- the recorder's
+# problem, gamma 5/3 for the ledger's own stages, so not orszag_tang unless
+# those are made gamma-aware), B0 (riemann2d's field), N (64), NSTEP (2), WINDOWS ("pfa:0.10 pfb:0.25 pfc:0.40"; the
 # held-out set is recorded by a second submission with
 # WINDOWS="pfd:0.175 pfe:0.325" OUT=...), OUT, NW (workers, 64), HLLD_DIR, PY.
 # CHECK=1: a 32^2, one-step, few-lane pass through every stage -- the path
@@ -31,6 +33,7 @@
 # Fixed IN ADVANCE, and not to be extended after the numbers are seen: three
 # windows x two steps x six sweeps = 36 sweeps.
 set -u
+PROBLEM=${PROBLEM:-rotor}
 N=${N:-64}
 NSTEP=${NSTEP:-2}
 WINDOWS=${WINDOWS:-"pfa:0.10 pfb:0.25 pfc:0.40"}
@@ -59,7 +62,7 @@ export RMHD_PLANAR5_FALLBACK=1 RETRIES=2
 export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1
 mkdir -p "$OUT/rec" "$OUT/logs" logs
 echo "== $(date) $(hostname)  HLLD $(git rev-parse --short HEAD)$([ -z "$(git status --porcelain -- src scripts)" ] || echo +dirty)  rmhd $("$PY" -c 'import rmhd.paths as p; print(p.git_rev())')"
-echo "== N=$N NSTEP=$NSTEP windows: $WINDOWS -> $OUT  workers=$NW"
+echo "== problem=$PROBLEM N=$N NSTEP=$NSTEP windows: $WINDOWS -> $OUT  workers=$NW"
 
 # ── 1. record, the windows side by side ──────────────────────────────────
 . "$RMHD/scripts/kernels.env"
@@ -69,7 +72,7 @@ pids=()
 for w in $WINDOWS; do
     tag=${w%%:*}; t0=${w##*:}
     ( RMHD_POOL=$pool RMHD_POOL_THREADS=1 NUMBA_NUM_THREADS=2 TORCH_THREADS=4 \
-      N=$N T0=$t0 NSTEP=$NSTEP REC_DIR=$OUT/rec \
+      PROBLEM=$PROBLEM B0=${B0:-0.5} N=$N T0=$t0 NSTEP=$NSTEP REC_DIR=$OUT/rec \
       "$PY" -u scripts/rotor_replay.py record $tag > "$OUT/logs/record_$tag.log" 2>&1 ) &
     pids+=($!)
 done

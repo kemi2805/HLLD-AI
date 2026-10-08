@@ -88,8 +88,11 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--problem", default="rotor", choices=list(PROBLEMS))
     ap.add_argument("--b0", type=float, default=0.5,
-                    help="riemann2d: strength of the uniform in-plane field "
-                         "(at 45 degrees); ignored by the other problems")
+                    help="riemann2d: strength of the uniform field (at 45 "
+                         "degrees in the plane); ignored by the other problems")
+    ap.add_argument("--bz-deg", type=float, default=0.0,
+                    help="riemann2d: tilt of the field out of the plane in "
+                         "degrees (0: coplanar; 90: purely out of plane)")
     ap.add_argument("--n", type=int, default=128)
     ap.add_argument("--tend", type=float, default=None)
     ap.add_argument("--cfl", type=float, default=0.25)
@@ -165,7 +168,8 @@ def main():
     # ghost count, and until now neither the snapshots nor the restart file
     # carried them -- so an mp5 run could be analysed with PLM faces and
     # nobody would see it.
-    meta = dict(problem=a.problem, b0=(a.b0 if a.problem == "riemann2d" else None), n=a.n, solver=a.solver, limiter=a.limiter,
+    meta = dict(problem=a.problem, b0=(a.b0 if a.problem == "riemann2d" else None),
+                bz_deg=(a.bz_deg if a.problem == "riemann2d" else None), n=a.n, solver=a.solver, limiter=a.limiter,
                 ng=ghosts_needed(a.limiter), cfl=a.cfl, tend=tend,
                 nsnap=a.nsnap, emf_mode=a.emf_mode,
                 upwind_emf=not a.no_upwind_emf, bc=[bc_x, bc_y],
@@ -208,7 +212,7 @@ def main():
     elif a.problem == "orszag_tang":
         prims, Az = orszag_tang(g, eos)
     else:
-        prims, Az = riemann2d(g, eos, B0=a.b0)
+        prims, Az = riemann2d(g, eos, B0=a.b0, angle_z_deg=a.bz_deg)
 
     Bxf, Byf = b_from_potential(Az, g.dx, g.dy)
     c = prims_to_cons_2d(prims, g)

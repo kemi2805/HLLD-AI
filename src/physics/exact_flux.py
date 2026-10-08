@@ -739,7 +739,7 @@ def _planar_seed(sL5, sR5, B5, kind):
     return [d[0].copy(), np.array(bt, dtype=float, copy=True), d[0].copy()]
 
 
-def _planar_ladder(P, gamma, sL5, sR5, B5, r5, *, accuracy, max_iter):
+def _planar_ladder(P, gamma, sL5, sR5, B5, *, r5, accuracy, max_iter):
     """Offer the lanes `r5` left unsolved to the rungs of `_PLANAR5_RUNGS`.
 
     ``r5`` is `_planar_and_ray`'s answer from the default start; the return
@@ -1190,11 +1190,17 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
             sL5 = [c[cand] for c in subL]
             sR5 = [c[cand] for c in subR]
             B5 = subBn[cand]
-            r5 = _planar_and_ray(P, gamma, sL5, sR5, B5, accuracy=accuracy,
-                                 max_iter=max_iter)
+            # the rescues run over the worker pool when one is configured
+            # (`exact_pool.map_lanes`, chunked by lane like the seven-wave
+            # solve): measured on the 64^2 rotor with every rung on, the
+            # rescues in the main process left 5.9 of 64 cores busy and cost
+            # 8x the wall of the run without them (docs 5a)
+            from . import exact_pool
+            r5 = exact_pool.map_lanes("_planar_and_ray", gamma, sL5, sR5, B5,
+                                      accuracy=accuracy, max_iter=max_iter)
             if _PLANAR5_LADDER and not r5["good"].all():
-                r5 = _planar_ladder(P, gamma, sL5, sR5, B5, r5,
-                                    accuracy=accuracy, max_iter=max_iter)
+                r5 = exact_pool.map_lanes("_planar_ladder", gamma, sL5, sR5, B5,
+                                          r5=r5, accuracy=accuracy, max_iter=max_iter)
                 rung5[cand] = r5["rung"]
             else:
                 rung5[cand] = np.where(r5["good"], 0, -1)
@@ -1260,9 +1266,11 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
         cand = np.flatnonzero(offered)
         n4_att = int(cand.size)
         if cand.size:
-            r4 = _planar4_and_ray(P, gamma, [c[cand] for c in subL],
-                                  [c[cand] for c in subR], subBn[cand],
-                                  accuracy=accuracy, max_iter=max_iter)
+            from . import exact_pool
+            r4 = exact_pool.map_lanes("_planar4_and_ray", gamma,
+                                      [c[cand] for c in subL],
+                                      [c[cand] for c in subR], subBn[cand],
+                                      accuracy=accuracy, max_iter=max_iter)
             reason4[cand] = r4["reason"]
             iters4[cand] = r4["n_iter"]
             kinds4[:, cand] = r4["kinds"]

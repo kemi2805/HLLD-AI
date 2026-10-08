@@ -58,3 +58,15 @@ def test_the_staggered_field_is_divergence_free():
     g, _, Bxf, Byf = _setup(n=32)
     div = ((Bxf[1:, :] - Bxf[:-1, :]) / g.dx + (Byf[:, 1:] - Byf[:, :-1]) / g.dy)
     assert float(div.abs().max()) < 1e-12
+
+
+def test_the_out_of_plane_tilt_keeps_the_in_plane_field_divergence_free():
+    g, prims, Bxf, Byf = _setup(n=32, B0=0.5, angle_deg=45.0, angle_z_deg=60.0)
+    c, s = math.cos(math.radians(60.0)), math.sin(math.radians(60.0))
+    bx = 0.5 * math.cos(math.radians(45.0)) * c
+    assert torch.allclose(Bxf, torch.full_like(Bxf, bx), atol=1e-12)
+    assert torch.allclose(prims["Bz"], torch.full_like(prims["Bz"], 0.5 * s), atol=1e-15)
+    B2 = prims["Bx"] ** 2 + prims["By"] ** 2 + prims["Bz"] ** 2
+    assert torch.allclose(B2, torch.full_like(B2, 0.25), atol=1e-14)
+    div = ((Bxf[1:, :] - Bxf[:-1, :]) / g.dx + (Byf[:, 1:] - Byf[:, :-1]) / g.dy)
+    assert float(div.abs().max()) < 1e-12

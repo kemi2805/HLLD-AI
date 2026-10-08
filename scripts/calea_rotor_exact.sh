@@ -25,7 +25,8 @@
 # the node instead, seconds into the job.
 #
 # Knobs (env): PROBLEM (rotor; orszag_tang -- OUT and LOG then start with ot_,
-# TEND defaults to 1.0; riemann2d -- r2d_, TEND 0.4, B0 the field, 0.5), N (64), TEND (0.4), NSNAP (8), RETRIES (2), OUT, POOL (32
+# TEND defaults to 1.0; riemann2d -- r2d_, TEND 0.4, B0 the field, 0.5; BZ_DEG tilts it out of the
+# plane and names the run r2dz_), N (64), TEND (0.4), NSNAP (8), RETRIES (2), OUT, POOL (32
 # workers), POOL_THREADS (2 numba threads each), POOL_CHUNKS (= POOL),
 # TORCH_THREADS (8), RESUME (1: continue from $OUT/restart.npz when present),
 # MAX_STEPS (a pilot: stop after this many steps), RMHD_ML_CKPT/RMHD_ML_CKPTS,
@@ -38,7 +39,7 @@ PROBLEM=${PROBLEM:-rotor}
 case "$PROBLEM" in
     rotor)       SHORT=rotor; TEND=${TEND:-0.4} ;;
     orszag_tang) SHORT=ot;    TEND=${TEND:-1.0} ;;
-    riemann2d)   SHORT=r2d;   TEND=${TEND:-0.4} ;;
+    riemann2d)   SHORT=r2d${BZ_DEG:+z}; TEND=${TEND:-0.4} ;;
     *) echo "PREFLIGHT FAILED: PROBLEM must be rotor, orszag_tang or riemann2d"; exit 2 ;;
 esac
 N=${N:-64}
@@ -91,7 +92,7 @@ echo "== ckpt=$RMHD_ML_CKPT  extra=$RMHD_ML_CKPTS  kernels: FAN=$RMHD_FAN ALFVEN
 echo "== tau_weak=$TAU_WEAK  weak flux=${RMHD_WEAK_FLUX:-(default)}  five-wave rescue=${RMHD_PLANAR5_FALLBACK:-(default)}  rungs: EDGE=${RMHD_FAST_EDGE_SCAN:-(default)} LADDER=${RMHD_PLANAR5_LADDER:-(default)} CROSSED=${RMHD_PLANAR5_CROSSED:-(default)} PLANAR4=${RMHD_PLANAR4:-(default)}   (unset = the module's production default, recorded resolved in run_meta.json)"
 $PY -c "import numpy, numba, torch; print('numpy', numpy.__version__, 'numba', numba.__version__, 'torch', torch.__version__)"
 
-$PY -u scripts/run_2d.py --problem "$PROBLEM" ${B0:+--b0 "$B0"} --n "$N" --solver exact --tend "$TEND" \
+$PY -u scripts/run_2d.py --problem "$PROBLEM" ${B0:+--b0 "$B0"} ${BZ_DEG:+--bz-deg "$BZ_DEG"} --n "$N" --solver exact --tend "$TEND" \
     --nsnap "$NSNAP" --tau-weak "$TAU_WEAK" --tau-bt 1e-9 --exact-retries "$RETRIES" \
     --exact-max-iter 40 --out "$OUT" --harvest "$OUT/harvest" \
     --restart-every "$RESTART_EVERY" --log-every "$LOG_EVERY" $RESTART \

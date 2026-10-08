@@ -81,3 +81,64 @@ def test_pool_equals_in_process(interfaces, monkeypatch):
     for k in F0:
         assert torch.equal(F0[k], F1[k]), f"flux {k} moved under the pool"
         assert torch.equal(U0[k], U1[k]), f"state {k} moved under the pool"
+
+
+def test_the_rescues_on_the_pool_equal_in_process(monkeypatch):
+    """The planar rescue, its ladder and the four-unknown rung run over the
+    pool too (`exact_pool.map_lanes`).  On COPLANAR problems -- the
+    population those rungs exist for -- every rung on, pool against
+    in-process must be bitwise: fluxes, states, masks, and which rung
+    answered each lane."""
+    import importlib
+    from src.physics import exact_pool
+    from rmhd.eos import set_eos
+    set_eos("ideal")
+    from rmhd.riemann_dataset import generate_dataset
+    eos = hybrid_eos(K=0.0, gamma=GAMMA, gamma_th=GAMMA)
+    sols = generate_dataset(24, gamma=GAMMA, Bx_range=(0.01, 1.5), seed=77,
+                            xi_window=(0.0, 0.0), coplanar_frac=1.0,
+                            verbose=False)
+    Z = np.array([s.zones for s in sols])
+    Bx = np.array([s.Bx for s in sols])
+
+    def prim(slot):
+        rho, Pt, vn, v1, v2_, B1, B2 = (Z[:, slot, j] for j in range(7))
+        W2 = 1.0 / (1.0 - (vn ** 2 + v1 ** 2 + v2_ ** 2))
+        eta = Bx * vn + B1 * v1 + B2 * v2_
+        b2 = (Bx ** 2 + B1 ** 2 + B2 ** 2) / W2 + eta ** 2
+        t = lambda a: torch.tensor(a, dtype=torch.float64)
+        d = {"rho": t(rho), "vx": t(vn), "vy": t(v1), "vz": t(v2_),
+             "p": t(Pt - 0.5 * b2), "Bx": t(Bx), "By": t(B1), "Bz": t(B2)}
+        d["eps"] = eos.eps__press_rho(d["p"], d["rho"])
+        return d
+    sL, sR = prim(0), prim(7)
+
+    for k in ("RMHD_PLANAR5_FALLBACK", "RMHD_PLANAR5_LADDER", "RMHD_PLANAR5_CROSSED", "RMHD_PLANAR4"):
+        monkeypatch.setenv(k, "1")
+    import src.physics.exact_flux as EF
+
+    def run():
+        EF2 = importlib.reload(EF)
+        F, U, p = EF2.exact_flux_batched(sL, sR, eos, idir=0, max_iter=MAX_ITER)
+        d = dict(LAST_DIAG)
+        return F, U, p, d
+
+    monkeypatch.setenv("RMHD_POOL", "0")
+    F0, U0, p0, d0 = run()
+    monkeypatch.setenv("RMHD_POOL", "2")
+    monkeypatch.setenv("RMHD_POOL_THREADS", "1")
+    monkeypatch.setenv("RMHD_POOL_MIN", "1")
+    try:
+        F1, U1, p1, d1 = run()
+    finally:
+        exact_pool.shutdown()
+        monkeypatch.setenv("RMHD_POOL", "0")
+        importlib.reload(EF)
+
+    assert int(np.asarray(d0["planar5_mask"], bool).sum()) >= 1, "no lane reached the planar rescue"
+    for key in ("exact_mask", "planar5_mask", "planar4_mask", "planar_rung", "reason5", "reason4"):
+        assert np.array_equal(np.asarray(d0[key]), np.asarray(d1[key])), key
+    assert torch.equal(p0, p1)
+    for k in F0:
+        assert torch.equal(F0[k], F1[k]), f"flux {k} moved under the pool"
+        assert torch.equal(U0[k], U1[k]), f"state {k} moved under the pool"

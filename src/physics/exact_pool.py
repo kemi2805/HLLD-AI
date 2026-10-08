@@ -81,6 +81,17 @@ def _run_chunk(payload):
                              seeds_extra, **kw)
 
 
+def _run_rescue(payload):
+    """One chunk of a rescue rung: the named `exact_flux` function on the
+    worker's compiled parts.  The rungs take (P, gamma, sL, sR, Bn, **kw)
+    and return a dict of per-lane arrays (or None where nothing was
+    accepted), which `map_lanes` merges."""
+    name, sL, sR, Bn, kw = payload
+    from src.physics import exact_flux as EF
+    gamma = kw.pop("gamma")
+    return getattr(EF, name)(_PARTS, gamma, sL, sR, Bn, **kw)
+
+
 # ── main-process side ────────────────────────────────────────────────────
 def _executor(gamma, cfg):
     global _EXEC, _EXEC_KEY
@@ -160,6 +171,95 @@ def _merge_diag(diags, weights):
     if "n_total" in out and out["n_total"]:
         out["frac_unconverged"] = 1.0 - out.get("n_converged", 0) / out["n_total"]
     return out
+
+
+# Rescue-dict entries whose lane axis is not the first: (key -> axis).
+# `planar4_b` returns the two slow-wave kinds as (2, n).
+_LANE_AXIS = {"kinds": 1}
+
+
+def _slice_rescue(x, i, key=None):
+    """`_slice` for a rescue input: a (2, n) array is cut along its lane
+    axis."""
+    ax = _LANE_AXIS.get(key, 0)
+    if x is None or isinstance(x, (list, tuple)) or ax == 0:
+        return _slice(x, i)
+    return np.take(np.asarray(x), i, axis=ax)
+
+
+def _merge_lane_dicts(parts, idxs, n):
+    """Scatter the chunks' per-lane results back into full-length arrays.
+
+    A key whose value is None in EVERY chunk stays None.  A key that is None
+    in some chunks (a rung that accepted nothing there returns None for its
+    ``star``, ``region``, ``VsLv``, ``VsRv``) is filled from a chunk that
+    has it, with zeros where it was None -- `exact_flux` reads those entries
+    only under the ``good`` mask, which is False there.  Entries whose lane
+    axis is not the first (`_LANE_AXIS`) are scattered along that axis.
+    """
+    out = {}
+    for k in parts[0].keys():
+        vals = [p[k] for p in parts]
+        have = [v for v in vals if v is not None]
+        if not have:
+            out[k] = None
+            continue
+        ax = _LANE_AXIS.get(k, 0)
+        if ax == 0:
+            dst = _zeros_like(have[0], n)
+            for v, i in zip(vals, idxs):
+                if v is not None:
+                    _fill(dst, v, i)
+        else:
+            v0 = np.asarray(have[0])
+            shape = list(v0.shape); shape[ax] = n
+            dst = np.zeros(shape, dtype=v0.dtype)
+            for v, i in zip(vals, idxs):
+                if v is not None:
+                    idx = [slice(None)] * v0.ndim; idx[ax] = i
+                    dst[tuple(idx)] = v
+        out[k] = dst
+    return out
+
+
+def _zeros_like(x, n):
+    if isinstance(x, (list, tuple)):
+        return [_zeros_like(e, n) for e in x]
+    x = np.asarray(x)
+    return np.zeros((n,) + x.shape[1:], dtype=x.dtype)
+
+
+def map_lanes(name, gamma, sL, sR, Bn, **kw):
+    """Run the rescue rung `exact_flux.<name>` over the pool, chunked by
+    lane, and merge; the in-process call is the fallback below the pool's
+    lane minimum.  The rungs are batch-independent (each lane's Newton sees
+    only its own data), so a chunk solves to the same numbers as the whole:
+    `tests/test_exact_pool.py` asserts it to the bit."""
+    cfg = config()
+    n = int(np.asarray(Bn).shape[0])
+    if cfg is None or n < cfg["min_lanes"]:
+        from src.physics import exact_flux as EF
+        return getattr(EF, name)(EF._batched_parts(gamma), gamma, sL, sR, Bn, **kw)
+    nch = max(1, min(cfg["chunks"], n))
+    ex = _executor(gamma, cfg)
+    owner = np.arange(n) % nch
+    kw = dict(kw, gamma=float(gamma))
+    futs, idxs = [], []
+    for c in range(nch):
+        i = np.flatnonzero(owner == c)
+        if i.size == 0:
+            continue
+        kwc = {}
+        for k, v in kw.items():
+            if isinstance(v, dict):                 # a rescue dict (the ladder's r5)
+                kwc[k] = {kk: _slice_rescue(vv, i, kk) for kk, vv in v.items()}
+            else:
+                kwc[k] = v
+        futs.append(ex.submit(_run_rescue, (name, _slice(sL, i), _slice(sR, i),
+                                            _slice(Bn, i), kwc)))
+        idxs.append(i)
+    parts = [f.result() for f in futs]
+    return _merge_lane_dicts(parts, idxs, n)
 
 
 def solve_and_ray(gamma, subL, subR, subBn, seed6, keys, seeds_extra, **kw):

@@ -24,7 +24,7 @@ Env: RMHD_ML_CKPT, RMHD_FAN/ALFVEN/SLOWSHOCK/SHOCK as for a run.
              record NSTEP exact steps -- sweeps from the developed flow
              instead of the initial disc; REC_DIR (/tmp) where they go;
              PROBLEM (rotor), orszag_tang or riemann2d -- box, gamma and
-             boundaries as in run_2d.py (riemann2d at its default field); each recording carries its problem and gamma,
+             boundaries as in run_2d.py (riemann2d at B0, default 0.5); each recording carries its problem and gamma,
              and replay solves it with that gamma.
      replay: REC_DIR; WARMUP=k replays the first k sweeps silently first, so
              first-call compilation is not billed to sweep 1."""
@@ -99,7 +99,8 @@ if __name__ == "__main__":   # guarded: RMHD_POOL workers import this module
         os.makedirs(REC_DIR, exist_ok=True)
         (lo, hi), _, BC, init = PROBLEMS[PROBLEM]
         g = Grid2D(lo, hi, N, lo, hi, N, ng=2)
-        prims, Az = init(g, eos)
+        prims, Az = (init(g, eos, B0=float(os.environ["B0"])) if PROBLEM == "riemann2d" and os.environ.get("B0")
+                     else init(g, eos))
         Bxf, Byf = b_from_potential(Az, g.dx, g.dy)
         c = prims_to_cons_2d(prims, g)
         st = sync_state(State2D(cons={k: c[k] for k in EVOLVED_KEYS}, Bxf=Bxf, Byf=Byf, prims=prims),

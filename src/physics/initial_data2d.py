@@ -125,7 +125,8 @@ def magnetic_rotor(grid, eos, r0: float = 0.1, rho_in: float = 10.0,
     return prims, Az
 
 
-def riemann2d(grid, eos, B0: float = 0.5, angle_deg: float = 45.0):
+def riemann2d(grid, eos, B0: float = 0.5, angle_deg: float = 45.0,
+              angle_z_deg: float = 0.0):
     """The four-quadrant Riemann problem of Del Zanna & Bucciantini (2002),
     threaded by a uniform in-plane field.
 
@@ -146,6 +147,13 @@ def riemann2d(grid, eos, B0: float = 0.5, angle_deg: float = 45.0):
     between the two gas pressures; the magnetisation runs from ~0.05 (the
     fast quadrants) to ~2 (top right), the plasma beta down to 0.08 there.
     ``vz = Bz = 0``: coplanar, like the rotor and Orszag-Tang.
+
+    ``angle_z_deg`` tilts the field out of the plane: ``B = B0 (cos a cos b,
+    sin a cos b, sin b)`` with ``b`` the tilt.  The in-plane part still comes
+    from the potential (div B involves only Bx and By), and Bz is a
+    cell-centred evolved variable.  With a tilt every face is genuinely
+    non-coplanar: the Alfvén rotations are real unknowns and the shear
+    layers become rotational discontinuities instead of slow-wave pairs.
     """
     X, Y = grid.X, grid.Y
     zeros = torch.zeros(grid.shape, dtype=torch.float64, device=grid.device)
@@ -156,8 +164,8 @@ def riemann2d(grid, eos, B0: float = 0.5, angle_deg: float = 45.0):
         return torch.where(top, torch.where(right, full(tr), full(tl)),
                            torch.where(right, full(br), full(bl)))
 
-    a = math.radians(angle_deg)
-    bx, by = B0 * math.cos(a), B0 * math.sin(a)
+    a, b = math.radians(angle_deg), math.radians(angle_z_deg)
+    bx, by, bz = B0 * math.cos(a) * math.cos(b), B0 * math.sin(a) * math.cos(b), B0 * math.sin(b)
     prims = {
         "rho": pick(0.1, 0.1, 0.5, 0.1),
         "p": pick(1.0, 0.01, 1.0, 1.0),
@@ -166,11 +174,11 @@ def riemann2d(grid, eos, B0: float = 0.5, angle_deg: float = 45.0):
         "vz": zeros.clone(),
         "Bx": full(bx),
         "By": full(by),
-        "Bz": zeros.clone(),
+        "Bz": full(bz),
     }
     prims["eps"] = eos.eps__press_rho(prims["p"], prims["rho"])
 
-    # uniform (bx, by)  ->  Az = bx*y - by*x
+    # uniform (bx, by)  ->  Az = bx*y - by*x  (Bz needs no potential)
     XF, YF = _corner_mesh(grid)
     Az = bx * YF - by * XF
     return prims, Az
