@@ -1432,6 +1432,19 @@ process, lane after lane. Production's own 96 s per step
 (`rotor_64_exact_prov`, older code 07dd058) is not the like-for-like
 comparison.
 
+**The rescues on the pool (2026-10-08, HLLD ad560a0).** `exact_pool.map_lanes`
+runs the five-wave rescue, its ladder and the four-unknown rung over the
+worker pool, chunked by lane like the seven-wave solve. On the held-out
+windows with every rung on (calea job 38014; the same replay as the "defaults"
+row below): everything in the main process 4238 s; the seven-wave solve over
+the pool and the rescues in the main process -- the configuration of every
+run so far, the 1561 s of the "defaults" row -- and everything over 32
+workers 632 s and 630 s: **2.5x** on the rescues, 6.7x against no pool. The
+three arms are bitwise equal in which solver answered, the star pressure and
+every refusal reason. The 8x of the full run was this serial tail, not the
+solvers; the per-rung costs below were measured before the change and stand
+as relative costs.
+
 What each rung costs, paired on the held-out windows (calea jobs 33951 and
 33953; `failure_ledger.py collect --paired`, HLLD below the gate in all of
 them, so the walls are the rungs' alone):
@@ -2098,6 +2111,41 @@ the shear layers meet the shocks, and recovers to 95% by the end. What the
 exact solution of such a face looks like -- an Alfvén/slow structure the
 seven-wave or planar families cannot close, or a basin problem -- is the next
 thing to find out with the ledger on recorded windows, as for the rotor.
+
+**The ledger on it (2026-10-08, calea job 38013; `results/failure_ledger_r2d`).**
+Windows at t = 0.1, 0.2 and 0.3, two steps each (36 sweeps): 17,422
+attempted faces, 97.37% solved -- kinder than the whole run's 93.0%, so the
+losses concentrate late (the solved fraction dipped to 86% in the third
+tenth) -- and 458 failing; the replay reproduces the recording (G0). Offered
+to every method: the seven-wave with eight diverse seeds recovers 1, the
+planar solver's 24 starts 0, the ε-ladder and the tube seed 8, the
+intermediate branch 3. R1 1, R2 7, R3 3, **R4 447 -- 97.6% of the
+failures**, against 74% on the rotor; the tube test calls 32 of them
+compound (7%; a third on the rotor) and 415 elementary. No method finds
+another root on the 1,188 controls.
+
+What the 415 are (the cards, and the population's states against the
+controls'): not the shear-layer faces (their tangential-velocity jump is a
+median 0.06, none above 0.3; the shear faces are solved, section above),
+and not the rotor's near-normal field (|B_n|/|B_t| median 1.04 against the
+controls' 0.81). They are the **weak-field, strong-jump** faces:
+magnetisation 0.009 against the controls' 0.17, pressure jumps of 30%
+against 3%, density jumps of 14% against 3%, and gas pressures above the
+networks' training envelope (p > 25) on 72% of them against 23% of the
+controls -- the lens reaches p ≈ 90. The number that explains them is the
+slow-to-Alfvén speed gap: **1.3e-5** median against the controls' 1.5e-3, a
+hundred times tighter, so tight that the classifier (merge tolerance 1e-8)
+still calls them seven-wave (384 coplanar, 31 full) and every solver steps
+over a bundle of waves it cannot separate. The seven-wave Newton spends its
+whole budget on all 415 (three attempts, median 20 iterations); the planar
+solver's 24 starts do not converge; and on a 48-face sample neither a seed
+built from the post-fast-wave field nor the four-unknown rung (both slow
+waves field-steered) converges either -- the waves construct, the Newton
+does not close. A seed is not the lever. This is the weak-field limit in
+which the slow and Alfvén waves merge, the mirror image of the rotor's
+near-normal-field losses, and no formulation in the chain treats it: the
+missing piece is a certified solver for the degenerate slow–Alfvén bundle
+(the reduced three-wave solver is the right structure but is not exact).
 
 ![four-quadrant solver map, t = 0.4](figs/r2d_64_exact_solver_t0.40.png)
 
