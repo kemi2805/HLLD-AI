@@ -2100,52 +2100,56 @@ beside the rotor and Orszag–Tang:
 | **solved** | **93.03%** (1,003,070 of 1,078,248) | 97.72% | 97.29% |
 
 Three times the rotor's loss, and it is not the field strength: the solver
-map puts the fallbacks on one column of faces along each shear layer -- the
-x-faces at x ≈ 0 for y < 0 and the y-faces at y ≈ 0 for x < 0 -- from
-the first steps to the last, in equal measure on x- and y-sweeps (93.07% /
-92.99%). Those are the faces across which the initial tangential velocity
-jumps by 0.99 c with the field threading them: the shear layers the problem
-was built to put under a field, and the exact solver loses one face in two
-of them. The solved fraction dips to 86% in the third tenth of the run, when
-the shear layers meet the shocks, and recovers to 95% by the end. What the
-exact solution of such a face looks like -- an Alfvén/slow structure the
-seven-wave or planar families cannot close, or a basin problem -- is the next
-thing to find out with the ledger on recorded windows, as for the rotor.
+map puts the fallbacks on one column of faces beside each shear line -- the
+x-faces just right of x = 0 for y < 0 and the y-faces just above y = 0 for
+x < 0 -- from the first steps to the last, in equal measure on x- and
+y-sweeps (93.07% / 92.99%). The solved fraction dips to 86% in the third
+tenth of the run and recovers to 95% by the end. (A first reading took
+these for the faces carrying the 0.99 c shear; the run's harvest says
+otherwise -- the faces it lost carry almost no tangential-velocity jump and
+sit inside the moving quadrants, below.)
 
-**The ledger on it (2026-10-08, calea job 38013; `results/failure_ledger_r2d`).**
-Windows at t = 0.1, 0.2 and 0.3, two steps each (36 sweeps): 17,422
-attempted faces, 97.37% solved -- kinder than the whole run's 93.0%, so the
-losses concentrate late (the solved fraction dipped to 86% in the third
-tenth) -- and 458 failing; the replay reproduces the recording (G0). Offered
-to every method: the seven-wave with eight diverse seeds recovers 1, the
-planar solver's 24 starts 0, the ε-ladder and the tube seed 8, the
-intermediate branch 3. R1 1, R2 7, R3 3, **R4 447 -- 97.6% of the
-failures**, against 74% on the rotor; the tube test calls 32 of them
-compound (7%; a third on the rotor) and 415 elementary. No method finds
-another root on the 1,188 controls.
+**The ledger on recorded windows (2026-10-08, calea job 38013;
+`results/failure_ledger_r2d`).** Windows at t = 0.1, 0.2 and 0.3, two steps
+each (36 sweeps), pre-evolved with HLLD as the recorder does: 17,422
+attempted faces, 97.37% solved, 458 failing; the replay reproduces the
+recording (G0). R1 1, R2 7, R3 3, **R4 447** (97.6% of the failures); the
+tube test calls 32 of them compound; no method finds another root on the
+1,188 controls. The 415 elementary R4 faces of these windows are
+weak-field, strong-jump faces: magnetisation 0.009 against the controls'
+0.17, pressure jumps of 30% against 3%, gas pressure above the networks'
+training envelope on 72% of them, and an Alfvén–slow speed gap of 1.3e-5
+against 1.5e-3 -- above the classifier's merge tolerance (1e-8), so they go
+to the seven-wave solver; on a 48-face sample neither a planar seed built
+from the post-fast-wave field nor the four-unknown rung converges.
 
-What the 415 are (the cards, and the population's states against the
-controls'): not the shear-layer faces (their tangential-velocity jump is a
-median 0.06, none above 0.3; the shear faces are solved, section above),
-and not the rotor's near-normal field (|B_n|/|B_t| median 1.04 against the
-controls' 0.81). They are the **weak-field, strong-jump** faces:
-magnetisation 0.009 against the controls' 0.17, pressure jumps of 30%
-against 3%, density jumps of 14% against 3%, and gas pressures above the
-networks' training envelope (p > 25) on 72% of them against 23% of the
-controls -- the lens reaches p ≈ 90. The number that explains them is the
-slow-to-Alfvén speed gap: **1.3e-5** median against the controls' 1.5e-3, a
-hundred times tighter, so tight that the classifier (merge tolerance 1e-8)
-still calls them seven-wave (384 coplanar, 31 full) and every solver steps
-over a bundle of waves it cannot separate. The seven-wave Newton spends its
-whole budget on all 415 (three attempts, median 20 iterations); the planar
-solver's 24 starts do not converge; and on a 48-face sample neither a seed
-built from the post-fast-wave field nor the four-unknown rung (both slow
-waves field-steered) converges either -- the waves construct, the Newton
-does not close. A seed is not the lever. This is the weak-field limit in
-which the slow and Alfvén waves merge, the mirror image of the rotor's
-near-normal-field losses, and no formulation in the chain treats it: the
-missing piece is a certified solver for the degenerate slow–Alfvén bundle
-(the reduced three-wave solver is the right structure but is not exact).
+**But that is not the exact run's population.** The recorder pre-evolves
+each window with HLLD, and on this problem the exact run's state differs and
+so do its losses. Its harvest identifies every face the run finally lost --
+an unsolved row with no planar-solved twin in the same shard: 84,049,
+against 83,108 expected from the coverage (the few extra are rows whose
+rescue landed in the next shard). Against the faces it solved:
+
+| median | the run's lost faces | its solved faces |
+|---|---|---|
+| tangential-velocity jump | 0.000 | 0.013 |
+| Lorentz factor | 6.4 | 1.3 |
+| density jump | 3.6% | 2.8% |
+| magnetisation | 0.045 | 0.12 |
+
+They are the first faces inside the two 0.99 c quadrants, beside the shear
+lines -- the red columns of the solver map: a nearly uniform state moving at
+W ≈ 7 along the face, with a small jump on it. The slow and Alfvén speeds
+are no closer there than elsewhere (the gap is below 1e-4 on 22% of them,
+and on 31% of the faces the seven-wave solver solved). All but 62 failed
+"not converged" in the seven-wave solve (the 62: self-crossing fans), and
+the planar rescue was offered -- the planarity residue is 1e-11, far below
+its 1e-6 -- and did not converge either. The windows' 97.4% against the
+run's 93.0% is this difference in states: the run's own tenth around
+t = 0.1 solved 86%. The ledger on the run's own faces
+(`failure_ledger.py collect-harvest`: 1,200 lost and 1,200 solved faces
+sampled from the harvest and replayed through production's path) is
+running (calea job 38139).
 
 ![four-quadrant solver map, t = 0.4](figs/r2d_64_exact_solver_t0.40.png)
 

@@ -17,7 +17,8 @@
 #   sbatch scripts/calea_failure_ledger.sh
 #   CHECK=1 sbatch --time=1:00:00 -c 8 --exclusive=no scripts/calea_failure_ledger.sh
 #
-# Knobs (env): PROBLEM (rotor; orszag_tang, riemann2d -- the recorder's
+# Knobs (env): HARVEST (an exact run's harvest dir: skip the recording and
+# take that run's own lost/solved faces, NFAIL/NCTRL of each), PROBLEM (rotor; orszag_tang, riemann2d -- the recorder's
 # problem, gamma 5/3 for the ledger's own stages, so not orszag_tang unless
 # those are made gamma-aware), B0 (riemann2d's field), N (64), NSTEP (2), WINDOWS ("pfa:0.10 pfb:0.25 pfc:0.40"; the
 # held-out set is recorded by a second submission with
@@ -66,6 +67,7 @@ echo "== problem=$PROBLEM N=$N NSTEP=$NSTEP windows: $WINDOWS -> $OUT  workers=$
 
 # ── 1. record, the windows side by side ──────────────────────────────────
 . "$RMHD/scripts/kernels.env"
+if [ -z "${HARVEST:-}" ]; then
 nwin=$(echo $WINDOWS | wc -w)
 pool=$(( NW / nwin > 2 ? NW / nwin : 0 ))
 pids=()
@@ -80,12 +82,24 @@ nfail=0; for p in "${pids[@]}"; do wait "$p" || nfail=$((nfail + 1)); done
 for w in $WINDOWS; do tail -n 1 "$OUT/logs/record_${w%%:*}.log"; done
 [ "$nfail" = 0 ] || { echo "RECORD FAILED ($nfail)"; exit 3; }
 
+fi
+
 # ── 2. collect: production on the recordings, and G0 ─────────────────────
+# (HARVEST=<run>/harvest: the run's own lost and solved faces instead of
+#  recorded windows -- NFAIL / NCTRL of each, replayed; see collect_harvest)
+if [ -n "${HARVEST:-}" ]; then
+  RMHD_POOL=$(( NW / 2 )) RMHD_POOL_THREADS=2 NUMBA_NUM_THREADS=2 TORCH_THREADS=8 \
+      "$PY" -u scripts/failure_ledger.py collect-harvest "$HARVEST" \
+      --n-fail "${NFAIL:-1200}" --n-ctrl "${NCTRL:-1200}" \
+      --out "$OUT/population.npz" 2>&1 | tee "$OUT/logs/collect.log" | tail -n 6
+  [ "${PIPESTATUS[0]}" = 0 ] || { echo "COLLECT-HARVEST FAILED"; exit 4; }
+else
 tags=$(for w in $WINDOWS; do echo -n "${w%%:*} "; done)
 RMHD_POOL=$(( NW / 2 )) RMHD_POOL_THREADS=2 NUMBA_NUM_THREADS=2 TORCH_THREADS=8 \
     "$PY" -u scripts/failure_ledger.py collect "$OUT/rec" $tags \
     --out "$OUT/population.npz" 2>&1 | tee "$OUT/logs/collect.log" | tail -n 6
 [ "${PIPESTATUS[0]}" = 0 ] || { echo "COLLECT FAILED (G0?)"; exit 4; }
+fi
 
 # ── 3. run: the elementary methods and the tube label, compiled kernels ──
 export NUMBA_NUM_THREADS=1 RMHD_POOL=0

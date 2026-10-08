@@ -13,6 +13,12 @@ ordered).  A method's own "converged" flag counts for nothing here.
     collect   replay the recordings through the production path, check that
               it reproduces them, and write the failing lanes (and a control
               sample of solved ones) in the solver frame
+    collect-harvest
+              the same population from an exact RUN'S harvest instead: a
+              uniform sample of the faces the run lost and of those it solved,
+              replayed through the production path (the recordings are
+              pre-evolved with HLLD, which is not the exact run's state on
+              every problem -- see collect_harvest)
     run       offer one shard of that population to the methods named by
               --methods:
                 a  seven-wave, 8 retries, diverse seeds (the ensemble, the
@@ -46,6 +52,8 @@ started from, how far it got and why it was refused -- and
                    interface table beside it (.csv)
 
     python scripts/failure_ledger.py collect REC_DIR pfa pfb pfc --out pop.npz
+    python scripts/failure_ledger.py collect-harvest RUN/harvest --n-fail 1200 \
+        --n-ctrl 1200 --out pop.npz
     python scripts/failure_ledger.py run pop.npz --methods a,b,c,e --out s.npz
     python scripts/failure_ledger.py --summarise DIR
     python scripts/failure_ledger.py --report DIR --out DIR/cards.txt
@@ -495,6 +503,129 @@ def collect(a):
     print("wrote", a.out)
     if n_mis:
         sys.exit(1)
+
+
+def collect_harvest(a):
+    """The population from an exact run's HARVEST instead of recordings.
+
+    `collect` replays sweeps recorded by `rotor_replay.py record`, which
+    pre-evolves the problem with HLLD to each window's time.  Where the
+    exact-flux state differs from HLLD's, that population is not the run's
+    own: on the four-quadrant problem the HLLD-evolved windows solved 97.4%
+    and the exact run 93.0%, and the run's lost faces have a different
+    signature.  An exact run's harvest holds every face its seven-wave solve
+    failed (``unsolved_*``) and every face it solved (``solved_*``; the
+    planar rescue's rows tagged ``source == 1``), in the solver frame.  A
+    face the run finally LOST is an unsolved row without a planar-solved twin
+    in the same shard (the four-unknown and degenerate rungs' answers are not
+    harvested as solved rows; the replay sorts those out).
+
+    Uniform samples of the lost and the solved rows are replayed through the
+    production path.  The harvest does not keep the sweep direction, so the
+    lab-frame states are rebuilt with x as the normal (solver frame (n, t1,
+    t2) = (x, y, z)), and the gas pressure is recomputed from the total,
+    which can move the total by an ulp: the REPLAY's verdict sets the groups,
+    and how many lanes changed side is printed (lost faces the four-unknown
+    rung solved in the run come back exact by design).  Cards label a lane
+    by its shard (``tag``) and row (``sweep``); ``t0`` is NaN.
+    """
+    rng = np.random.default_rng(0)
+    files = sorted(glob.glob(os.path.join(a.harvest, "unsolved_*.npz")))
+    if not files:
+        raise SystemExit("no unsolved_*.npz in %s" % a.harvest)
+    lost, solved = [], []
+    key = lambda A, B: [x.tobytes() + y.tobytes() for x, y in zip(A, B)]
+    for k, fu in enumerate(files):
+        u = np.load(fu)
+        s = np.load(fu.replace("unsolved_", "solved_"))
+        rescued = set(key(s["U_L"][s["source"] == 1], s["U_R"][s["source"] == 1]))
+        m = np.array([kk not in rescued for kk in key(u["U_L"], u["U_R"])], bool)
+        for dst, UL, UR in ((lost, u["U_L"][m], u["U_R"][m]),
+                            (solved, s["U_L"], s["U_R"])):
+            dst.append(np.concatenate(
+                [UL, UR, np.full((len(UL), 1), k), np.arange(len(UL))[:, None]], 1))
+    lost, solved = np.concatenate(lost), np.concatenate(solved)
+    pick = lambda X, n: X[np.sort(rng.choice(len(X), min(n, len(X)), replace=False))]
+    X = np.concatenate([pick(lost, a.n_fail), pick(solved, a.n_ctrl)])
+    was_lost = np.arange(len(X)) < min(a.n_fail, len(lost))
+    print("harvest %s: %d shards, %d lost faces, %d solved; replaying %d + %d"
+          % (a.harvest, len(files), len(lost), len(solved), was_lost.sum(),
+             (~was_lost).sum()), flush=True)
+    gam = float(np.load(files[0])["gamma"])
+    eos = hybrid_eos(K=0.0, gamma=gam, gamma_th=gam)
+
+    def lab(U):
+        rho, Pt, vx, vy, vz, By, Bz, Bx = (U[:, j] for j in range(8))
+        W2 = 1.0 / (1.0 - (vx * vx + vy * vy + vz * vz))
+        eta = Bx * vx + By * vy + Bz * vz
+        b2 = (Bx * Bx + By * By + Bz * Bz) / W2 + eta * eta
+        t = lambda v: torch.tensor(np.ascontiguousarray(v), dtype=torch.float64)
+        d = {"rho": t(rho), "vx": t(vx), "vy": t(vy), "vz": t(vz),
+             "p": t(Pt - 0.5 * b2), "Bx": t(Bx), "By": t(By), "Bz": t(Bz)}
+        d["eps"] = eos.eps__press_rho(d["p"], d["rho"])
+        return d
+
+    rows = {k: [] for k in ("UL", "UR", "group", "tag", "sweep", "lane", "idir",
+                            "t0", "reason7", "reason5", "src", "pstar",
+                            "attempts", "iters7", "iters5")}
+    n_att = n_ex = n_gate = 0
+    flips = [0, 0]
+    CH = 1024
+    for c0 in range(0, len(X), CH):
+        Xc, wl = X[c0:c0 + CH], was_lost[c0:c0 + CH]
+        sL, sR = lab(Xc[:, :8]), lab(Xc[:, 8:16])
+        F, U, ps = EF.exact_flux_batched(sL, sR, eos, idir=0, tau_weak=1e-2,
+                                         tau_bt=1e-9, n_retries=2, max_iter=40)
+        d = dict(LAST_DIAG)
+        sel = np.asarray(d["sel"])
+        ex = d["exact_mask"].numpy()[sel]
+        n_gate += len(Xc) - sel.size
+        n_att += sel.size
+        n_ex += int(ex.sum())
+        flips[0] += int((wl[sel] & ex).sum())
+        flips[1] += int((~wl[sel] & ~ex).sum())
+        (L7, BnL), (R7, _) = (EF.to_solver_frame(sL, eos, 0),
+                              EF.to_solver_frame(sR, eos, 0))
+        g = lambda t: t.detach().cpu().numpy().astype(float)
+        UL = np.stack([g(c) for c in L7] + [g(BnL)], axis=1)[sel]
+        UR = np.stack([g(c) for c in R7] + [g(BnL)], axis=1)[sel]
+        src = np.zeros(sel.size, np.int8)
+        src[d["reason7"] == 0] = 1
+        src[np.asarray(d["planar5_mask"], bool)] = 2
+        if "planar4_mask" in d:
+            src[np.asarray(d["planar4_mask"], bool)] = 3
+        src[~ex] = 0
+        rows["UL"].append(UL); rows["UR"].append(UR)
+        rows["group"].append(np.where(ex, 0, 1).astype(np.int8))
+        rows["tag"].append(Xc[sel, 16].astype(np.int16))
+        rows["sweep"].append(Xc[sel, 17].astype(np.int32) + 1)
+        rows["lane"].append(sel + c0)
+        rows["idir"].append(np.zeros(sel.size, np.int8))
+        rows["t0"].append(np.full(sel.size, np.nan))
+        rows["reason7"].append(np.asarray(d["reason7"]))
+        rows["reason5"].append(np.asarray(d["reason5"]))
+        rows["src"].append(src)
+        rows["pstar"].append(ps.reshape(-1).numpy()[sel])
+        rows["attempts"].append(np.asarray(d["seven_attempts"]))
+        rows["iters7"].append(np.asarray(d["seven_n_iter_total"]))
+        rows["iters5"].append(np.asarray(d["planar_n_iter"]))
+        print("  replayed %5d / %d: attempted %4d exact %4d" % (
+            min(c0 + CH, len(X)), len(X), sel.size, ex.sum()), flush=True)
+    out = {k: np.concatenate(v) for k, v in rows.items()}
+    out.update(tags=np.array([os.path.basename(f) for f in files]),
+               n_attempted=n_att, n_exact=n_ex, n_mismatch=flips[1])
+    np.savez_compressed(a.out, **out)
+    print("\ncollected from the harvest: replayed %d (%d below the weak gate "
+          "now), attempted %d, exact %d, failing %d, controls %d"
+          % (len(X), n_gate, n_att, n_ex, (out["group"] == 1).sum(),
+             (out["group"] == 0).sum()))
+    print("lost in the run but exact in the replay: %d of %d (the four-unknown "
+          "and degenerate rungs' answers, and round-off);  solved in the run "
+          "but lost in the replay: %d of %d" % (flips[0], was_lost.sum(),
+                                                flips[1], (~was_lost).sum()))
+    print("NOTE: the sample is stratified (lost and solved drawn separately); "
+          "only the per-failure fractions of the ledger are the run's")
+    print("wrote", a.out)
 
 
 # ── run ───────────────────────────────────────────────────────────────────
@@ -988,7 +1119,7 @@ def report(a):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("mode", nargs="?", choices=("collect", "run"))
+    ap.add_argument("mode", nargs="?", choices=("collect", "collect-harvest", "run"))
     ap.add_argument("args", nargs="*")
     ap.add_argument("--out")
     ap.add_argument("--methods", default="a,b,c,e")
@@ -998,6 +1129,10 @@ def main():
     ap.add_argument("--paired", action="store_true",
                     help="collect: a switch is under test -- report gained / "
                          "lost against the recording instead of G0")
+    ap.add_argument("--n-fail", type=int, default=1200,
+                    help="collect-harvest: lost faces to sample")
+    ap.add_argument("--n-ctrl", type=int, default=1200,
+                    help="collect-harvest: solved faces to sample")
     ap.add_argument("--summarise", metavar="DIR")
     ap.add_argument("--report", metavar="DIR")
     ap.add_argument("--lanes", help="comma-separated interface numbers")
@@ -1011,10 +1146,13 @@ def main():
     if a.mode == "collect":
         a.rec, a.tags = a.args[0], a.args[1:]
         return collect(a)
+    if a.mode == "collect-harvest":
+        a.harvest = a.args[0]
+        return collect_harvest(a)
     if a.mode == "run":
         a.pop = a.args[0]
         return run(a)
-    ap.error("collect, run or --summarise")
+    ap.error("collect, collect-harvest, run or --summarise")
 
 
 if __name__ == "__main__":
