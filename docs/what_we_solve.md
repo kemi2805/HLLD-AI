@@ -2146,10 +2146,54 @@ and on 31% of the faces the seven-wave solver solved). All but 62 failed
 the planar rescue was offered -- the planarity residue is 1e-11, far below
 its 1e-6 -- and did not converge either. The windows' 97.4% against the
 run's 93.0% is this difference in states: the run's own tenth around
-t = 0.1 solved 86%. The ledger on the run's own faces
-(`failure_ledger.py collect-harvest`: 1,200 lost and 1,200 solved faces
-sampled from the harvest and replayed through production's path) is
-running (calea job 38139).
+t = 0.1 solved 86%.
+
+**The ledger on the run's own faces (2026-10-09; calea jobs 38139 and
+38256; `results/failure_ledger_r2d_run`).** `failure_ledger.py
+collect-harvest` sampled 1,200 of the faces the run lost and 1,200 it
+solved from its harvest and replayed them through production's path:
+1,081 of the lost are lost again (the other 119 are the four-unknown and
+degenerate rungs' answers, which the harvest does not keep as solved rows)
+and none of the solved. Offered to every method:
+
+| verdict | lost faces | of the lost |
+|---|---|---|
+| R1 a cheap method (seven-wave from diverse seeds; planar from 24 starts) | 0 | 0.0% |
+| R2 only the expensive search (ε-ladder, tube seed) | 17 | 1.6% |
+| R3 only the intermediate-shock branch | 35 | 3.2% |
+| **R4 nothing** | **1,029** | **95.2%** |
+
+The tube test calls 34 of them compound (3.1%), and no method finds
+another root on the 1,319 controls (one wide-window answer moves p* by more
+than 1e-3). On the rotor R4 was 74% of the failures and a third of it
+compound; here almost every loss is an elementary face nothing in the chain
+closes. Of the run's attempted faces at most 0.3% could be won back with
+what exists (4.8% of its 6.97% losses), 0.1% without the intermediate
+branch.
+
+Why, on all 1,081 and on probes of 48: the seven-wave Newton's best
+residual is a median 1.8e-2, a convergence failure and not a precision
+floor. The faces sit in flow at W ≈ 6.4 with magnetisation 0.045 and an
+Alfvén–slow speed gap of 2e-4. The linearised decomposition puts the slow
+waves at a few percent strength, the largest after the fast waves, moving
+with their Alfvén waves on both sides with the contact between them; the
+whole inner fan is 0.01 wide. From a start read off that linearised
+solution the planar solver cannot even build the waves: the left slow wave
+must lower the tangential field by 5.6% (a compressive slow shock), and
+the slow-shock construction admits drops up to about 0.5% (it fails on 31
+of 48 at 2%). With the window opened (margin 1.0) the waves build, but
+Newton converges on 1 of 48; the ledger's wide-window method recovers 3.2%.
+More starts do not help either: the K-candidate network, which no ledger so
+far had (it was never on calea, and the seed loader resolves it against the
+rmhd checkout), raises method a's starts from 3 to 7 per face and recovers
+0 of the 1,081 (job 38250). Closing these faces needs a formulation for a
+slow wave travelling with its Alfvén wave in fast tangential flow; neither
+seeds nor the existing branches provide it.
+
+27 of the ledger's 64 workers died silently during the expensive search on
+2026-10-08 (no traceback, no memory pressure; the storage outage of that
+evening is the likely cause). All 27 passed that stage on rerun (job
+38256), so the ledger above is complete.
 
 ![four-quadrant solver map, t = 0.4](figs/r2d_64_exact_solver_t0.40.png)
 
