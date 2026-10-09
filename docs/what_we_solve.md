@@ -2353,8 +2353,13 @@ compared before the outage. Wall time at equal steps:
 The two pooled runs agree to the second. The rescues are still offered
 to every face the seven-wave solver loses, and on a non-coplanar face each
 of them runs its Newton before refusing the answer as not planar; that is
-the work the pool spreads here. A planarity check before the rescues would
-save it without changing any answer.
+the work the pool spreads here. Since 2026-10-09 a planarity check skips
+it (`RMHD_PLANAR_PRECHECK`, default on): no planar rung can accept a lane
+whose input is not planar to 1e-6, and each refused one only after its
+Newton. Measured on this run's busiest phase, resumed from its final restart
+for 8 steps on one node (calea job 39291): 2,092 s without the check, 433 s
+with it -- **4.8x** -- with the diag rows bitwise identical. On coplanar
+problems nothing changes: every lane passes the check.
 ---
 
 ## Reproducing the numbers

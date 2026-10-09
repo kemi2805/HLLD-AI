@@ -223,6 +223,16 @@ _COMPOUND_DPSI_MIN = float(os.environ.get("RMHD_COMPOUND_DPSI_MIN", str(_math.pi
 # its full budget on each, serially, in the main process.  Measured on the
 # cost replay before deciding.
 _PLANAR4_SKIP_COMPOUND = os.environ.get("RMHD_PLANAR4_SKIP_COMPOUND", "0") not in ("0", "", "off")
+# Before the planar rungs, drop the lanes whose input is not planar to
+# _PLANAR_TOL: no planar rung can accept them (the five-wave rescue, its
+# ladder and the four-unknown solver all refuse planar_resid > _PLANAR_TOL,
+# with the same `planar5_b.to_planar`), but each runs its Newton first. On a
+# non-coplanar problem that is every lane the seven-wave solver loses: the
+# four-quadrant run with the field tilted out of the plane offered them all
+# to three solves that could only refuse. Skipping them changes no flux,
+# mask or star pressure; their refusal reason becomes "not planar" (2) in
+# both rungs' codes, without the solve. Default on; 0 restores the old path.
+_PLANAR_PRECHECK = os.environ.get("RMHD_PLANAR_PRECHECK", "1") not in ("0", "", "off")
 # The jump conditions do not order the waves.  A fan whose rotational
 # discontinuity sits on the far side of its slow wave is self-crossing and is
 # not a Riemann solution, however small its residual -- verification cannot
@@ -1175,6 +1185,12 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
     # resolves xi = 0 with no new code.  That mapping is exact, not a
     # convenience: a five-wave solution IS a seven-wave solution whose
     # rotations vanish, which is what `planar5_b.solve` has already verified.
+    # the planarity of every lane, once, for the planar rungs' pre-check
+    planar_ok = np.ones(sel.size, dtype=bool)
+    n_nonplanar_skipped = 0
+    if _PLANAR_PRECHECK and (_PLANAR5_FALLBACK or _PLANAR4) and sel.size:
+        from rmhd.batched import planar5_b as _P5B
+        planar_ok = np.asarray(_P5B.to_planar(subL, subR, subBn)[3]) <= _PLANAR_TOL
     take5 = np.zeros(sel.size, dtype=bool)
     n5_att = 0
     reason5 = np.full(sel.size, 7, dtype=np.int8)        # 7 = not offered
@@ -1184,6 +1200,12 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
         offered = ~take & ~take3
         if not _PLANAR5_CROSSED:
             offered &= ~crossed
+        if _PLANAR_PRECHECK:
+            skip = offered & ~planar_ok
+            reason5[skip] = 2                               # not planar
+            iters5[skip] = 0
+            n_nonplanar_skipped = int(skip.sum())
+            offered &= planar_ok
         cand = np.flatnonzero(offered)
         n5_att = int(cand.size)
         if cand.size:
@@ -1263,6 +1285,12 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
         if _PLANAR4_SKIP_COMPOUND:
             n4_skipped = int((offered & compound[sel]).sum())
             offered &= ~compound[sel]
+        if _PLANAR_PRECHECK:
+            skip = offered & ~planar_ok
+            reason4[skip] = 2                               # not planar
+            iters4[skip] = 0
+            n_nonplanar_skipped = max(n_nonplanar_skipped, int(skip.sum()))
+            offered &= planar_ok
         cand = np.flatnonzero(offered)
         n4_att = int(cand.size)
         if cand.size:
@@ -1399,6 +1427,9 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
         n_planar4_exact=int(take4.sum()),
         planar4_mask=take4,
         n_planar4_skipped_compound=n4_skipped,
+        # lanes the planar rungs were not offered because their input is not
+        # planar (RMHD_PLANAR_PRECHECK; none of them could have been accepted)
+        n_planar_skipped_nonplanar=n_nonplanar_skipped,
         # faces below the weak-jump gate, and how many of them the linearised
         # solver answered (RMHD_WEAK_FLUX=linear; 0 with HLLD there)
         n_weak=int(weak.sum()), n_weak_linear=n_weak_linear,
