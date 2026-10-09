@@ -2274,6 +2274,87 @@ near-vacuum rarefaction (the snapshots stay below 16), density minima
 0.004–0.013. The HLLE and HLLC runs took 3.1–3.3 h against HLLD's 13.2
 (3.8–3.9 s per step against 15.7; HLLD's star-pressure root-find is the
 cost).
+
+#### The field tilted out of the plane (2026-10-09)
+
+The same problem with the field tilted 60° out of the plane, `B = 0.5 (cos
+45° cos 60°, sin 45° cos 60°, sin 60°)` (`run_2d.py --bz-deg 60`, `BZ_DEG`
+in the launchers, runs named `r2dz_`): every face is genuinely non-coplanar,
+so the Alfvén rotations are real unknowns and the seven-wave solver works
+alone. The 64² exact run took 371 steps to t = 0.4 in 15.4 h (149 s per
+step), every rung on and the rescues on the worker pool (calea job 38247;
+the first attempts died in the storage outage of 2026-10-08 and the run was
+relaunched from scratch).
+
+| | tilted 60° | in the plane |
+|---|---|---|
+| attempted by the exact solver | 9.5% of faces | 10.4% |
+| of the attempted: seven-wave / planar / four-unknown / degenerate | 85.8 / 0.1 / 0.0 / 0.2% | 38.9 / 53.4 / 0.7 / 0.1% |
+| left to HLLD | **13.8%** | 7.0% |
+| **solved** | **86.2%** (855,306 of 992,172) | 93.0% |
+
+The planar rescues, built for coplanar faces, have nothing to do here, and
+the seven-wave solver loses 13.8% of what it is offered (74.5% solved in
+the first tenth of the run, 85–88% from the third on). The lost faces are
+not physically distinct from the solved ones: the Alfvén–slow and
+fast–Alfvén gaps, the contact distance, the magnetisation and the field
+rotation have similar distributions (the Alfvén–slow gap a median 2.5e-4
+against 1.6e-4, with a heavier tail), and the Lorentz factor is a median
+1.4 against 1.3. A third of them (46,947 of 136,698) are seven-wave answers
+that converged but were refused as self-crossing fans -- in the coplanar
+runs those went to the planar rescue; here nothing takes them -- and the
+rest did not converge. Both point at the seven-wave solver's starts and
+retries on non-coplanar faces, a different question from the coplanar
+problem's missing formulation.
+
+**The waves.** Of the solved faces 85% rotate the field across an Alfvén
+wave (in the plane: 0.1%), a third by more than 0.1 rad, 1.2% by more than
+π/2. Slow shocks are as common as in the plane (a density jump above 10% on
+11.7% of the faces, against 12.1%). The shear faces (tangential-velocity
+jump above 0.5 across the face, 2.5% of the solved) rotate the field by a
+median 0.34 rad on the left and 0.76 rad on the right, and their shear is
+carried by the left slow wave 65%, the right slow wave 19%, the left Alfvén
+wave 15% (in the plane 76 / 24 / 0%): the layers are still slow-wave pairs,
+now with a real rotational discontinuity inside.
+
+**The solution.** L1(ρ) against the 512² HLLD run of the same problem
+(calea job 38011, resumed after the outage as 38248):
+
+| t | exact 64² | HLLD 64² | exact vs HLLD at 64² |
+|---|---|---|---|
+| 0.05 | 0.0262 | 0.0436 | 2.5% |
+| 0.10 | 0.0490 | 0.0612 | 2.7% |
+| 0.20 | 0.0855 | 0.0899 | 2.6% |
+| 0.30 | 0.0963 | 0.1021 | 2.8% |
+| 0.40 | **0.1002** | **0.1058** | 2.6% |
+
+The exact flux closes 5.3% of the gap at t = 0.4 and 40% at t = 0.05,
+against 7.4% and 25% in the plane, with 86% of the attempted faces exact
+instead of 93%. No unconverged recoveries in the whole run; Lorentz factor
+up to 12.1. The snapshots store only the in-plane components, so these
+comparisons use ρ, p and the in-plane field.
+
+![tilted field, solver map at t = 0.4](figs/r2dz_64_exact_solver_t0.40.png)
+
+**The worker pool on a whole run.** The run was made three times: with the
+rescues in the main process (job 38010, to step 146 when the outage killed
+it), with them on the pool (38137, to step 110) and again on the pool after
+the outage (38247, complete). The three print identical progress at every
+common step, and the first two are bitwise identical over the 85 diag rows
+compared before the outage. Wall time at equal steps:
+
+| step | rescues serial | on the pool | |
+|---|---|---|---|
+| 20 | 1,772 s | 816 s | 2.2x |
+| 60 | 6,236 s | 3,042 s | 2.1x |
+| 110 | 15,586 s | 8,523 s | 1.8x |
+| 146 | 26,538 s | 14,108 s | 1.9x |
+
+The two pooled runs agree to the second. The rescues are still offered
+to every face the seven-wave solver loses, and on a non-coplanar face each
+of them runs its Newton before refusing the answer as not planar; that is
+the work the pool spreads here. A planarity check before the rescues would
+save it without changing any answer.
 ---
 
 ## Reproducing the numbers
@@ -2304,6 +2385,7 @@ cost).
 | Orszag–Tang (7): recorded windows | `PROBLEM=orszag_tang N=64 T0=<t> NSTEP=2 REC_DIR=<dir> scripts/rotor_replay.py record <tag>`, then `failure_ledger.py collect <dir> <tags> --paired` (the recording carries gamma) |
 | the four-quadrant problem (7): the runs | `PROBLEM=riemann2d N=64 sbatch scripts/calea_rotor_exact.sh` (B0 sets the field); `PROBLEM=riemann2d N=64` and `N=512 TORCH_THREADS=24 sbatch scripts/calea_rotor_hlld.sh` |
 | the four fluxes at two resolutions (7) | the same with `SOLVER=hlle` and `SOLVER=hllc`; `scripts/rotor_compare.py results/r2d_64_<flux> results/r2d_512_hlld` per pair; the contour panel and the cuts were drawn from the final snapshots (levels at 0.125 dex; cuts along y at x = −0.3 and −0.15) |
+| the field tilted out of the plane (7) | `PROBLEM=riemann2d BZ_DEG=60 N=64 sbatch scripts/calea_rotor_exact.sh`; the references with `calea_rotor_hlld.sh` at N=64 and N=512 (TORCH_THREADS=24) |
 | the recovery's creeping secant (7) | `pytest tests/test_c2p.py` (the hot-fast-gas and bitwise tests); the random-batch census is the module docstring's recipe |
 | the four-unknown pilot (5a) | `scripts/pilot_four_unknowns.py results/failure_ledger_64 1394,719,1816` (samples: `--quiet`; calea, the numpy kernels are too slow for more than a lane) |
 | one planar Newton, iteration by iteration (5a) | `scripts/newton_trace.py results/failure_ledger_64 --lanes 719,1394` |
