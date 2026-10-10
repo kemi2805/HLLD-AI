@@ -233,6 +233,15 @@ _PLANAR4_SKIP_COMPOUND = os.environ.get("RMHD_PLANAR4_SKIP_COMPOUND", "0") not i
 # mask or star pressure; their refusal reason becomes "not planar" (2) in
 # both rungs' codes, without the solve. Default on; 0 restores the old path.
 _PLANAR_PRECHECK = os.environ.get("RMHD_PLANAR_PRECHECK", "1") not in ("0", "", "off")
+# The continuation rung (src/physics/continuation.py): the seven-wave solve
+# walked in from the face tilted by eps = 0.1 down to 1e-6, then polished on
+# the real face. Last, and only on lanes that are NOT planar and every other
+# rung lost -- where nothing else can answer; on a coplanar problem it is
+# never offered a lane, so it changes nothing there. Measured on the
+# four-quadrant ledger with the field tilted out of the plane: 63% of the
+# losses recovered, another root on 1 of 1,187 controls (docs section 7).
+# Opt-in until measured on a whole run.
+_CONTINUATION = os.environ.get("RMHD_CONTINUATION", "0") not in ("0", "", "off")
 # The jump conditions do not order the waves.  A fan whose rotational
 # discontinuity sits on the far side of its slow wave is self-crossing and is
 # not a Riemann solution, however small its residual -- verification cannot
@@ -807,6 +816,36 @@ def _planar_ladder(P, gamma, sL5, sR5, B5, *, r5, accuracy, max_iter):
     return out
 
 
+def _continuation_and_ray(P, gamma, sL, sR, Bn, **kw):
+    """The continuation rung's body (src/physics/continuation.py), named
+    here so that `exact_pool.map_lanes` can run it on the workers."""
+    from . import continuation as CT
+    return CT.continuation_and_ray(P, gamma, sL, sR, Bn, **kw)
+
+
+def _ml_seeds(model, scaler, L, R, Bn, n_retries):
+    """Production's seeding for arbitrary solver-frame states: the primary
+    checkpoint's candidate 0 (clamped), per-lane retry keys, and the ensemble
+    -- the primary's further candidates, then one seed per extra checkpoint.
+    The same calls in the same order as the sweep's own seeding."""
+    import numpy as np
+    from rmhd.batched import ml_b as MB
+    UL, UR = np.stack(L, axis=1), np.stack(R, axis=1)
+    cands, feats = MB.predict_unk6_k(model, scaler, UL, UR, Bn)
+    seed6, _ = MB.clamp_seed_physical(cands[0], L, R, Bn)
+    keys = MB.lane_keys(feats) if n_retries else None
+    extra = None
+    if n_retries and (len(cands) > 1 or _EXTRA_CKPTS):
+        extra = []
+        for u_k in cands[1:]:
+            extra.append(MB.clamp_seed_physical(u_k, L, R, Bn)[0])
+        for ck in _EXTRA_CKPTS:
+            m_k, s_k = _load_model_cached(_rmhd_paths.resolve(ck))
+            u_k, _ = MB.predict_unk6(m_k, s_k, UL, UR, Bn)
+            extra.append(MB.clamp_seed_physical(u_k, L, R, Bn)[0])
+    return dict(seed6=seed6, keys=keys, extra=extra)
+
+
 def _planar4_and_ray(P, gamma, sL4, sR4, B4, *, accuracy, max_iter):
     """The four-unknown planar solve, the xi = 0 ray and the physical check
     -- the rung's body, so that the failure ledger can offer lanes to it
@@ -982,6 +1021,8 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
                          planar4_kinds=np.zeros((2, 0), np.int8),
                          n_planar4_attempted=0, n_planar4_exact=0,
                          planar4_mask=np.zeros(0, bool),
+                         n_continuation_attempted=0, n_continuation_exact=0,
+                         continuation_mask=np.zeros(0, bool),
                          n_weak=int(weak.sum()), n_weak_linear=n_weak_linear,
                          weak_linear_mask=weak_linear)
         if harvester is not None:
@@ -1310,7 +1351,43 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
                 region[w] = np.asarray(r4["region"])[good]
                 take4[w] = True
 
-    take_all = take | take3 | take5 | take4
+    # ── the continuation rung (opt-in) ────────────────────────────────────
+    # Last: non-planar lanes every rung above lost, the seven-wave refusals
+    # (self-crossing fans) included. Its first rung is seeded here, where the
+    # networks live; the walk runs on the worker pool.
+    takec = np.zeros(sel.size, dtype=bool)
+    nc_att = 0
+    reasonc = np.full(sel.size, 9, dtype=np.int8)        # 9 = not offered
+    itersc = np.full(sel.size, -1, dtype=int)
+    if _CONTINUATION:
+        if not (_PLANAR_PRECHECK and (_PLANAR5_FALLBACK or _PLANAR4)) and sel.size:
+            from rmhd.batched import planar5_b as _P5B
+            planar_ok = np.asarray(_P5B.to_planar(subL, subR, subBn)[3]) <= _PLANAR_TOL
+        offered = ~take & ~take3 & ~take5 & ~take4 & ~planar_ok
+        cand = np.flatnonzero(offered)
+        nc_att = int(cand.size)
+        if cand.size:
+            from . import continuation as CT
+            from . import exact_pool
+            sLc = [c[cand] for c in subL]
+            sRc = [c[cand] for c in subR]
+            Bc = subBn[cand]
+            Lt, Rt = CT.rung0_problem(sLc, sRc, Bc)
+            seeds = _ml_seeds(model, scaler, Lt, Rt, Bc, n_retries)
+            rc = exact_pool.map_lanes("_continuation_and_ray", gamma, sLc, sRc,
+                                      Bc, seeds=seeds, accuracy=accuracy,
+                                      max_iter=max_iter, n_retries=n_retries)
+            reasonc[cand] = rc["reason"]
+            itersc[cand] = rc["n_iter"]
+            good = np.asarray(rc["good"], bool)
+            if good.any():
+                w = cand[good]
+                for j in range(7):
+                    star[j][w] = rc["star"][j][good]
+                region[w] = np.asarray(rc["region"])[good]
+                takec[w] = True
+
+    take_all = take | take3 | take5 | take4 | takec
     g = sel[take_all]
     if g.size:
         tt = lambda a: torch.tensor(a[take_all], dtype=dt)
@@ -1378,6 +1455,9 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
     # Rankine-Hugoniot conditions to the same tolerance, the contact, the
     # fan's order); the seven-wave residual is not its certificate
     verified |= take4
+    # the continuation verifies inside the rung: the full seven-wave residual
+    # to the same tolerance, in the planar frame it was produced in
+    verified |= takec
     # Degenerate-class lanes answered by solve_batch's three-wave solver are
     # counted apart: exact in the limit their class names (B_n -> 0, or an
     # Alfven wave merged with a magnetosonic one), not verified -- 3 of ~2000
@@ -1397,7 +1477,7 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
         harvester.record_coverage(
             idir, N, sel, g, np.flatnonzero(routed),
             seven=seven_ok, planar5=take5, three_wave=take3, planar4=take4,
-            degenerate=degen, verified=verified,
+            continuation=takec, degenerate=degen, verified=verified,
             bad=to_np(bad).astype(bool), weak=to_np(weak).astype(bool),
             upwind=to_np(upwind).astype(bool))
 
@@ -1430,6 +1510,13 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
         # lanes the planar rungs were not offered because their input is not
         # planar (RMHD_PLANAR_PRECHECK; none of them could have been accepted)
         n_planar_skipped_nonplanar=n_nonplanar_skipped,
+        # the continuation rung (RMHD_CONTINUATION): offered, answered, why
+        # each offered lane was refused (continuation.REASONS; 9 = not
+        # offered), its Newton iterations over the whole walk
+        n_continuation_attempted=nc_att,
+        n_continuation_exact=int(takec.sum()),
+        continuation_mask=takec, reason_cont=reasonc,
+        continuation_n_iter=itersc,
         # faces below the weak-jump gate, and how many of them the linearised
         # solver answered (RMHD_WEAK_FLUX=linear; 0 with HLLD there)
         n_weak=int(weak.sum()), n_weak_linear=n_weak_linear,

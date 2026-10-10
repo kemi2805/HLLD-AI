@@ -233,7 +233,7 @@ class Harvester:
     # what answered a face, in the order the flux assembly decides it
     COVERAGE_KEYS = ("attempted", "exact", "routed", "seven", "planar5",
                      "three_wave", "degenerate", "verified",
-                     "bad", "weak", "upwind", "planar4")
+                     "bad", "weak", "upwind", "planar4", "continuation")
 
     def record_coverage(self, idir, n_interfaces, attempted_idx, exact_idx,
                         routed_idx=None, **masks):

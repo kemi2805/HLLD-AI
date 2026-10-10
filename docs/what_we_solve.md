@@ -2330,9 +2330,45 @@ seed: the seven-wave solver from seven seeds and eight retries recovers
 only a fifth. It turns 394 of the 409 refused self-crossing fans into
 ordered roots. On the coplanar four-quadrant problem the same ladder
 recovered 17 of 1,081. As a rung for non-coplanar lanes it would take this
-run from 86.2% toward 94%, everything recoverable toward 96%; its
-false-root rate on controls (the ledger runs it on failures only) and its
-cost per lane are the two things to measure before building it.
+run from 86.2% toward 94%, everything recoverable toward 96%. On the 1,205
+controls -- faces production solves -- the same search answers 1,187
+(ladder 1,132, tube seed 55) and lands on another root once (star pressure
+off by more than 1e-3 on 1, 0.08%; the median difference 6e-12), at 4.3 s
+per face including each worker's start-up (calea job 40456): the
+continuation finds production's own root, at a moderate cost.
+
+**The continuation rung (2026-10-10).** `src/physics/continuation.py`, the
+last rung of `exact_flux`, behind `RMHD_CONTINUATION` (off by default): the
+ladder above as production code -- rung 0 at ε = 0.1 seeded by the networks
+on the tilted states, ε walked down to 1e-6 with 2/4/8 sub-steps where a
+rung fails, the untilted face polished as it is and with the rotations
+snapped, accepted on the full seven-wave residual to 1e-8 and the wave
+order in the planar frame, the ray and the physical check in the solver
+frame. It runs on the worker pool and is offered only non-planar lanes every
+other rung lost, so a coplanar problem never sees it. Its own budget: 60
+Newton iterations per solve, the ledger's. Replayed on the same 1,200 lost
+and 1,200 solved faces of this run, rung off and on (calea job 40479):
+
+| | rung off | rung on |
+|---|---|---|
+| lost faces still lost | 1,195 | 447 |
+| recovered | | **748 (62.6%)** |
+| solved faces moved | | 0 (star pressure bitwise) |
+| wall, 2,400 faces on 32 workers | 85 s | 129 s |
+
+It recovers exactly what the ledger's ladder did. On this run that would
+lift the solved fraction from 86.2% toward 94.8% for roughly 10–15% more
+wall per step. One caveat, measured: the walk now and then follows a branch
+to ANOTHER verified root than the one the seven-wave solver reaches directly
+-- on 1 of the 1,187 control answers (star pressure 0.4% off) and on 1 of the
+22 lanes of the rung's test batch on calea (3.6e-3; none on the Mac's
+slightly different faces), both from the plain polish after the full walk.
+Both answers pass production's acceptance; which one the equations select is
+the evolutionary-selection question this project has parked, not something
+the rung can settle. Tests: `tests/test_continuation_rung.py` (a coplanar batch
+bitwise untouched; with the main solve starved to two iterations the rung
+answers 19 of 23 lanes, all on the root the full-budget solver finds, to
+5e-11; the pool bitwise).
 
 **The waves.** Of the solved faces 85% rotate the field across an Alfvén
 wave (in the plane: 0.1%), a third by more than 0.1 rad, 1.2% by more than
