@@ -2307,6 +2307,33 @@ rest did not converge. Both point at the seven-wave solver's starts and
 retries on non-coplanar faces, a different question from the coplanar
 problem's missing formulation.
 
+**The ledger on its lost faces (2026-10-10; calea job 39286;
+`results/failure_ledger_r2dz_run`).** 1,200 lost and 1,200 solved faces
+sampled from the run's harvest and replayed: 1,195 lost again, 1 solved
+face lost. Offered to every method:
+
+| verdict | lost faces | of the lost |
+|---|---|---|
+| R1 a cheap method: the seven-wave from 7 seeds, 8 retries | 242 | 20.3% |
+| R2 only the expensive search | 614 | 51.4% |
+| R3 only the intermediate-shock branch | 0 | 0.0% |
+| R4 nothing | 339 | 28.4% |
+
+The opposite of the coplanar problem: 71.6% of the losses are recoverable
+with what exists, none is compound, and no method finds another root on the
+1,205 controls. The expensive search's answers come almost all from the
+**ε-ladder** (748 of 797; the tube seed adds 49): it solves the face with
+its tangential field tilted by ε = 0.1, walks ε down through eleven rungs
+to 1e-6 carrying each answer to the next, and polishes the result on the
+real face -- 719 of the 748 walked the whole way. A continuation, not a
+seed: the seven-wave solver from seven seeds and eight retries recovers
+only a fifth. It turns 394 of the 409 refused self-crossing fans into
+ordered roots. On the coplanar four-quadrant problem the same ladder
+recovered 17 of 1,081. As a rung for non-coplanar lanes it would take this
+run from 86.2% toward 94%, everything recoverable toward 96%; its
+false-root rate on controls (the ledger runs it on failures only) and its
+cost per lane are the two things to measure before building it.
+
 **The waves.** Of the solved faces 85% rotate the field across an Alfvén
 wave (in the plane: 0.1%), a third by more than 0.1 rad, 1.2% by more than
 π/2. Slow shocks are as common as in the plane (a density jump above 10% on
@@ -2350,7 +2377,10 @@ compared before the outage. Wall time at equal steps:
 | 110 | 15,586 s | 8,523 s | 1.8x |
 | 146 | 26,538 s | 14,108 s | 1.9x |
 
-The two pooled runs agree to the second. The rescues are still offered
+The two pooled runs agree to the second. On the coplanar four-quadrant
+problem the same chain with the rescues on the pool (job 39299) reproduces
+the serial run's diag file bitwise over all 369 steps, in 10.5 h against
+24.1 h (2.3x). The rescues are still offered
 to every face the seven-wave solver loses, and on a non-coplanar face each
 of them runs its Newton before refusing the answer as not planar; that is
 the work the pool spreads here. Since 2026-10-09 a planarity check skips
