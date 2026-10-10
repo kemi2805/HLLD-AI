@@ -2365,7 +2365,28 @@ to ANOTHER verified root than the one the seven-wave solver reaches directly
 slightly different faces), both from the plain polish after the full walk.
 Both answers pass production's acceptance; which one the equations select is
 the evolutionary-selection question this project has parked, not something
-the rung can settle. Tests: `tests/test_continuation_rung.py` (a coplanar batch
+the rung can settle.
+
+**The whole run with the rung on (2026-10-10, calea job 40778).** The same
+problem from t = 0 with `RMHD_CONTINUATION=1` and the planarity pre-check:
+
+| | rung on, pre-check on | rung off, no pre-check |
+|---|---|---|
+| solved | **94.90%** (940,380 of 990,884) | 86.21% |
+| answered by the continuation rung | 8.43% of the attempted | -- |
+| left to HLLD | 5.10% | 13.79% |
+| wall, 371 steps | **7.1 h** (69 s per step) | 15.4 h (149 s per step) |
+| L1(ρ) vs 512² HLLD at t = 0.4 | 0.0999 | 0.1002 |
+
+The projection from the replay holds (94.8%), the solved fraction is 93–98%
+in every tenth of the run, and the run takes half the time: the pre-check
+saves more than the rung costs. The solution barely moves -- L1(ρ) between
+the two 64² runs is 4e-3 at t = 0.4 -- as expected from 8% more exact faces
+on a problem where the exact flux closes 5–6% of the gap to the reference.
+What is still lost sits mostly on the column of x-faces at x = 0 below the
+lens, where the seven-wave refusals the rung does not recover concentrate.
+
+![tilted field with the continuation rung, solver map at t = 0.4](figs/r2dz_64_exact_cont_solver_t0.40.png) Tests: `tests/test_continuation_rung.py` (a coplanar batch
 bitwise untouched; with the main solve starved to two iterations the rung
 answers 19 of 23 lanes, all on the root the full-budget solver finds, to
 5e-11; the pool bitwise).
