@@ -187,7 +187,9 @@ def main():
                                RMHD_FAST_EDGE_SCAN=int(_SB.edge_scan_wanted()),
                                RMHD_PLANAR5_LADDER=int(_EF._PLANAR5_LADDER),
                                RMHD_PLANAR5_CROSSED=int(_EF._PLANAR5_CROSSED),
-                               RMHD_PLANAR4=int(_EF._PLANAR4)),
+                               RMHD_PLANAR4=int(_EF._PLANAR4),
+                               RMHD_PLANAR_PRECHECK=int(_EF._PLANAR_PRECHECK),
+                               RMHD_CONTINUATION=int(_EF._CONTINUATION)),
                     retries=a.exact_retries, max_iter=a.exact_max_iter)
     prev = os.path.join(out, "run_meta.json")
     if os.path.exists(prev) and not a.restart:
