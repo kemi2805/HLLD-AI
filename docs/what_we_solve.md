@@ -424,8 +424,11 @@ Three things the scaling argument did not know:
   grows 1.6x at 1e-3 and 2.1x at 0, not 7x, because a weak face solves in a
   few iterations and the wall is set by the failing lanes' retry ladders.
 
-A full run with the gate opened is section 7's Orszag–Tang (2026-10-11):
-99.8% of the faces below 1e-2 solved, the solution unchanged.
+Two full runs with the gate opened are in section 7 (2026-10-11): below
+1e-2 Orszag–Tang solves 99.8%, the four-quadrant problem 91–99% per decade;
+neither solution changes, and on the four-quadrant problem, measured like
+for like, the open gate costs 4.9x the wall and puts five times as many
+faces on HLLD. Nothing argues for opening it.
 
 ### Does the gate miss a field that turns at equal energy? (2026-10-02)
 
@@ -2540,6 +2543,60 @@ Newton. Measured on this run's busiest phase, resumed from its final restart
 for 8 steps on one node (calea job 39291): 2,092 s without the check, 433 s
 with it -- **4.8x** -- with the diag rows bitwise identical. On coplanar
 problems nothing changes: every lane passes the check.
+
+#### The weak-jump gate opened (2026-10-09 to 10-11; calea job 39297)
+
+The in-plane run again with `TAU_WEAK=1e-12` (`results/r2d_64_exact_open`),
+beside the gated run on the pool (job 39299): the same commit (354ba92), the
+same chain, both pooled, both on calea -- the like-for-like pair
+Orszag–Tang lacked.
+
+| every face | gate at 1e-2 | gate open |
+|---|---|---|
+| below the gate | 87.1% (linearised flux) | 13.1% (identical states) |
+| fan entirely upwind (exact) | 2.6% | 27.8% |
+| attempted by the exact solver | 10.4% | 59.1% |
+| of the attempted: seven-wave / planar / four-unknown / degenerate | 38.9 / 53.4 / 0.65 / 0.09% | 73.6 / 20.1 / 0.49 / 0.02% |
+| solved, of the attempted | 93.03% | 94.23% |
+| **HLLD, of every face** | **0.72%** | **3.41%** |
+| wall, 369 steps | 10.5 h (103 s per step) | 51.7 h (505 s per step): **4.9x** |
+
+By jump size (`scripts/harvest_by_jump.py`; sweeps 0–1941 of 2,214, where
+the 5M-row solved cap filled; four-unknown answers count as lost):
+
+| relative jump | faces | solved |
+|---|---|---|
+| < 1e-8 | 2,196,750 | 92.67% |
+| 1e-8 .. 1e-6 | 1,242,543 | 98.75% |
+| 1e-6 .. 1e-4 | 308,581 | 92.92% |
+| 1e-4 .. 1e-3 | 163,067 | 92.56% |
+| 1e-3 .. 1e-2 | 542,406 | 91.11% |
+| ≥ 1e-2 | 885,882 | 90.59% (gated, sweeps 0–1919: 869,664 faces, 92.06%) |
+
+Unlike Orszag–Tang's, the weak faces here are not easy. Half of what the
+open gate adds are near-identical states -- the uniform quadrants, differing
+by rounding (2.2 M faces with a jump below 1e-8) -- and the solver loses
+7.3% of them, as the rotor replay of 4c lost 22% below 1e-4. Each lost face
+goes to HLLD where the gated run gave it the linearised flux, so the share
+of all faces on HLLD rises fivefold. The strong faces do worse as well: over
+the same sweeps the open run has 16,218 more faces above 1e-2 and 14,337
+more losses among them (not traced).
+
+The solution: L1(ρ) against the 512² reference at t = 0.4 is 0.1020 open,
+0.1019 gated (HLLD 0.1100); open and gated differ by 0.09%, against the
+exact flux's 3.1% from HLLD. The diagonal symmetry (x ↔ y, which this
+problem has; HLLD 64² itself breaks it, 3.2e-5 at t = 0.05 and 9.2e-4 at
+0.4): 2.7e-6 at t = 0.05 open against 3.4e-11 gated, 1.0e-3 against 6.7e-4
+at the end.
+
+**The two problems together.** The exact solver can take the faces below
+the gate -- 99.8% of them on Orszag–Tang, 91–99% per decade here -- but
+neither solution gains (0.18% and 0.09% moves, neither towards the
+reference), and on this problem it costs 4.9x the wall and five times the
+HLLD fallbacks. The gate at 1e-2 with the linearised flux below it remains
+the better production setting. Opened, the fallback below 1e-2 should be
+the linearised flux rather than HLLD (not built).
+
 ---
 
 ## Reproducing the numbers
@@ -2567,6 +2624,7 @@ problems nothing changes: every lane passes the check.
 | the four-unknown rung, paired (5a) | `RMHD_PLANAR4=1 scripts/failure_ledger.py collect <rec> <tags> --paired --out <npz>` |
 | the defaults' run: tally, solution, cost (5a) | `scripts/harvest_summary.py results/rotor_64_exact_defaults/harvest`; `scripts/rotor_compare.py results/rotor_64_exact_defaults results/rotor_512_hlld --regions`; a rung's cost: `RMHD_WEAK_FLUX=hlld RMHD_PLANAR5_LADDER=0 scripts/failure_ledger.py collect <held-out rec> pfd pfe --paired --out <npz>` timed, one configuration per call |
 | Orszag–Tang (7): the runs | `PROBLEM=orszag_tang N=64 sbatch scripts/calea_rotor_exact.sh`; `PROBLEM=orszag_tang N=64` and `N=512 TORCH_THREADS=24 sbatch scripts/calea_rotor_hlld.sh` |
+| four-quadrant (7): the gate opened | `PROBLEM=riemann2d N=64 TAU_WEAK=1e-12 TAG=_open sbatch scripts/calea_rotor_exact.sh` (the gated baseline: `TAG=_pool`); `scripts/harvest_by_jump.py results/r2d_64_exact_open/harvest`, then the gated run's with `--max-sweep` set to the range it prints; the diagonal symmetry `mean(abs(rho - rho.T)) / mean(rho)` |
 | Orszag–Tang (7): the gate opened | `PROBLEM=orszag_tang N=64 TAU_WEAK=1e-12 TAG=_open sbatch scripts/calea_rotor_exact.sh`; by jump size `scripts/harvest_by_jump.py results/ot_64_exact_open/harvest --max-sweep 1808` (and the gated run's harvest with the same limit); the symmetry error `mean(abs(rho - rho[::-1, ::-1])) / mean(rho)` per snapshot; the mirror pairs `scripts/mirror_probe.py results/ot_64_exact_open/snap_001.npz 1.3333333333333333 1e-2` (production's env: kernels.env, the ML checkpoints, RMHD_POOL) |
 | Orszag–Tang (7): recorded windows | `PROBLEM=orszag_tang N=64 T0=<t> NSTEP=2 REC_DIR=<dir> scripts/rotor_replay.py record <tag>`, then `failure_ledger.py collect <dir> <tags> --paired` (the recording carries gamma) |
 | the four-quadrant problem (7): the runs | `PROBLEM=riemann2d N=64 sbatch scripts/calea_rotor_exact.sh` (B0 sets the field); `PROBLEM=riemann2d N=64` and `N=512 TORCH_THREADS=24 sbatch scripts/calea_rotor_hlld.sh` |
