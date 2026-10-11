@@ -61,6 +61,7 @@ started from, how far it got and why it was refused -- and
 from __future__ import annotations
 
 import argparse
+import bisect
 import glob
 import os
 import re
@@ -517,8 +518,14 @@ def collect_harvest(a):
     failed (``unsolved_*``) and every face it solved (``solved_*``; the
     planar rescue's rows tagged ``source == 1``), in the solver frame.  A
     face the run finally LOST is an unsolved row without a planar-solved twin
-    in the same shard (the four-unknown and degenerate rungs' answers are not
-    harvested as solved rows; the replay sorts those out).
+    in its shard or the next one (the four-unknown and degenerate rungs'
+    answers are not harvested as solved rows; the replay sorts those out).
+    The next one because harvests written before 2026-10-11 could flush
+    between a call's seven-wave and planar records, putting the twin one
+    shard later: matching within the shard alone counted one sweep's rescues
+    per shard as lost (114,542 against 38,411 on the gate-open Orszag-Tang
+    run).  The replay's verdict still sets the groups, so the ledger's
+    classes were unaffected; the "lost faces" count it printed was not.
 
     Uniform samples of the lost and the solved rows are replayed through the
     production path.  The harvest does not keep the sweep direction, so the
@@ -535,10 +542,29 @@ def collect_harvest(a):
         raise SystemExit("no unsolved_*.npz in %s" % a.harvest)
     lost, solved = [], []
     key = lambda A, B: [x.tobytes() + y.tobytes() for x, y in zip(A, B)]
+
+    def planar_keys(fs):
+        if not os.path.exists(fs):
+            return set()
+        z = np.load(fs)
+        p = z["source"] == 1
+        return set(key(z["U_L"][p], z["U_R"][p]))
+
+    solved_files = sorted(glob.glob(os.path.join(a.harvest, "solved_*.npz")))
     for k, fu in enumerate(files):
         u = np.load(fu)
-        s = np.load(fu.replace("unsolved_", "solved_"))
-        rescued = set(key(s["U_L"][s["source"] == 1], s["U_R"][s["source"] == 1]))
+        fs = fu.replace("unsolved_", "solved_")
+        if solved_files and fs > solved_files[-1]:
+            # past the solved cap (5M rows with --harvest-all): no twin can
+            # be looked up from here on
+            print("  stopping at %s: past the last solved shard (the cap)"
+                  % os.path.basename(fu))
+            break
+        s = (np.load(fs) if os.path.exists(fs) else   # a flush with no solved row
+             dict(U_L=np.zeros((0, 8)), U_R=np.zeros((0, 8))))
+        j = bisect.bisect_right(solved_files, fs)     # the next solved shard
+        rescued = planar_keys(fs) | planar_keys(
+            solved_files[j] if j < len(solved_files) else "")
         m = np.array([kk not in rescued for kk in key(u["U_L"], u["U_R"])], bool)
         for dst, UL, UR in ((lost, u["U_L"][m], u["U_R"][m]),
                             (solved, s["U_L"], s["U_R"])):

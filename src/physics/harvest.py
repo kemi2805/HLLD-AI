@@ -70,7 +70,9 @@ class Harvester:
                    easy majority, which is the same mistake as sampling a
                    training set uniformly from a distribution whose interesting
                    part is a thin tail.
-    flush_every    write a shard once a buffer reaches this many rows
+    flush_every    write a shard once a buffer reaches this many rows -- at
+                   the end of that call (`record_coverage`), so a shard
+                   holds whole calls
     rank           MPI rank, folded into filenames so ranks cannot collide
     """
 
@@ -98,6 +100,7 @@ class Harvester:
         self.n_unsolved = 0
         self._seen = 0             # eligible lanes seen, for the stride
         self._shard = 0
+        self._flush_due = False    # a buffer is full: flush at the call's end
         os.makedirs(out_dir, exist_ok=True)
 
     # ── recording ────────────────────────────────────────────────────────
@@ -189,10 +192,20 @@ class Harvester:
                         cls=np.asarray(cls)[idx].astype(np.int8)))
                     self.n_unsolved += idx.size
 
+        # Flush at the end of the call (`record_coverage`), never here: one
+        # exact_flux call records its seven-wave lanes and then, separately,
+        # the planar rescue's answers to some of the same faces.  A flush in
+        # between put a face's unsolved row in shard k and its planar twin in
+        # shard k+1, and the call's coverage in k+1 as well.  MEASURED
+        # 2026-10-11 on the gate-open Orszag-Tang harvest: a reader matching
+        # twins within one shard counted 114,542 faces lost where the
+        # coverage has 38,411 (HLLD + four-unknown), one sweep's rescues per
+        # shard.  Shards written before this hold that split; their readers
+        # look one shard ahead.
         if (sum(a["U_L"].shape[0] for a in self._solved) >= self.flush_every
                 or sum(a["U_L"].shape[0] for a in self._unsolved)
                 >= self.flush_every):
-            self.flush()
+            self._flush_due = True
 
     @staticmethod
     def _u8(state, Bn, idx):
@@ -289,6 +302,10 @@ class Harvester:
             rec[k] = np.packbits(full)
         self._coverage.append(rec)
         self.n_sweeps += 1
+        # the call is complete: its rows, their twins and this map go into
+        # the same shard
+        if self._flush_due:
+            self.flush()
 
     # ── output ───────────────────────────────────────────────────────────
     def flush(self):
@@ -314,6 +331,7 @@ class Harvester:
                    for k in self.COVERAGE_KEYS})
             c.clear()
         self._shard += 1
+        self._flush_due = False
 
     def summary(self):
         return dict(harvest_solved=self.n_solved,

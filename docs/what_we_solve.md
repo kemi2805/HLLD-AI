@@ -424,6 +424,9 @@ Three things the scaling argument did not know:
   grows 1.6x at 1e-3 and 2.1x at 0, not 7x, because a weak face solves in a
   few iterations and the wall is set by the failing lanes' retry ladders.
 
+A full run with the gate opened is section 7's Orszag–Tang (2026-10-11):
+99.8% of the faces below 1e-2 solved, the solution unchanged.
+
 ### Does the gate miss a field that turns at equal energy? (2026-10-02)
 
 The gate's field term is a VECTOR jump, |B_L − B_R| over |B_L| + |B_R| + √p,
@@ -2041,6 +2044,96 @@ lower seed error would buy retries, not faces.
 
 ![loss under Adam, then L-BFGS](figs/ot43_lbfgs_curves.png)
 
+**The weak-jump gate opened (2026-10-09 to 10-11; calea job 39298;
+`results/ot_64_exact_open`).** The same run with `TAU_WEAK=1e-12`, so every
+face with a real jump goes to the exact solver (git 354ba92: the rescues on
+the pool; every face here is coplanar, so the later planarity pre-check
+would skip nothing). 654 steps, as gated, in 44.2 h (243 s per step); the
+gated run's 61.6 h predates the pool, so the two walls do not compare (the
+four-quadrant pair below does).
+
+| every face | gate at 1e-2 | gate open |
+|---|---|---|
+| below the gate | 72.6% (linearised flux) | 2.9% (identical states) |
+| fan entirely upwind (f_L or f_R: exact) | 4.6% | 28.5% |
+| attempted by the exact solver | 22.8% | 68.6% |
+| of the attempted: seven-wave / planar / four-unknown / degenerate | 45.2 / 50.7 / 0.8 / 0.6% | 48.6 / 49.4 / 0.4 / 0.6% |
+| **solved, of the attempted** | **97.29%** | **98.95%** (12,496,049 of 12,628,432) |
+| HLLD, of every face | 0.62% | 0.72% |
+
+Most of what the gate took had its whole fan on one side; open, those take
+the upwind flux, and 99.3% of all faces get an exact Godunov flux. By jump
+size, from the harvest (sweeps 0–1808, t ≤ 0.47, where its 5M-row solved
+cap filled; a four-unknown answer is not harvested and counts as lost here,
+so the rates are lower bounds by at most 0.15 points):
+
+| relative jump | faces | solved |
+|---|---|---|
+| < 1e-6 | 218 | 100% |
+| 1e-6 .. 1e-4 | 307,816 | 99.68% |
+| 1e-4 .. 1e-3 | 2,359,327 | 99.73% |
+| 1e-3 .. 1e-2 | 1,253,000 | 99.85% |
+| ≥ 1e-2 | 1,111,186 | 97.37% (gated run, same sweeps: 97.36%) |
+
+**The exact solver solves the weak faces better than the strong ones** --
+99.77% of the 3.9 M below the old gate -- with no drop at small jumps (the
+rotor replay of 4c, before the four-unknown rung, fell to 77.9% below
+1e-4), and opening the gate leaves the strong faces where they were.
+(The harvester used to flush between a call's seven-wave and planar
+records, so a face's planar twin could sit one shard later; matched within
+the shard, the first version of this table counted 114,542 lost where the
+coverage has 38,411. `harvest.py` now flushes whole calls only, and
+`failure_ledger.py collect-harvest` looks one shard ahead for older
+harvests.)
+
+| t | L1 rho, gate open | gated | HLLD 64² | open vs gated at 64² |
+|---|---|---|---|---|
+| 0.25 | 0.0205 | 0.0205 | 0.0201 | 0.0005% |
+| 0.375 | 0.1676 | 0.1677 | 0.1705 | 0.04% |
+| 0.5 | 0.1916 | 0.1912 | 0.1947 | 0.08% |
+| 0.75 | 0.2498 | 0.2497 | 0.2522 | 0.11% |
+| 1.0 | 0.2637 | 0.2638 | 0.2634 | 0.18% |
+
+Opening the gate moves the 64² solution by a twelfth of what the exact
+flux moves it against HLLD (0.18% against 2.3% at t = 1), in no consistent
+direction against the reference: below the gate the linearised flux was
+already as good as the exact one, as 4c found on the rotor. The open gate
+loses one thing: where the exact solver fails below 1e-2 (0.23% of those
+faces) the fallback is HLLD, where the gated run had the linearised flux,
+25–120x closer (4c). Not built: the linearised flux as that fallback.
+
+**The π-rotation symmetry.** The initial condition is symmetric under
+(x, y) → (1 − x, 1 − y); L1 of rho minus its rotated self, over mean rho:
+
+| t | 0.125 | 0.25 | 0.375 | 0.5 | 0.75 | 1.0 |
+|---|---|---|---|---|---|---|
+| HLLD 64² | 1.7e-12 | 4.3e-12 | 7.8e-12 | 3.0e-6 | 3.2e-5 | 4.3e-5 |
+| exact, gated | 9.6e-9 | 3.6e-6 | 3.5e-3 | 5.4e-3 | 6.8e-3 | 1.2e-2 |
+| exact, gate open | 2.6e-8 | 3.7e-6 | 3.6e-3 | 5.1e-3 | 6.2e-3 | 1.1e-2 |
+
+The flow amplifies an asymmetry at about the same rate in every run; what
+differs is the seed. HLLD's is rounding, the exact flux's ~1e4 times more
+from the first steps. Measured face by face (calea job 40966: the x-faces of
+the t = 0.125 and 0.25 snapshots as cell-average pairs, each solved through
+production's path beside its π-rotated twin (R*, L*), whose flux must be
+−R(F)):
+
+| pair | t = 0.125 | t = 0.25 | mirror defect, p50 / p90 / max |
+|---|---|---|---|
+| both solved | 1,926 | 2,191 | 3e-12 / 2e-10–1e-9 / 2e-7 |
+| one solved, its twin left to HLLD | 8 | 15 | 1.5e-3–3.4e-3 / up to 1.4e-2 / 1.5e-2 |
+| HLLD on the same pairs | 4,096 | 4,096 | 0 / 1e-13 / 6e-10 |
+
+Both kinds break the symmetry, but summed over the faces the second
+outweighs the first at least 400 times: the asymmetry is seeded where the
+solve's OUTCOME is not mirror-symmetric (0.4–0.7% of the pairs), not by
+the Newton tolerance. By t = 1 the exact runs are 250 times less symmetric
+than HLLD's -- the rotor shows the same (5a: 1.6e-2 against 5.9e-3) -- and
+the asymmetry alone is half the exact-vs-HLLD difference above (1.2%
+against 2.3%, the same normalisation). Not built: solving each face in one
+canonical orientation, which would make the pair identical by construction;
+a higher solve rate shrinks the seed too.
+
 ### The four-quadrant Riemann problem with a field (2026-10-06)
 
 Kiuchi et al. (2022) show the relativistic four-quadrant Riemann problem of
@@ -2474,6 +2567,7 @@ problems nothing changes: every lane passes the check.
 | the four-unknown rung, paired (5a) | `RMHD_PLANAR4=1 scripts/failure_ledger.py collect <rec> <tags> --paired --out <npz>` |
 | the defaults' run: tally, solution, cost (5a) | `scripts/harvest_summary.py results/rotor_64_exact_defaults/harvest`; `scripts/rotor_compare.py results/rotor_64_exact_defaults results/rotor_512_hlld --regions`; a rung's cost: `RMHD_WEAK_FLUX=hlld RMHD_PLANAR5_LADDER=0 scripts/failure_ledger.py collect <held-out rec> pfd pfe --paired --out <npz>` timed, one configuration per call |
 | Orszag–Tang (7): the runs | `PROBLEM=orszag_tang N=64 sbatch scripts/calea_rotor_exact.sh`; `PROBLEM=orszag_tang N=64` and `N=512 TORCH_THREADS=24 sbatch scripts/calea_rotor_hlld.sh` |
+| Orszag–Tang (7): the gate opened | `PROBLEM=orszag_tang N=64 TAU_WEAK=1e-12 TAG=_open sbatch scripts/calea_rotor_exact.sh`; by jump size `scripts/harvest_by_jump.py results/ot_64_exact_open/harvest --max-sweep 1808` (and the gated run's harvest with the same limit); the symmetry error `mean(abs(rho - rho[::-1, ::-1])) / mean(rho)` per snapshot; the mirror pairs `scripts/mirror_probe.py results/ot_64_exact_open/snap_001.npz 1.3333333333333333 1e-2` (production's env: kernels.env, the ML checkpoints, RMHD_POOL) |
 | Orszag–Tang (7): recorded windows | `PROBLEM=orszag_tang N=64 T0=<t> NSTEP=2 REC_DIR=<dir> scripts/rotor_replay.py record <tag>`, then `failure_ledger.py collect <dir> <tags> --paired` (the recording carries gamma) |
 | the four-quadrant problem (7): the runs | `PROBLEM=riemann2d N=64 sbatch scripts/calea_rotor_exact.sh` (B0 sets the field); `PROBLEM=riemann2d N=64` and `N=512 TORCH_THREADS=24 sbatch scripts/calea_rotor_hlld.sh` |
 | the four fluxes at two resolutions (7) | the same with `SOLVER=hlle` and `SOLVER=hllc`; `scripts/rotor_compare.py results/r2d_64_<flux> results/r2d_512_hlld` per pair; the contour panel and the cuts were drawn from the final snapshots (levels at 0.125 dex; cuts along y at x = −0.3 and −0.15) |
