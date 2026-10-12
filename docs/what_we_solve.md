@@ -2671,8 +2671,46 @@ under its 1e-8 residual, and a tiny change can cost or gain an iteration.
 The batch is irrelevant: the same faces in reversed order give the same
 fluxes to the bit.
 
-Whole runs with the rule kept (both problems, and the four-quadrant pair from
-the symmetric field) are in progress; their results go here.
+**Whole runs** (2026-10-12; calea jobs 41044/41045 Orszag–Tang, first rule
+and plain; 41243, 41373/41374 the four-quadrant problem, second rule on the
+old field, and canonical/plain from the symmetric field; every arm on the
+same code, pooled, one node each):
+
+| | plain | canonical |
+|---|---|---|
+| **four-quadrant, symmetric field:** solved of attempted | 93.03% | 93.06% |
+| x-faces / y-faces | 93.06 / 92.99% | 93.06 / 93.06% |
+| seven-wave / planar answers | 38.9 / 53.4% | 56.7 / 35.7% |
+| x ↔ y asymmetry at t = 0.05 / 0.2 / 0.4 | 2.1e-8 / 1.2e-5 / 6.2e-4 | **0 / 0 / 0** |
+| L1(ρ) against the 512² reference, t = 0.4 | 0.1019 | 0.1018 |
+| wall per step | 102.7 s | 92.5 s |
+| **Orszag–Tang** (first rule): solved of attempted | 97.31% | 97.46% |
+| seven-wave / planar answers | 45.2 / 50.8% | 67.2 / 29.3% |
+| π-asymmetry at t = 0.125 / 0.375 / 1 | 9.6e-9 / 4.3e-3 / 1.2e-2 | 1.3e-13 / 5.9e-5 / 6.2e-4 |
+| L1(ρ) against the 512² reference, t = 0.375 / 1 | 0.1678 / 0.2638 | 0.1692 / 0.2644 |
+| wall per step | 147.5 s | 111.4 s |
+
+On the four-quadrant problem from the symmetric field the canonical run is
+symmetric to the bit for the whole run, in every field (ρ, p, v_x ↔ v_y,
+B_x ↔ B_y at t = 0.4: maximum difference 0.0); HLLD's own run breaks the
+symmetry at 3e-5 by t = 0.05. On Orszag–Tang the asymmetry still grows, to
+a twentieth of the plain run's: there neither the initial data nor the
+scheme is π-symmetric to the bit (HLLD's run is at 1.7e-12 by t = 0.125), and
+on the hard faces the solver's outcome amplifies differences that small.
+Everywhere the canonical solve answers a few more faces, the seven-wave
+Newton answers half again as many (the in-plane field always in t1, B_n ≥ 0),
+and the wall drops 10–25%; the solution against the reference does not move.
+The same rule on the old field (41243): 93.06% solved, 92.9 s per step,
+L1 0.1020 -- and the first-step asymmetry the old field allows.
+
+![The asymmetry over time, plain against canonical](figs/canonical_symmetry.png)
+
+The plain Orszag–Tang run of today's code (41045) is not bitwise the run of
+2026-10-06 (`results/ot_64_exact`): 1e-10 apart at t = 0.125, 0.2 at single
+points by t = 0.375 -- the chaos of a 64² vortex amplifying a change in
+between (the c2p continuation of 2026-10-06 is the likely one, not
+checked). The table compares runs of the same code. A whole Orszag–Tang run
+with the rule kept is still in progress.
 
 ---
 
