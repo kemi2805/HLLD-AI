@@ -165,7 +165,14 @@ def riemann2d(grid, eos, B0: float = 0.5, angle_deg: float = 45.0,
                            torch.where(right, full(br), full(bl)))
 
     a, b = math.radians(angle_deg), math.radians(angle_z_deg)
-    bx, by, bz = B0 * math.cos(a) * math.cos(b), B0 * math.sin(a) * math.cos(b), B0 * math.sin(b)
+    ca, sa = math.cos(a), math.sin(a)
+    if angle_deg == 45.0:
+        # cos and sin of pi/4 differ in the last bit, which is enough to
+        # break the problem's x <-> y symmetry in the first step wherever the
+        # solver's outcome is sensitive (the shear-line faces: a canonical
+        # run's mirror faces got exact and HLLD fluxes, 5e-4 apart)
+        sa = ca
+    bx, by, bz = B0 * ca * math.cos(b), B0 * sa * math.cos(b), B0 * math.sin(b)
     prims = {
         "rho": pick(0.1, 0.1, 0.5, 0.1),
         "p": pick(1.0, 0.01, 1.0, 1.0),

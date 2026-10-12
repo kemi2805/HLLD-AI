@@ -2133,9 +2133,20 @@ solve's OUTCOME is not mirror-symmetric (0.4–0.7% of the pairs), not by
 the Newton tolerance. By t = 1 the exact runs are 250 times less symmetric
 than HLLD's -- the rotor shows the same (5a: 1.6e-2 against 5.9e-3) -- and
 the asymmetry alone is half the exact-vs-HLLD difference above (1.2%
-against 2.3%, the same normalisation). Not built: solving each face in one
-canonical orientation, which would make the pair identical by construction;
-a higher solve rate shrinks the seed too.
+against 2.3%, the same normalisation). Solving every face in one canonical
+orientation removes it (`RMHD_CANONICAL`, the end of this section).
+
+![Orszag–Tang density at t = 0.5 and 1: the 512² reference, HLLD 64², the exact flux gated and with the gate open](figs/ot_density_compare.png)
+
+![Distance to the 512² reference and the π-rotation asymmetry over time](figs/ot_l1_symmetry.png)
+
+![Which solver answered each face, gate open, t = 1](figs/ot_64_exact_open/ot_64_exact_open_solver_t1.00.png)
+
+The solver map shows the frame at work: the x-faces are answered mostly by
+the seven-wave solver, the y-faces mostly by the planar rescue. The solver
+frame is cyclic -- (x, y, z) for an x-face, (y, z, x) for a y-face -- so the
+in-plane tangential field sits in t1 on one and in t2 on the other, and the
+seven-wave Newton converges on the first far more often.
 
 ### The four-quadrant Riemann problem with a field (2026-10-06)
 
@@ -2597,6 +2608,72 @@ HLLD fallbacks. The gate at 1e-2 with the linearised flux below it remains
 the better production setting. Opened, the fallback below 1e-2 should be
 the linearised flux rather than HLLD (not built).
 
+#### Every face in one canonical orientation (2026-10-11/12)
+
+`src/physics/canonical.py`, behind `RMHD_CANONICAL` (default off). A face's
+Riemann problem has 32 exact symmetries that act by exchanges and sign flips
+alone: the reflection (left and right exchanged, the normal components
+negated), the signed exchanges of the two tangential axes, and B → −B. Each
+face is replaced by the canonical member of its orbit, solved in the x-frame
+and the answer mapped back -- the flux as F = A⁻¹F′, or −PA⁻¹F′ when the
+element reflects (A the tangential map and the sign of B, P the negation of
+the normal components). Two faces related by any of the 32 then reduce to the
+same problem bit for bit and get the same answer, and x- and y-faces no
+longer see different frames. Components a face's own symmetry forces to zero
+(every 2D face's z) are set to zero, so a face that reaches its canonical
+problem through two elements gets one answer.
+
+**Which member is canonical matters.** The first rule -- the lexicographically
+smallest by (ρ, p, v, B) of the left state, then the right, compared exactly --
+had two faults. Rounding noise chose the orientation wherever two values
+nearly tie: on the four-quadrant problem at t = 0.05, 1,364 of 4,032 mirror
+pairs whose inputs agree to 1.5e-7 were solved in different orientations
+(the uniform quadrants: ρ_L ≈ ρ_R, v_t ≈ 0). And the smallest made B_n ≤ 0,
+while the seed networks were trained on B_n > 0 only: on the tests' fixture
+the plain solver solves 29 of 32 faces as generated and 23 of their mirror
+images. The rule kept compares −B_n first (every face is solved with B_n ≥ 0),
+then the two states, treating values within 1e-7 of the face's own scale as
+equal, and breaks the remaining ties exactly (which keeps exact images bit
+for bit equivariant). On the fixture it solves 58 of 64 at production's
+Newton budget against the plain solver's 52 -- every mirror image as its
+generated twin -- and 34 against 22 at a budget of 4.
+
+**Measured so far** (calea jobs 41042, 41241, 41044, 41046, 41352, 41366):
+
+| | plain | canonical |
+|---|---|---|
+| Orszag–Tang mirror pairs (t = 0.125 / 0.25): one face exact, its twin on HLLD | 8 / 15 | 0 / 0 |
+| ... pairs bit for bit identical | 8–11% | 100% |
+| Orszag–Tang whole run (first rule), π-asymmetry at t = 0.125 / 0.25 / 0.375 / 0.5 | 9.6e-9 / 3.6e-6 / 3.5e-3 / 5.4e-3 | 1.3e-13 / 9.2e-10 / 5.9e-5 / 2.9e-4 |
+| four-quadrant whole run (first rule): solved / x-faces / y-faces | 93.03 / 93.07 / 92.99% | 93.01 / 93.01 / 93.01% |
+| ... seven-wave / planar answers, of the attempted | 38.9 / 53.4% | 55.5 / 36.9% |
+| ... wall per step | 102.9 s | 99.0 s |
+
+(HLLD's own Orszag–Tang run: 1.7e-12 at t = 0.125.) On the four-quadrant
+problem the first canonical run broke the diagonal symmetry in its first
+step and kept that level (8e-8 at t = 0.05 against the plain run's 3e-11).
+The cause was the problem, not the rule: cos and sin of π/4 differ in the
+last bit, so the 45° field was not exactly symmetric under x ↔ y, and on the
+hard shear-line faces that is enough for the canonical solve to give one
+mirror face an exact flux and the other HLLD's. With the field built from
+one value (`initial_data2d.riemann2d`; a test now checks the problem is
+symmetric to the bit) the canonical run's first ten steps are exactly
+symmetric, every field, every step, while the plain run's asymmetry goes
+from 4e-14 to 1e-12 over the same steps.
+(The four-quadrant runs above used the old field; a run of the same problem
+today differs from them in the last bits.)
+
+Why bit-identical inputs matter: the exact flux is not a smooth function of
+its input at the rounding level. Measured on the four-quadrant x-faces (job
+41255), 1e-14 relative noise on the inputs moves the flux by a median 1e-13
+but up to 3e-8 (3e-5 at t = 0.2) -- the Newton stops at the first iterate
+under its 1e-8 residual, and a tiny change can cost or gain an iteration.
+The batch is irrelevant: the same faces in reversed order give the same
+fluxes to the bit.
+
+Whole runs with the rule kept (both problems, and the four-quadrant pair from
+the symmetric field) are in progress; their results go here.
+
 ---
 
 ## Reproducing the numbers
@@ -2624,6 +2701,7 @@ the linearised flux rather than HLLD (not built).
 | the four-unknown rung, paired (5a) | `RMHD_PLANAR4=1 scripts/failure_ledger.py collect <rec> <tags> --paired --out <npz>` |
 | the defaults' run: tally, solution, cost (5a) | `scripts/harvest_summary.py results/rotor_64_exact_defaults/harvest`; `scripts/rotor_compare.py results/rotor_64_exact_defaults results/rotor_512_hlld --regions`; a rung's cost: `RMHD_WEAK_FLUX=hlld RMHD_PLANAR5_LADDER=0 scripts/failure_ledger.py collect <held-out rec> pfd pfe --paired --out <npz>` timed, one configuration per call |
 | Orszag–Tang (7): the runs | `PROBLEM=orszag_tang N=64 sbatch scripts/calea_rotor_exact.sh`; `PROBLEM=orszag_tang N=64` and `N=512 TORCH_THREADS=24 sbatch scripts/calea_rotor_hlld.sh` |
+| canonical orientation (7) | `RMHD_CANONICAL=1` on any exact run (`calea_rotor_exact.sh` passes it through); the mirror pairs `scripts/mirror_probe.py <snapshot> <gamma> 1e-2` with and without it |
 | four-quadrant (7): the gate opened | `PROBLEM=riemann2d N=64 TAU_WEAK=1e-12 TAG=_open sbatch scripts/calea_rotor_exact.sh` (the gated baseline: `TAG=_pool`); `scripts/harvest_by_jump.py results/r2d_64_exact_open/harvest`, then the gated run's with `--max-sweep` set to the range it prints; the diagonal symmetry `mean(abs(rho - rho.T)) / mean(rho)` |
 | Orszag–Tang (7): the gate opened | `PROBLEM=orszag_tang N=64 TAU_WEAK=1e-12 TAG=_open sbatch scripts/calea_rotor_exact.sh`; by jump size `scripts/harvest_by_jump.py results/ot_64_exact_open/harvest --max-sweep 1808` (and the gated run's harvest with the same limit); the symmetry error `mean(abs(rho - rho[::-1, ::-1])) / mean(rho)` per snapshot; the mirror pairs `scripts/mirror_probe.py results/ot_64_exact_open/snap_001.npz 1.3333333333333333 1e-2` (production's env: kernels.env, the ML checkpoints, RMHD_POOL) |
 | Orszag–Tang (7): recorded windows | `PROBLEM=orszag_tang N=64 T0=<t> NSTEP=2 REC_DIR=<dir> scripts/rotor_replay.py record <tag>`, then `failure_ledger.py collect <dir> <tags> --paired` (the recording carries gamma) |

@@ -242,6 +242,13 @@ _PLANAR_PRECHECK = os.environ.get("RMHD_PLANAR_PRECHECK", "1") not in ("0", "", 
 # losses recovered, another root on 1 of 1,187 controls (docs section 7).
 # Opt-in until measured on a whole run.
 _CONTINUATION = os.environ.get("RMHD_CONTINUATION", "0") not in ("0", "", "off")
+# Solve each face as the canonical member of its symmetry orbit (reflection,
+# signed exchanges of the tangential axes, the sign of B) in the x-frame, and
+# map the answer back (src/physics/canonical.py).  Mirror-image faces then get
+# mirror-image fluxes by construction; without it, 0.4-0.7% of Orszag-Tang's
+# mirror pairs had one face solved and the other on HLLD (calea job 40966).
+# Opt-in: it changes which frame every face is solved in.
+_CANONICAL = os.environ.get("RMHD_CANONICAL", "0") not in ("0", "", "off")
 # The jump conditions do not order the waves.  A fan whose rotational
 # discontinuity sits on the far side of its slow wave is self-crossing and is
 # not a Riemann solution, however small its residual -- verification cannot
@@ -914,7 +921,8 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
                        fallback=hlld_flux, tau_weak: float = 1e-6,
                        tau_bt: float = 1e-9,
                        accuracy: float = 1e-8, max_iter: int = 40,
-                       n_retries: int = 0, harvester=None):
+                       n_retries: int = 0, harvester=None,
+                       _record_idir=None):
     """Godunov flux from the exact solution at ``xi = 0``, batched.
 
     Same contract as :func:`exact_flux` and as ``hlld_flux``, so ``sweep()``
@@ -925,7 +933,20 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
     lane that fails ANY gate keeps a valid flux rather than a hole, and the
     negative ``p_star`` sentinel ``hlld_flux`` wrote survives on exactly those
     lanes, which is what ``tests/test_idir.py``'s branch-flip logic reads.
+
+    With ``RMHD_CANONICAL`` every face is solved as the canonical member of its
+    symmetry orbit in the x-frame and the answer mapped back
+    (``src/physics/canonical.py``); ``_record_idir`` is that call's way of
+    passing the face direction on to the harvest's coverage map.
     """
+    if _CANONICAL and _record_idir is None:
+        from .canonical import canonical_flux
+        return canonical_flux(
+            exact_flux_batched, sL, sR, eos, idir, model=model, scaler=scaler,
+            fallback=fallback, tau_weak=tau_weak, tau_bt=tau_bt,
+            accuracy=accuracy, max_iter=max_iter, n_retries=n_retries,
+            harvester=harvester)
+    rec_idir = idir if _record_idir is None else _record_idir
     P = _batched_parts(_check_eos(eos))
     np = P["np"]
     RAY = P["ray"]
@@ -1029,7 +1050,7 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
             # nothing was attempted, so the map is all gate reasons -- which
             # is exactly what makes a sweep like the rotor's t = 0 x-sweep
             # legible afterwards
-            harvester.record_coverage(idir, N, np.zeros(0, dtype=int),
+            harvester.record_coverage(rec_idir, N, np.zeros(0, dtype=int),
                                       np.zeros(0, dtype=int),
                                       np.flatnonzero(routed),
                                       bad=to_np(bad).astype(bool),
@@ -1475,7 +1496,7 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
     if harvester is not None:
         seven_ok = take & np.isin(cls, (C.FULL7, C.COPLANAR))
         harvester.record_coverage(
-            idir, N, sel, g, np.flatnonzero(routed),
+            rec_idir, N, sel, g, np.flatnonzero(routed),
             seven=seven_ok, planar5=take5, three_wave=take3, planar4=take4,
             continuation=takec, degenerate=degen, verified=verified,
             bad=to_np(bad).astype(bool), weak=to_np(weak).astype(bool),

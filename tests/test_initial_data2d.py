@@ -54,6 +54,18 @@ def test_the_field_is_uniform_at_the_asked_strength_and_angle():
         assert torch.allclose(prims["By"], torch.full_like(prims["By"], by), atol=1e-15)
 
 
+def test_the_45_degree_problem_is_exactly_diagonal_symmetric():
+    """x <-> y maps the problem onto itself (top-left and bottom-right
+    exchange, the field at 45 degrees is unchanged), and the arrays must
+    say so to the bit: cos and sin of pi/4 differ in the last bit, which a
+    canonical-orientation run turned into exact-vs-HLLD fluxes on mirror
+    faces in its first step."""
+    g, prims, Bxf, Byf = _setup(n=32, B0=0.5, angle_deg=45.0)
+    for a, b in (("rho", "rho"), ("p", "p"), ("vx", "vy"), ("Bx", "By"), ("Bz", "Bz")):
+        assert torch.equal(prims[a], prims[b].T), (a, b)
+    assert torch.equal(Bxf, Byf.T)
+
+
 def test_the_staggered_field_is_divergence_free():
     g, _, Bxf, Byf = _setup(n=32)
     div = ((Bxf[1:, :] - Bxf[:-1, :]) / g.dx + (Byf[:, 1:] - Byf[:, :-1]) / g.dy)

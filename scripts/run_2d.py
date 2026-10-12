@@ -189,7 +189,8 @@ def main():
                                RMHD_PLANAR5_CROSSED=int(_EF._PLANAR5_CROSSED),
                                RMHD_PLANAR4=int(_EF._PLANAR4),
                                RMHD_PLANAR_PRECHECK=int(_EF._PLANAR_PRECHECK),
-                               RMHD_CONTINUATION=int(_EF._CONTINUATION)),
+                               RMHD_CONTINUATION=int(_EF._CONTINUATION),
+                               RMHD_CANONICAL=int(_EF._CANONICAL)),
                     retries=a.exact_retries, max_iter=a.exact_max_iter)
     prev = os.path.join(out, "run_meta.json")
     if os.path.exists(prev) and not a.restart:
