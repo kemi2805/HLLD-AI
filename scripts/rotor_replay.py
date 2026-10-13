@@ -11,6 +11,11 @@
                           convergence masks for `compare`
     compare <A.npz> <B.npz>
                           paired per-lane convergence of two replays (McNemar)
+    reanswer <any> <tag>  keep each recorded sweep's INPUTS and overwrite its
+                          outputs with the current env's -- how the bitwise
+                          gate's baseline follows a deliberate change of the
+                          production defaults (re-recording would re-evolve
+                          and change every later sweep's inputs as well)
 
 Why: comparing two full runs conflates "different answer on the same input"
 with "different input because an earlier sweep differed".  Recording the
@@ -63,7 +68,7 @@ if __name__ == "__main__":   # guarded: RMHD_POOL workers import this module
     if MODE == "record" and PROBLEM not in PROBLEMS:
         sys.exit(f"PROBLEM={PROBLEM}: not one of {', '.join(PROBLEMS)}")
     GAMMA = PROBLEMS.get(PROBLEM, PROBLEMS["rotor"])[1]
-    if MODE == "replay":
+    if MODE in ("replay", "reanswer"):
         # the recording says which gamma it was made with (rotor ones predate
         # the field and are 5/3)
         first = os.path.join(REC_DIR, f"sweep_{sys.argv[3]}_1.pt")
@@ -92,6 +97,22 @@ if __name__ == "__main__":   # guarded: RMHD_POOL workers import this module
         sys.exit(0)
 
     print(MODE, TAG, kern, flush=True)
+
+    if MODE == "reanswer":
+        REF = sys.argv[3]
+        pat = re.compile(r"^sweep_%s_(\d+)\.pt$" % re.escape(REF))
+        n_sweeps = len([f for f in os.listdir(REC_DIR) if pat.match(f)])
+        for k in range(1, n_sweeps + 1):
+            path = rec_path(REF, k)
+            rec = torch.load(path)
+            out = base(rec["sL"], rec["sR"], eos, idir=rec["idir"])
+            d = dict(LAST_DIAG)
+            before = int(rec["exact_mask"].sum())
+            rec.update(F=out[0], U=out[1], p_star=out[2], exact_mask=d["exact_mask"],
+                       n_exact=d["n_exact"], n_attempted=d["n_attempted"])
+            torch.save(rec, path)
+            print(f"sweep {k} idir={rec['idir']}: exact {before} -> {d['n_exact']}", flush=True)
+        sys.exit(0)
 
     if MODE == "record":
         N = int(os.environ.get("N", "32"))

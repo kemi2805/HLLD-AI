@@ -57,6 +57,19 @@ def _hlld(cL, cR, eos, idir=0, _record_idir=None, **kw):
     return hlld_flux(cL, cR, eos, idir=idir)
 
 
+def test_on_is_the_default():
+    import os
+    import src.physics.exact_flux as EF
+    saved = os.environ.pop("RMHD_CANONICAL", None)
+    try:
+        EF = importlib.reload(EF)
+        assert EF._CANONICAL is True
+    finally:
+        if saved is not None:
+            os.environ["RMHD_CANONICAL"] = saved
+        importlib.reload(EF)
+
+
 @pytest.mark.parametrize("idir", [0, 1, 2])
 def test_every_image_reduces_to_the_same_problem(idir):
     sL, sR = _random(1 + idir, 400, idir)

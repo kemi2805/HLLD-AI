@@ -527,6 +527,11 @@ keeps a valid flux.
       │     weak     relative jump < 1e-2: exact and HLLD agree to O(jump²)
       │     upwind   the whole fan lies on one side: HLLD is already exact
       │
+      ├─ CANONICAL ORIENTATION: every face is replaced by the canonical
+      │     member of its symmetry orbit (reflection, signed exchanges of the
+      │     tangential axes, B -> -B; B_n >= 0), solved in the x-frame, and
+      │     the answer mapped back  (RMHD_CANONICAL, on since 2026-10-13)
+      │
       ├─ ATTEMPTED faces (about 12% of face-evaluations on the rotor)
       │     ML seed  ->  seven-wave Newton, up to 3 rounds x 40 iterations
       │     accept if: converged, ray resolved, state physical, fan ordered
@@ -537,7 +542,11 @@ keeps a valid flux.
       │       + six more starts, and the self-crossing refusals
       │                                 (RMHD_PLANAR5_LADDER / _CROSSED, on)
       │     three-wave solver         (off: it is not exact)
-      │     four-unknown planar solver, last  (RMHD_PLANAR4, on)
+      │     four-unknown planar solver (RMHD_PLANAR4, on)
+      │       -- the planar rungs only on faces planar to 1e-6
+      │                                 (RMHD_PLANAR_PRECHECK, on)
+      │     continuation in a tilt angle, last; non-planar faces only
+      │                                 (RMHD_CONTINUATION, off)
       │
       ├─ the faces BELOW the weak-jump gate: the linearised solver
       │                                 (RMHD_WEAK_FLUX=linear, on; never "exact")

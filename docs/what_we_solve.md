@@ -2707,7 +2707,8 @@ the linearised flux rather than HLLD (not built).
 
 #### Every face in one canonical orientation (2026-10-11/12)
 
-`src/physics/canonical.py`, behind `RMHD_CANONICAL` (default off). A face's
+`src/physics/canonical.py`, behind `RMHD_CANONICAL` (on by default since 2026-10-13,
+the user's decision after the whole runs below; `RMHD_CANONICAL=0` turns it off). A face's
 Riemann problem has 32 exact symmetries that act by exchanges and sign flips
 alone: the reflection (left and right exchanged, the normal components
 negated), the signed exchanges of the two tangential axes, and B → −B. Each
@@ -2839,7 +2840,7 @@ checked). The table compares runs of the same code.
 | Orszag–Tang (7): the runs | `PROBLEM=orszag_tang N=64 sbatch scripts/calea_rotor_exact.sh`; `PROBLEM=orszag_tang N=64` and `N=512 TORCH_THREADS=24 sbatch scripts/calea_rotor_hlld.sh` |
 | how exact the fluxes are (5b) | `scripts/accuracy_probe.py <snapshot> <gamma>` (production env; calea job 41731) |
 | Orszag–Tang in 2D (7) | `scripts/plot_ot2d.py <base> <outdir>` |
-| canonical orientation (7) | `RMHD_CANONICAL=1` on any exact run (`calea_rotor_exact.sh` passes it through); the mirror pairs `scripts/mirror_probe.py <snapshot> <gamma> 1e-2` with and without it |
+| canonical orientation (7) | on by default; `RMHD_CANONICAL=0` for the plain solver (`calea_rotor_exact.sh` passes it through); the mirror pairs `scripts/mirror_probe.py <snapshot> <gamma> 1e-2` with and without it |
 | four-quadrant (7): the gate opened | `PROBLEM=riemann2d N=64 TAU_WEAK=1e-12 TAG=_open sbatch scripts/calea_rotor_exact.sh` (the gated baseline: `TAG=_pool`); `scripts/harvest_by_jump.py results/r2d_64_exact_open/harvest`, then the gated run's with `--max-sweep` set to the range it prints; the diagonal symmetry `mean(abs(rho - rho.T)) / mean(rho)` |
 | Orszag–Tang (7): the gate opened | `PROBLEM=orszag_tang N=64 TAU_WEAK=1e-12 TAG=_open sbatch scripts/calea_rotor_exact.sh`; by jump size `scripts/harvest_by_jump.py results/ot_64_exact_open/harvest --max-sweep 1808` (and the gated run's harvest with the same limit); the symmetry error `mean(abs(rho - rho[::-1, ::-1])) / mean(rho)` per snapshot; the mirror pairs `scripts/mirror_probe.py results/ot_64_exact_open/snap_001.npz 1.3333333333333333 1e-2` (production's env: kernels.env, the ML checkpoints, RMHD_POOL) |
 | Orszag–Tang (7): recorded windows | `PROBLEM=orszag_tang N=64 T0=<t> NSTEP=2 REC_DIR=<dir> scripts/rotor_replay.py record <tag>`, then `failure_ledger.py collect <dir> <tags> --paired` (the recording carries gamma) |

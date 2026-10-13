@@ -247,8 +247,12 @@ _CONTINUATION = os.environ.get("RMHD_CONTINUATION", "0") not in ("0", "", "off")
 # map the answer back (src/physics/canonical.py).  Mirror-image faces then get
 # mirror-image fluxes by construction; without it, 0.4-0.7% of Orszag-Tang's
 # mirror pairs had one face solved and the other on HLLD (calea job 40966).
-# Opt-in: it changes which frame every face is solved in.
-_CANONICAL = os.environ.get("RMHD_CANONICAL", "0") not in ("0", "", "off")
+# Production default since 2026-10-13 (the user's decision), after whole runs:
+# Orszag-Tang 97.31 -> 97.67% solved, pi-asymmetry 700x smaller at t = 1,
+# 1.5x faster; the four-quadrant problem bitwise x <-> y symmetric, 10%
+# faster; L1 against the 512^2 references unchanged.  RMHD_CANONICAL=0 turns
+# it off.
+_CANONICAL = os.environ.get("RMHD_CANONICAL", "1") not in ("0", "", "off")
 # The jump conditions do not order the waves.  A fan whose rotational
 # discontinuity sits on the far side of its slow wave is self-crossing and is
 # not a Riemann solution, however small its residual -- verification cannot
