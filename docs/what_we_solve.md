@@ -1580,6 +1580,56 @@ rather than in the convergence.)
    but a materially better-localised answer on the population the rotor
    actually presents.
 
+### How far from the root is an accepted flux? (2026-10-13)
+
+The x-faces of four snapshots -- Orszag–Tang at t = 0.25, 0.5, 1 and the
+four-quadrant problem at t = 0.2, cell-average pairs, production's path --
+solved at production's tolerance (residual 1e-8, 40 iterations) and again at
+1e-12 (60 iterations; calea job 41731, `scripts/accuracy_probe.py`). The
+tight answer stands for the root; the difference is the production flux's
+error. Ranges are over the four snapshots:
+
+| answered by | faces | iterations at 1e-8, p50 / p90 / max | 1e-12 within one more iteration / after more than five | flux error p50 / p90 / max |
+|---|---|---|---|---|
+| seven-wave | 7,121 | 4 / 5–6 / 99 | 31–43% / 13–18% | 2–6e-12 / 2–6e-10 / 9.4e-7 |
+| planar | 2,811 | 4 / 4–5 / 128 | 62–90% / 0–6% | 0–7e-11 / 1e-10–9e-8 / 2.6e-7 |
+| four-unknown | 51 | 26–27 / 34–47 / 53 | 29–80% / 0–14% | ≤ 2e-10 throughout |
+| degenerate class | 44 | -- | -- | ≤ 8e-12 / ≤ 6e-10 / 3e-9 |
+
+No face's flux moved by 1e-6 between the two tolerances, so none changed
+root. The seven-wave answers came from the first seed on 95–96% of
+Orszag–Tang's faces and 84% of the four-quadrant problem's.
+
+**Three convergence regimes, and a fourth outcome.**
+
+* **Quadratic** -- the bulk. The seven-wave Newton from the network's seed
+  and the planar rescue both stop after a median of four iterations, and
+  because the last step squares the error the accepted answer lands far
+  below the 1e-8 threshold: a median flux error of 1e-12 to 1e-11, p90 near
+  1e-10. Most planar answers reach 1e-12 in one more step.
+* **Linear** -- a tail of the seven-wave solver. On 13–18% of its answers
+  1e-12 costs more than five further iterations: the Newton has left the
+  quadratic regime. Every face of these problems is coplanar, where the
+  rotation-angle unknowns are degenerate and the Jacobian nearly singular
+  (Test 2 above, kappa up to 1e10). The tolerance still holds the flux: the
+  worst error is 9.4e-7.
+* **Slow and globalised** -- the four-unknown rung: a median 26 iterations,
+  accurate to 2e-10, but with a precision floor: 23 of its 51 answers cannot
+  be pushed to 1e-12. The seven-wave solver has that floor on 20 of 7,121.
+* **Lost, not nearly converged.** Of the 461 faces left to HLLD, the tighter
+  tolerance and 50% more iterations rescue one. The losses are structural
+  (Section 5a: no reachable root, compound waves, the field nearly normal to
+  the face), not near-misses.
+
+Two limits on the reading. The re-solve continues along the same route, so
+it bounds how far the accepted iterate is from the root its own Newton is
+converging to; across routes the seven-wave state can sit 1e-4 from the
+planar one where the Jacobian is ill-conditioned (Test 2). And the stopping
+rule makes the flux discontinuous in its input at the 1e-8–1e-5 level
+(Section 7, the canonical orientation). Against what a 64² grid resolves --
+10–29% in L1(ρ) from the 512² references -- an accepted flux is exact to some
+ten orders of magnitude.
+
 ## 5c. A gap in the definition: the jump conditions do not order the waves
 
 Verification checks that the state behind the flux satisfies the seven-wave
@@ -2147,6 +2197,53 @@ the seven-wave solver, the y-faces mostly by the planar rescue. The solver
 frame is cyclic -- (x, y, z) for an x-face, (y, z, x) for a y-face -- so the
 in-plane tangential field sits in t1 on one and in t2 on the other, and the
 seven-wave Newton converges on the first far more often.
+
+### Orszag–Tang in two dimensions: what the reference shows (2026-10-13)
+
+The 512² HLLD reference field by field (`scripts/plot_ot2d.py`):
+
+![Orszag–Tang 512², t = 0.5](figs/ot2d/ot2d_reference_t0.50.png)
+
+![Orszag–Tang 512², t = 1](figs/ot2d/ot2d_reference_t1.00.png)
+
+![Current sheets over time, and the vortex at t = 1](figs/ot2d/ot2d_current_sheets.png)
+
+* **t = 0.5.** Two shock-compressed dense bands enclose a rarefied centre.
+  Their outlines carry thin sheets where the field nearly vanishes: plasma β
+  above 100, magnetisation σ near 1e-3, the field reversing across them. In
+  each band sits a compact dense knot with a dipolar current
+  ((0.55, 0.92) and its π-image) -- a candidate magnetic island travelling
+  with the band. The fastest flow, W ≈ 1.75, leaves the band ends as fans,
+  from (0.08, 0.6) and (0.92, 0.4); the initial W ≈ 7 has gone into heat and
+  field.
+* **t = 1.** Two vortices at (0.25, 0.25) and (0.75, 0.75) have rolled up
+  with spiral current filaments of a few cells' width (the zoom), and the
+  centre is a dense knot where the bands cross. Straight thin current
+  sheets with low-β cores cross the lobes, thin slivers of W ≈ 1.5 run along
+  the band edges, and σ stays below 1 everywhere.
+
+![The 64² runs beside the reference, t = 1](figs/ot2d/ot2d_64_compare_t1.00.png)
+
+At 64² every flux gives the same large-scale cross and none resolves the
+roll-ups. The current sheets are smeared: the peak current (99.9th
+percentile of |J_z|) is 48–59 at 64² against 171 in the reference averaged
+to 64² (409 at 512²) at t = 0.5, and 48 against 82 at t = 1. At t = 0.5 the
+exact flux carries 23% more peak current than HLLD (59 against 48, plain and
+canonical alike) -- its current sheets are sharper -- and at t = 1 the two
+are equal. The exact flux differs from HLLD most along the central current
+sheet (a stripe through the centre, |Δρ| up to 0.06) and at the corners. The plain exact
+run's asymmetry lives on the anti-diagonal sheet; the canonical run has
+none at this scale.
+
+![Where the exact solver loses faces](figs/ot2d/ot2d_failures.png)
+
+**Where the exact solver fails is physical.** At t = 0.5 the faces left to
+HLLD form one-face-wide lines along exactly the sheets where the field
+vanishes (the darkest lines of σ), including the ones crossing the rarefied
+lobes; at t = 1 they follow the band edges and the central knot. These are
+the faces Section 5a's ledger described from the solver's side -- low
+magnetisation, the field nearly normal to the face, reversing -- seen here
+in space: the magnetic null sheets, one cell wide at 64².
 
 ### The four-quadrant Riemann problem with a field (2026-10-06)
 
@@ -2740,6 +2837,8 @@ checked). The table compares runs of the same code.
 | the four-unknown rung, paired (5a) | `RMHD_PLANAR4=1 scripts/failure_ledger.py collect <rec> <tags> --paired --out <npz>` |
 | the defaults' run: tally, solution, cost (5a) | `scripts/harvest_summary.py results/rotor_64_exact_defaults/harvest`; `scripts/rotor_compare.py results/rotor_64_exact_defaults results/rotor_512_hlld --regions`; a rung's cost: `RMHD_WEAK_FLUX=hlld RMHD_PLANAR5_LADDER=0 scripts/failure_ledger.py collect <held-out rec> pfd pfe --paired --out <npz>` timed, one configuration per call |
 | Orszag–Tang (7): the runs | `PROBLEM=orszag_tang N=64 sbatch scripts/calea_rotor_exact.sh`; `PROBLEM=orszag_tang N=64` and `N=512 TORCH_THREADS=24 sbatch scripts/calea_rotor_hlld.sh` |
+| how exact the fluxes are (5b) | `scripts/accuracy_probe.py <snapshot> <gamma>` (production env; calea job 41731) |
+| Orszag–Tang in 2D (7) | `scripts/plot_ot2d.py <base> <outdir>` |
 | canonical orientation (7) | `RMHD_CANONICAL=1` on any exact run (`calea_rotor_exact.sh` passes it through); the mirror pairs `scripts/mirror_probe.py <snapshot> <gamma> 1e-2` with and without it |
 | four-quadrant (7): the gate opened | `PROBLEM=riemann2d N=64 TAU_WEAK=1e-12 TAG=_open sbatch scripts/calea_rotor_exact.sh` (the gated baseline: `TAG=_pool`); `scripts/harvest_by_jump.py results/r2d_64_exact_open/harvest`, then the gated run's with `--max-sweep` set to the range it prints; the diagonal symmetry `mean(abs(rho - rho.T)) / mean(rho)` |
 | Orszag–Tang (7): the gate opened | `PROBLEM=orszag_tang N=64 TAU_WEAK=1e-12 TAG=_open sbatch scripts/calea_rotor_exact.sh`; by jump size `scripts/harvest_by_jump.py results/ot_64_exact_open/harvest --max-sweep 1808` (and the gated run's harvest with the same limit); the symmetry error `mean(abs(rho - rho[::-1, ::-1])) / mean(rho)` per snapshot; the mirror pairs `scripts/mirror_probe.py results/ot_64_exact_open/snap_001.npz 1.3333333333333333 1e-2` (production's env: kernels.env, the ML checkpoints, RMHD_POOL) |
