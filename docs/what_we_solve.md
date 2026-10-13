@@ -2002,7 +2002,9 @@ who wants to repeat this.
 ### Orszag–Tang: the second problem, measured (2026-10-03 to 10-06)
 
 The relativistic Orszag–Tang vortex (γ = 4/3, periodic, v_max = 0.99,
-`initial_data2d.orszag_tang`), 64², every rescue step on, to t = 1: 654
+`initial_data2d.orszag_tang`) -- a much faster variant (W ≈ 7) of Beckwith &
+Stone's (2011, ApJS 193, 6; their v = 0.5 per component, W ≈ 1.15,
+γ = 5/3), which is `orszag_tang_bs` -- 64², every rescue step on, to t = 1: 654
 steps in 61.6 h on one calea node (339 s per step; HLLD at 64² takes 0.82 s
 per step, the 512² HLLD reference 7.9 s). Like the rotor, every face is
 coplanar (no z-components), so the planar solvers answer half of what is

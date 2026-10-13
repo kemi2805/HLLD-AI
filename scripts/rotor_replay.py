@@ -44,7 +44,7 @@ import numpy as np, torch
 torch.set_num_threads(1); np.seterr(all='ignore')
 from src.physics.grid import Grid2D
 from src.physics.eos import hybrid_eos
-from src.physics.initial_data2d import b_from_potential, magnetic_rotor, orszag_tang, riemann2d
+from src.physics.initial_data2d import b_from_potential, magnetic_rotor, orszag_tang, orszag_tang_bs, riemann2d
 from src.physics.driver2d import prims_to_cons_2d, sync_state, rk_step_ct, compute_dt_2d
 from src.physics.state import EVOLVED_KEYS, State2D
 from src.physics.hlld import LAST_DIAG, hlld_flux
@@ -63,6 +63,7 @@ if __name__ == "__main__":   # guarded: RMHD_POOL workers import this module
     # box, gamma and boundaries per problem, as run_2d.py has them
     PROBLEMS = {"rotor": ((-0.5, 0.5), 5.0 / 3.0, "outflow", magnetic_rotor),
                 "orszag_tang": ((0.0, 1.0), 4.0 / 3.0, "periodic", orszag_tang),
+                "orszag_tang_bs": ((0.0, 1.0), 5.0 / 3.0, "periodic", orszag_tang_bs),
                 "riemann2d": ((-0.5, 0.5), 5.0 / 3.0, "outflow", riemann2d)}
     PROBLEM = os.environ.get("PROBLEM", "rotor")
     if MODE == "record" and PROBLEM not in PROBLEMS:

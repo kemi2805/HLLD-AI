@@ -82,3 +82,25 @@ def test_the_out_of_plane_tilt_keeps_the_in_plane_field_divergence_free():
     assert torch.allclose(B2, torch.full_like(B2, 0.25), atol=1e-14)
     div = ((Bxf[1:, :] - Bxf[:-1, :]) / g.dx + (Byf[:, 1:] - Byf[:, :-1]) / g.dy)
     assert float(div.abs().max()) < 1e-12
+
+
+def test_beckwith_and_stones_orszag_tang_is_theirs():
+    """`orszag_tang_bs` is Beckwith & Stone (2011)'s relativistic Orszag-Tang
+    vortex: their density, pressure and field, v = 0.5 per component (the
+    standard orientation), and run_2d gives it Gamma = 5/3; ours differs only
+    in the speed."""
+    from src.physics.initial_data2d import orszag_tang, orszag_tang_bs
+    eos = hybrid_eos(K=0.0, gamma=GAMMA, gamma_th=GAMMA)
+    g = Grid2D(0.0, 1.0, 32, 0.0, 1.0, 32, ng=2)
+    bs, Az = orszag_tang_bs(g, eos)
+    ours, Az2 = orszag_tang(g, eos)
+    X, Y = g.X, g.Y
+    assert torch.allclose(bs["vx"], -0.5 * torch.sin(2 * math.pi * Y), atol=1e-15)
+    assert torch.allclose(bs["vy"], 0.5 * torch.sin(2 * math.pi * X), atol=1e-15)
+    assert torch.all(bs["rho"] == 25.0 / (36.0 * math.pi))
+    assert torch.all(bs["p"] == 5.0 / (12.0 * math.pi))
+    for k in ("Bx", "By", "Bz", "rho", "p"):
+        assert torch.equal(bs[k], ours[k]), k
+    assert torch.equal(Az, Az2)
+    src = (Path(__file__).resolve().parents[1] / "scripts" / "run_2d.py").read_text()
+    assert '"orszag_tang_bs": dict(box=(0.0, 1.0), gamma=5.0 / 3.0' in src

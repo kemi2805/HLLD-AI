@@ -13,7 +13,7 @@ from src.physics.ct import div_b
 from src.physics.driver2d import (compute_dt_2d, prims_to_cons_2d, rk_step_ct,
                                   sync_state)
 from src.physics.initial_data2d import (b_from_potential, magnetic_rotor,
-                                        orszag_tang, riemann2d)
+                                        orszag_tang, orszag_tang_bs, riemann2d)
 from src.physics.state import EVOLVED_KEYS, State2D
 from src.physics.envelope import EnvelopeRecorder, format_summary
 from src.physics.hlld import (hlld_flux, hlle_flux, hllc_flux,
@@ -32,6 +32,9 @@ PROBLEMS = {
                         bc=("outflow", "outflow"), sym=True),
     "orszag_tang": dict(box=(0.0, 1.0), gamma=4.0 / 3.0, tend=1.0,
                         bc=("periodic", "periodic"), sym=False),
+    # Beckwith & Stone (2011)'s version: v = 0.5 per component, Gamma = 5/3
+    "orszag_tang_bs": dict(box=(0.0, 1.0), gamma=5.0 / 3.0, tend=1.0,
+                           bc=("periodic", "periodic"), sym=False),
     # the four-quadrant Riemann problem with a uniform in-plane field (--b0)
     "riemann2d":   dict(box=(-0.5, 0.5), gamma=5.0 / 3.0, tend=0.4,
                         bc=("outflow", "outflow"), sym=False),
@@ -214,6 +217,8 @@ def main():
         prims, Az = magnetic_rotor(g, eos)
     elif a.problem == "orszag_tang":
         prims, Az = orszag_tang(g, eos)
+    elif a.problem == "orszag_tang_bs":
+        prims, Az = orszag_tang_bs(g, eos)
     else:
         prims, Az = riemann2d(g, eos, B0=a.b0, angle_z_deg=a.bz_deg)
 

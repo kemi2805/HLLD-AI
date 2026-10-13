@@ -193,10 +193,17 @@ def riemann2d(grid, eos, B0: float = 0.5, angle_deg: float = 45.0,
 
 def orszag_tang(grid, eos, v_max: float = 0.99, B0: float | None = None,
                 press: float | None = None, rho: float | None = None):
-    """Relativistic Orszag-Tang vortex on the periodic unit square.
+    """Relativistic Orszag-Tang vortex on the periodic unit square: OUR
+    strongly relativistic variant.
 
-    Standard relativistic parameters (Del Zanna et al. 2007; also Beckwith &
-    Stone 2011), with an ideal gas of Gamma = 4/3 supplied by the caller:
+    The density, pressure and field are Beckwith & Stone's (2011, ApJS 193,
+    6, Sect. IV.4; arXiv:1101.3573) -- the first published ideal-RMHD
+    Orszag-Tang vortex -- but the flow is much faster and the gas softer:
+    peak speed 0.99 (W ~ 7) against their 0.5 per component (W ~ 1.15), and
+    Gamma = 4/3 (supplied by the caller) against their 5/3.  No published
+    run with this combination was found (2026-10-13); BHAC (Porth et al.
+    2017) and the ADER-DG papers (Zanotti, Fambri & Dumbser 2015) use other
+    relativistic variants.  Their problem is ``orszag_tang_bs``.
 
         rho = 25/(36 pi),   p = 5/(12 pi),   B0 = 1/sqrt(4 pi)
         v   = (v_max/sqrt2) * (-sin 2 pi y,  sin 2 pi x,  0)
@@ -240,3 +247,20 @@ def orszag_tang(grid, eos, v_max: float = 0.99, B0: float | None = None,
     Az = B0 * (torch.cos(4 * math.pi * XF) / (4 * math.pi)
                + torch.cos(2 * math.pi * YF) / (2 * math.pi))
     return prims, Az
+
+
+def orszag_tang_bs(grid, eos):
+    """Beckwith & Stone's relativistic Orszag-Tang vortex (2011, ApJS 193,
+    6, Sect. IV.4, Figs. 6-7; arXiv:1101.3573), to compare with directly.
+
+        rho = 25/(36 pi),  P_g = 5/(12 pi),  Gamma = 5/3 (the caller's),
+        A_z = (B0/4 pi) cos 4 pi x + (B0/2 pi) cos 2 pi y,  B0 = 1/sqrt(4 pi),
+        v   = 0.5 (-sin 2 pi y,  sin 2 pi x,  0)
+
+    on the periodic unit square, shown at t = 1 on 192^2 (HLLD, VL+CT,
+    piecewise-linear reconstruction of the primitives, Courant number 0.4).
+    The paper prints v = [0.5 sin 2 pi y, 0.5 sin 2 pi x]; the minus sign on
+    v_x is the standard Orszag-Tang orientation (Stone & Gardiner 2009, which
+    the paper reproduces with c = 100), taken here as their intent.
+    """
+    return orszag_tang(grid, eos, v_max=0.5 * math.sqrt(2.0))

@@ -39,8 +39,9 @@ PROBLEM=${PROBLEM:-rotor}
 case "$PROBLEM" in
     rotor)       SHORT=rotor; TEND=${TEND:-0.4} ;;
     orszag_tang) SHORT=ot;    TEND=${TEND:-1.0} ;;
+    orszag_tang_bs) SHORT=otbs; TEND=${TEND:-1.0} ;;   # Beckwith & Stone 2011's version
     riemann2d)   SHORT=r2d${BZ_DEG:+z}; TEND=${TEND:-0.4} ;;
-    *) echo "PREFLIGHT FAILED: PROBLEM must be rotor, orszag_tang or riemann2d"; exit 2 ;;
+    *) echo "PREFLIGHT FAILED: PROBLEM must be rotor, orszag_tang, orszag_tang_bs or riemann2d"; exit 2 ;;
 esac
 N=${N:-64}
 NSNAP=${NSNAP:-8}
