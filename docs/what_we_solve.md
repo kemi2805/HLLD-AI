@@ -2250,6 +2250,32 @@ the faces Section 5a's ledger described from the solver's side -- low
 magnetisation, the field nearly normal to the face, reversing -- seen here
 in space: the magnetic null sheets, one cell wide at 64².
 
+**The roll-ups are physical, and not converged at 512²** (HLLD at 64², 128²,
+256², 512², the last three with today's primitive recovery: calea jobs
+41754-41756):
+
+![Orszag–Tang at t = 1 by resolution](figs/ot2d/ot2d_resolution_t1.png)
+
+The vortices at (0.25, 0.25) and (0.75, 0.75) are absent at 64², a hook at
+128², a roll-up at 256² and a wound spiral of current filaments at 512² --
+the Kelvin–Helmholtz/tearing behaviour of the band edges, growing as the
+dissipation falls. L1(ρ) against the 512² run averaged to each grid:
+
+| | 64² | 128² | 256² |
+|---|---|---|---|
+| t = 0.5 | 0.195 | 0.119 | 0.068 (order 0.7, 0.8) |
+| t = 1 | 0.264 | 0.264 | 0.209 |
+
+At t = 0.5 the scheme converges at first order and below (shocks); at t = 1
+it barely converges, because the roll-ups sit in different places at each
+resolution and L1 counts a displaced vortex twice. Kayanikhoo et al. (2024)
+find the same in the relativistic Orszag–Tang: its reconnection converges
+only from 2048² (`docs/literature.md`). The 512² reference is therefore a
+reference for the large scales, not for the filaments. The old 512² run
+(before the primitive-recovery fix) differs from the new one by 0.26% in
+L1(ρ) at t = 1; every 64² comparison above moves by at most 4e-4 against
+the new one, the same for every flux, so no conclusion changes.
+
 ### The four-quadrant Riemann problem with a field (2026-10-06)
 
 Kiuchi et al. (2022) show the relativistic four-quadrant Riemann problem of
