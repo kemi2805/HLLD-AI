@@ -194,16 +194,20 @@ def riemann2d(grid, eos, B0: float = 0.5, angle_deg: float = 45.0,
 def orszag_tang(grid, eos, v_max: float = 0.99, B0: float | None = None,
                 press: float | None = None, rho: float | None = None):
     """Relativistic Orszag-Tang vortex on the periodic unit square: OUR
-    strongly relativistic variant.
+    variant of the strongly relativistic one.
 
+    The flow is van der Holst, Keppens & Meliani's (2008, CPC 179, 617,
+    arXiv:0807.0713; also run by BHAC, Porth et al. 2017, and Wu & Shu
+    2021): peak speed 0.99 (W ~ 7), Gamma = 4/3 (supplied by the caller).
     The density, pressure and field are Beckwith & Stone's (2011, ApJS 193,
-    6, Sect. IV.4; arXiv:1101.3573) -- the first published ideal-RMHD
-    Orszag-Tang vortex -- but the flow is much faster and the gas softer:
-    peak speed 0.99 (W ~ 7) against their 0.5 per component (W ~ 1.15), and
-    Gamma = 4/3 (supplied by the caller) against their 5/3.  No published
-    run with this combination was found (2026-10-13); BHAC (Porth et al.
-    2017) and the ADER-DG papers (Zanotti, Fambri & Dumbser 2015) use other
-    relativistic variants.  Their problem is ``orszag_tang_bs``.
+    6, Sect. IV.4; arXiv:1101.3573; their flow is 0.5 per component,
+    W ~ 1.15, Gamma = 5/3).  Ideal RMHD is unchanged under rho, p, B^2 ->
+    lambda (rho, p, B^2), so in van der Holst's units (B0 = 1) this is
+    rho = 25/9, p = 5/3: a colder gas (p/rho = 0.6 against their 10) and a
+    stronger field relative to the gas (B0^2/p = 0.6 against 0.1).  No
+    published run with this combination was found (2026-10-13; see
+    docs/literature.md).  Beckwith & Stone's own problem is
+    ``orszag_tang_bs``.
 
         rho = 25/(36 pi),   p = 5/(12 pi),   B0 = 1/sqrt(4 pi)
         v   = (v_max/sqrt2) * (-sin 2 pi y,  sin 2 pi x,  0)
