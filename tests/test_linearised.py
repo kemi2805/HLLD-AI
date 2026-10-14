@@ -172,3 +172,100 @@ def test_on_by_default_and_only_the_weak_faces_change(eos, pairs):
     attempted[np.asarray(d["sel"], int)] = True
     assert not (lin & attempted).any()
     assert d["n_exact"] == np.asarray(d["exact_mask"], bool).sum() <= attempted.sum()
+
+
+def _fallback_run(eos, Ls, Rs, tau_fb, tmp_path, **kw):
+    """exact_flux_batched with the linearised flux on and the weak-fallback
+    threshold ``tau_fb``, through a harvester; returns (F, diag, harvester)."""
+    import src.physics.exact_flux as EF
+    from src.physics.harvest import Harvester
+    old = {k: os.environ.get(k) for k in ("RMHD_WEAK_FLUX", "RMHD_WEAK_FALLBACK_TAU")}
+    os.environ.pop("RMHD_WEAK_FLUX", None)
+    os.environ["RMHD_WEAK_FALLBACK_TAU"] = str(tau_fb)
+    try:
+        EF = importlib.reload(EF)
+        H = Harvester(str(tmp_path), GAMMA)
+        F, _, _ = EF.exact_flux_batched(Ls, Rs, eos, idir=0, harvester=H, **kw)
+        d = dict(EF.LAST_DIAG)
+    finally:
+        for k, v in old.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        importlib.reload(EF)
+    return F, d, H
+
+
+def test_a_lost_weak_face_takes_the_linearised_flux(eos, pairs, tmp_path):
+    """With the gate open, a weak face every exact rung loses gets the
+    linearised flux (not HLLD), is never called exact, and is recorded."""
+    import src.physics.exact_flux as EF
+    L, R = pairs
+    Ls, Rs = _shrink(eos, L, R, 0.01)
+    # shrunk to 1%, most faces are weak; the relative jump is per variable,
+    # so a few stay at 1e-2 or more and must keep HLLD
+    jump = EF.relative_jump(Ls, Rs).numpy().reshape(-1)
+    weak = jump < 1e-2
+    # one Newton iteration: most lanes are lost, so the fallback is exercised
+    F, d, H = _fallback_run(eos, Ls, Rs, 1e-2, tmp_path, tau_weak=0.0,
+                            max_iter=1, n_retries=0)
+    n = jump.size
+    # the gate is open, but a face whose fan lies on one side is still not
+    # attempted (HLLD is exact there)
+    att = np.zeros(n, bool)
+    sel = np.asarray(d["sel"], int)
+    att[sel] = True
+    assert (att & weak).sum() >= 6
+    ex = np.asarray(d["exact_mask"], bool)
+    lin = np.zeros(n, bool)
+    lin[sel[np.asarray(d["linear_fallback_mask"], bool)]] = True
+    assert d["n_linear_fallback"] == lin.sum() > 0
+    assert d["n_linear_fallback_offered"] == (att & ~ex & weak).sum()
+    assert not (lin & ex).any()
+    assert not (lin & ~(att & weak)).any()
+    assert d["n_hlld_after_attempt"] == (att & ~ex & ~lin).sum()
+    Fl, _, _, ok = linearised_flux(Ls, Rs, eos, 0, return_mask=True)
+    Fh, _, _ = hlld_flux(Ls, Rs, eos, 0)
+    Fv, Flv, Fhv = _vec(F), _vec(Fl), _vec(Fh)
+    assert np.allclose(Fv[:, lin], Flv[:, lin], rtol=1e-12, atol=1e-15)
+    rest = ~ex & ~lin                      # lost and strong, or not attempted
+    assert np.array_equal(Fv[:, rest], Fhv[:, rest])
+    # the record: the coverage map, the per-decade histogram, the totals
+    H.flush()
+    z = np.load(sorted(tmp_path.glob("coverage_*.npz"))[0])
+    cov = np.unpackbits(z["linear_fallback"][0])[:n].astype(bool)
+    assert np.array_equal(cov, lin)
+    h = z["jump_hist"][0]
+    rows = H.JUMP_HIST_ROWS
+    assert h[rows.index("all")].sum() == n
+    assert h[rows.index("attempted")].sum() == att.sum()
+    assert h[rows.index("linear_fallback")].sum() == lin.sum()
+    assert h[rows.index("exact")].sum() == ex.sum()
+    t = H.summary()["faces"]
+    assert t["faces"] == n and t["attempted"] == att.sum()
+    assert t["linear_fallback"] == lin.sum()
+    assert t["hlld_after_attempt"] == (att & ~ex & ~lin).sum()
+
+
+def test_the_fallback_is_off_at_zero_and_never_touches_strong_faces(eos, pairs, tmp_path):
+    import src.physics.exact_flux as EF
+    L, R = pairs
+    Ls, Rs = _shrink(eos, L, R, 0.01)
+    F0, d0, _ = _fallback_run(eos, Ls, Rs, 0.0, tmp_path / "a", tau_weak=0.0,
+                              max_iter=1, n_retries=0)
+    assert d0["n_linear_fallback"] == 0
+    ex = np.asarray(d0["exact_mask"], bool)
+    Fh, _, _ = hlld_flux(Ls, Rs, eos, 0)
+    assert np.array_equal(_vec(F0)[:, ~ex], _vec(Fh)[:, ~ex])
+    # full-strength problems: a lost face with a jump of 1e-2 or more keeps
+    # HLLD, and with the production gate nothing is ever offered
+    jump = EF.relative_jump(L, R).numpy().reshape(-1)
+    _, d1, _ = _fallback_run(eos, L, R, 1e-2, tmp_path / "b", tau_weak=0.0,
+                             max_iter=1, n_retries=0)
+    lin = np.zeros(jump.size, bool)
+    lin[np.asarray(d1["sel"], int)[np.asarray(d1["linear_fallback_mask"], bool)]] = True
+    assert (jump[lin] < 1e-2).all()
+    _, d2, _ = _fallback_run(eos, L, R, 1e-2, tmp_path / "c", tau_weak=1e-2,
+                             max_iter=1, n_retries=0)
+    assert d2["n_linear_fallback_offered"] == 0

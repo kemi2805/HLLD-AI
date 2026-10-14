@@ -32,7 +32,8 @@
 # MAX_STEPS (a pilot: stop after this many steps), RMHD_ML_CKPT/RMHD_ML_CKPTS,
 # PY, HLLD_DIR, TAU_WEAK (1e-2: the weak-jump gate), TAG (a suffix for OUT
 # and LOG).  The rung switches (RMHD_PLANAR4, RMHD_PLANAR5_LADDER, ...) and
-# RMHD_WEAK_FLUX=linear (the linearised solver below the gate) pass through
+# RMHD_WEAK_FLUX=linear (the linearised solver below the gate),
+# RMHD_WEAK_FALLBACK_TAU (1e-2: a lost face below it gets that solver, not HLLD) pass through
 # the environment.  DRYRUN=1 runs the preflight only.
 set -u
 PROBLEM=${PROBLEM:-rotor}
@@ -90,7 +91,7 @@ fi
 echo "== $(date)  host=$(hostname)  problem=$PROBLEM  N=$N  tend=$TEND  retries=$RETRIES  out=$OUT  pool=${POOL}x${POOL_THREADS} chunks=$POOL_CHUNKS  ${RESTART:-fresh start}"
 echo "== HLLD $(git rev-parse --short HEAD)   rmhd_final $("$PY" -c 'import rmhd.paths as p; print(p.git_rev())')"
 echo "== ckpt=$RMHD_ML_CKPT  extra=$RMHD_ML_CKPTS  kernels: FAN=$RMHD_FAN ALFVEN=$RMHD_ALFVEN SLOWSHOCK=$RMHD_SLOWSHOCK SHOCK=$RMHD_SHOCK"
-echo "== tau_weak=$TAU_WEAK  weak flux=${RMHD_WEAK_FLUX:-(default)}  five-wave rescue=${RMHD_PLANAR5_FALLBACK:-(default)}  rungs: EDGE=${RMHD_FAST_EDGE_SCAN:-(default)} LADDER=${RMHD_PLANAR5_LADDER:-(default)} CROSSED=${RMHD_PLANAR5_CROSSED:-(default)} PLANAR4=${RMHD_PLANAR4:-(default)}   (unset = the module's production default, recorded resolved in run_meta.json)"
+echo "== tau_weak=$TAU_WEAK  weak flux=${RMHD_WEAK_FLUX:-(default)}  weak fallback tau=${RMHD_WEAK_FALLBACK_TAU:-(default)}  five-wave rescue=${RMHD_PLANAR5_FALLBACK:-(default)}  rungs: EDGE=${RMHD_FAST_EDGE_SCAN:-(default)} LADDER=${RMHD_PLANAR5_LADDER:-(default)} CROSSED=${RMHD_PLANAR5_CROSSED:-(default)} PLANAR4=${RMHD_PLANAR4:-(default)}   (unset = the module's production default, recorded resolved in run_meta.json)"
 $PY -c "import numpy, numba, torch; print('numpy', numpy.__version__, 'numba', numba.__version__, 'torch', torch.__version__)"
 
 $PY -u scripts/run_2d.py --problem "$PROBLEM" ${B0:+--b0 "$B0"} ${BZ_DEG:+--bz-deg "$BZ_DEG"} --n "$N" --solver exact --tend "$TEND" \

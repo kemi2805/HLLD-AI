@@ -485,6 +485,29 @@ shrunk 1D problems of `tests/test_linearised.py` the same holds: its
 distance from the exact flux falls 25 times or more over two levels of 1/3
 where HLLD's falls three times.
 
+### With the gate open, a lost weak face takes the linearised flux (2026-10-14)
+
+A face that is attempted and lost by every exact rung keeps HLLD -- unless
+its relative jump is below `RMHD_WEAK_FALLBACK_TAU` (1e-2, production's own
+gate, on by default), in which case it gets the linearised flux, the one the
+gate would have given it (`exact_flux.py`, after the rungs). The fallback is
+only reached when the gate is opened: with the production gate every
+attempted face has a jump of 1e-2 or more, and the bitwise gate passes
+unchanged. Why it exists: with the gate open, the four-quadrant run's HLLD
+faces rose from 0.72% to 3.41% of all faces (Section 7, the gate opened),
+because every weak face it lost (7% of 2.2 M near-identical ones among them)
+fell back to HLLD -- at jumps of 1e-4 to 1e-2 a flux 25-120 times further
+from the exact one than the linearised flux (the table above).
+
+What is recorded, per face and per sweep: `linear_fallback` in the coverage
+map; `jump_hist`, every face counted by decade of relative jump and by
+outcome; the run's totals in `run_meta.json`; `LAST_DIAG`
+`n_linear_fallback_offered`, `n_linear_fallback`, `linear_fallback_mask`,
+`n_hlld_after_attempt`. `scripts/harvest_summary.py RUN/harvest` prints the
+face ledger. Tests: `tests/test_linearised.py` (a lost weak face takes the
+linearised flux and is recorded; off at 0; never on a jump of 1e-2 or
+more; never offered under the production gate).
+
 ### 1D tubes and the rotor with the linearised flux (2026-10-01)
 
 Shock tubes, 200 cells, HLLD / linearised / exact against the analytic

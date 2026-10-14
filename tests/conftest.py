@@ -11,6 +11,6 @@ import os
 PINNED = {"RMHD_PLANAR5_FALLBACK": "0", "RMHD_PLANAR5_LADDER": "0",
           "RMHD_PLANAR5_CROSSED": "0", "RMHD_PLANAR4": "0",
           "RMHD_WEAK_FLUX": "hlld", "RMHD_FAST_EDGE_SCAN": "0",
-          "RMHD_CANONICAL": "0"}
+          "RMHD_CANONICAL": "0", "RMHD_WEAK_FALLBACK_TAU": "0"}
 for _k, _v in PINNED.items():
     os.environ.setdefault(_k, _v)

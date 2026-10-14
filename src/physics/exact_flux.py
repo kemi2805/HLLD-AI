@@ -175,6 +175,19 @@ _PLANAR4 = os.environ.get("RMHD_PLANAR4", "1") not in ("0", "", "off")
 # default) or HLLD (`linearised.py`, exact to second order in the jump where
 # HLLD is first order).  Never counted as exact.
 _WEAK_FLUX = os.environ.get("RMHD_WEAK_FLUX", "linear").lower()
+# What an ATTEMPTED face gets when every exact rung loses it: HLLD, unless its
+# relative jump is below RMHD_WEAK_FALLBACK_TAU (1e-2, production's own weak
+# gate) -- then the linearised flux, the same one the gate gives such faces
+# when it is shut, and 25-120x closer to the exact flux than HLLD there
+# (docs/what_we_solve.md 4c).  It matters only when the gate is opened
+# (tau_weak below 1e-2, e.g. TAU_WEAK=1e-12): with the production gate every
+# attempted face has a jump of at least 1e-2, so nothing changes.  Measured
+# before it existed (2026-10-11): with the gate open, the four-quadrant run's
+# HLLD faces went from 0.72% to 3.41% of all faces because the weak faces it
+# lost fell back to HLLD.  Never counted exact; recorded per face as
+# `linear_fallback` in the coverage map.  0 turns it off.  Requires
+# RMHD_WEAK_FLUX=linear (with HLLD below the gate the fallback is HLLD too).
+_WEAK_FALLBACK_TAU = float(os.environ.get("RMHD_WEAK_FALLBACK_TAU", "1e-2"))
 # All five -- the edge scan (rmhd_final shock_b), the ladder, the crossed
 # offer, the four-unknown rung and the linearised flux below the gate -- are
 # production defaults since 2026-10-01, the user's decision after the paired
@@ -1049,7 +1062,10 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
                          n_continuation_attempted=0, n_continuation_exact=0,
                          continuation_mask=np.zeros(0, bool),
                          n_weak=int(weak.sum()), n_weak_linear=n_weak_linear,
-                         weak_linear_mask=weak_linear)
+                         weak_linear_mask=weak_linear,
+                         n_linear_fallback_offered=0, n_linear_fallback=0,
+                         linear_fallback_mask=np.zeros(0, bool),
+                         n_hlld_after_attempt=0)
         if harvester is not None:
             # nothing was attempted, so the map is all gate reasons -- which
             # is exactly what makes a sweep like the rotor's t = 0 x-sweep
@@ -1059,7 +1075,8 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
                                       np.flatnonzero(routed),
                                       bad=to_np(bad).astype(bool),
                                       weak=to_np(weak).astype(bool),
-                                      upwind=to_np(upwind).astype(bool))
+                                      upwind=to_np(upwind).astype(bool),
+                                      jump=to_np(jump).reshape(-1))
         return F, U, p_star
 
     subL = [c[sel] for c in left]
@@ -1425,6 +1442,31 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
             U[k][g] = uS[k]
         p_star[g] = torch.tensor(P_tot[take_all], dtype=dt)
 
+    # ── a lost weak face: the linearised flux, not HLLD ──────────────────
+    # (RMHD_WEAK_FALLBACK_TAU above.)  Only where the linearised solver
+    # trusts its own answer (`ok`: a real spectrum, an invertible eigenvector
+    # matrix, a physical state); the rest keep HLLD, which is already there.
+    lin_fb = np.zeros(sel.size, dtype=bool)          # over the attempted lanes
+    n_lin_offered = 0
+    if _WEAK_FLUX == "linear" and _WEAK_FALLBACK_TAU > 0.0:
+        jump_sel = to_np(jump).reshape(-1)[sel]
+        cand = np.flatnonzero(~take_all & (jump_sel < _WEAK_FALLBACK_TAU))
+        n_lin_offered = int(cand.size)
+        if cand.size:
+            from .linearised import linearised_flux
+            ci = torch.as_tensor(sel[cand], dtype=torch.long)
+            Fl, Ul, pl, okl = linearised_flux(
+                {k: v.reshape(-1)[ci] for k, v in sL.items()},
+                {k: v.reshape(-1)[ci] for k, v in sR.items()}, eos, idir=idir,
+                fallback=fallback, return_mask=True)
+            okl = torch.as_tensor(okl).reshape(-1).to(torch.bool)
+            w = ci[okl]
+            for k in F:
+                F[k].reshape(-1)[w] = Fl[k].reshape(-1)[okl]
+                U[k].reshape(-1)[w] = Ul[k].reshape(-1)[okl]
+            p_star.reshape(-1)[w] = pl.reshape(-1)[okl]
+            lin_fb[cand[okl.numpy()]] = True
+
     # ── verification: what makes a flux "exact" ───────────────────────────
     # A flux is called exact iff the structure behind it satisfies the
     # COMPLETE seven-wave jump conditions, checked per interface, in the
@@ -1503,8 +1545,9 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
             rec_idir, N, sel, g, np.flatnonzero(routed),
             seven=seven_ok, planar5=take5, three_wave=take3, planar4=take4,
             continuation=takec, degenerate=degen, verified=verified,
+            linear_fallback=lin_fb,
             bad=to_np(bad).astype(bool), weak=to_np(weak).astype(bool),
-            upwind=to_np(upwind).astype(bool))
+            upwind=to_np(upwind).astype(bool), jump=to_np(jump).reshape(-1))
 
     n_exact = int(g.size)
     fell_back = N - n_exact
@@ -1546,6 +1589,15 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
         # solver answered (RMHD_WEAK_FLUX=linear; 0 with HLLD there)
         n_weak=int(weak.sum()), n_weak_linear=n_weak_linear,
         weak_linear_mask=weak_linear,
+        # attempted faces every exact rung lost: how many were weak enough
+        # for the linearised fallback (RMHD_WEAK_FALLBACK_TAU), how many it
+        # answered (mask over the attempted lanes), and how many were left
+        # to HLLD.  n_hlld_fallback below counts every non-exact face of the
+        # sweep (gated ones included) and is kept for its old meaning.
+        n_linear_fallback_offered=n_lin_offered,
+        n_linear_fallback=int(lin_fb.sum()),
+        linear_fallback_mask=lin_fb,
+        n_hlld_after_attempt=int(sel.size) - n_exact - int(lin_fb.sum()),
         n_attempted=int(sel.size),
         n_exact=n_exact,
         n_fan_interior=n_fan,

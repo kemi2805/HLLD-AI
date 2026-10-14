@@ -290,6 +290,16 @@ upper bound on what any approximate flux can gain, and it answers the
 3. *Seeds:* report the ceiling as a measured negative result, citing
    Giacomazzo & Rezzolla 2006 and Sharony et al. 2024. Do not lead with it.
 
+**Say exactly what the flux is.** In production it comes from three
+sources:
+- the exact Riemann flux above a relative jump of 1e-2;
+- a linearised flux, second order in the jump, below it;
+- the upwind state where every wave moves one way.
+
+The share below the gate grows with resolution: 73% of the faces at 64²,
+99.5% at 256² on Orszag–Tang. Results from the runs with the gate open
+(TAU_WEAK=1e-12) are what license "exact everywhere".
+
 **Do not claim:**
 - the test problems;
 - the adaptive gate or the fallback design (Toro 1991, Quirk 1994);

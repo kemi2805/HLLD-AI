@@ -18,6 +18,11 @@ Three questions, one per shard kind:
 Coverage is reported per direction and over the run (in tenths), because the
 interesting failure mode is a fraction that DECAYS as the flow steepens --
 which a single average would hide.
+
+First, though, the face ledger: where every face's flux came from (the gates,
+the exact solver's rungs, the ML seed that answered, the linearised fallback,
+HLLD), and -- for runs that store ``jump_hist`` -- the same by decade of the
+relative jump.
 """
 import argparse
 import glob
@@ -52,12 +57,108 @@ def load_coverage(d):
     return rows
 
 
+# the coverage maps, in the order the flux assembly decides a face
+LEDGER = ("bad", "weak", "upwind", "routed", "attempted", "exact", "seven",
+          "planar5", "planar4", "degenerate", "three_wave", "continuation",
+          "linear_fallback", "verified")
+CAPS = (200_000, 5_000_000)       # Harvester's row caps (default, --harvest-all)
+
+
+def face_ledger(d):
+    """Totals of every coverage map over the run, the seven-wave answers by
+    the seed that converged, and the per-decade table."""
+    tot = dict.fromkeys(LEDGER, 0)
+    tot.update(faces=0, hlld=0)
+    hist, rows_h = None, None
+    for f in sorted(glob.glob(os.path.join(d, "coverage_*.npz"))):
+        z = np.load(f)
+        for k in range(z["sweep"].shape[0]):
+            n = int(z["n"][k])
+            m = {key: (_unpack(z[key][k], n) if key in z.files
+                       else np.zeros(n, bool)) for key in LEDGER}
+            tot["faces"] += n
+            for key in LEDGER:
+                tot[key] += int(m[key].sum())
+            tot["hlld"] += int((m["attempted"] & ~m["exact"]
+                                & ~m["linear_fallback"]).sum())
+        if "jump_hist" in z.files:
+            h = z["jump_hist"].sum(axis=0)
+            hist = h if hist is None else hist + h
+    F, A = tot["faces"], tot["attempted"]
+    if not F:
+        return
+    pf = lambda x: f"{100.0 * x / F:6.2f}%"
+    pa = lambda x: f"{100.0 * x / max(A, 1):6.2f}%"
+    print(f"face ledger: {F} face-evaluations")
+    print(f"  invalid input (HLLD)                      {pf(tot['bad'])}")
+    print(f"  below the weak-jump gate (linearised)     {pf(tot['weak'])}")
+    print(f"  fan entirely upwind (HLLD = exact there)  {pf(tot['upwind'])}")
+    if tot["routed"]:
+        print(f"  routed to HLLD by the compound rule       {pf(tot['routed'])}")
+    print(f"  attempted by the exact solver             {pf(A)}")
+
+    # the seven-wave answers by attempt: 1 = the primary network's seed,
+    # k > 1 = retry k-1 (the ensemble's next seed); solved rows carry it
+    by_att, nrow = {}, 0
+    for f in sorted(glob.glob(os.path.join(d, "solved_*.npz"))):
+        z = np.load(f)
+        at = z["attempts"]
+        src = z["source"] if "source" in z.files else np.zeros(at.shape, np.int8)
+        nrow += at.size
+        for k, c in zip(*np.unique(at[src == 0], return_counts=True)):
+            by_att[int(k)] = by_att.get(int(k), 0) + int(c)
+    print(f"  of the attempted:")
+    s7 = tot["seven"]
+    retried = sum(c for k, c in by_att.items() if k > 1)
+    print(f"    seven-wave Newton, ML-seeded            {pa(s7)}")
+    if by_att:
+        capped = nrow in CAPS
+        print(f"      first seed {pa(s7 - retried)}, "
+              + ", ".join(f"retry {k - 1} {pa(c)}" for k, c in sorted(by_att.items())
+                          if k > 1)
+              + ("   (solved rows hit the harvest cap: retries undercounted)"
+                 if capped else ""))
+    print(f"    planar five-wave rescue                 {pa(tot['planar5'])}")
+    print(f"    four-unknown solver                     {pa(tot['planar4'])}")
+    print(f"    degenerate class                        {pa(tot['degenerate'])}")
+    for key, name in (("three_wave", "three-wave rescue"),
+                      ("continuation", "continuation rung")):
+        if tot[key]:
+            print(f"    {name:<40}{pa(tot[key])}")
+    print(f"    = exact                                 {pa(tot['exact'])}"
+          f"   (verified {pa(tot['verified'])})")
+    print(f"    lost, linearised fallback               {pa(tot['linear_fallback'])}")
+    print(f"    lost, HLLD                              {pa(tot['hlld'])}")
+
+    if hist is not None:
+        R = {r: i for i, r in enumerate(("all", "bad", "weak", "upwind",
+                                         "attempted", "exact", "linear_fallback"))}
+        print("\n  by relative jump (decades; exact / linear / HLLD as % of attempted)")
+        print(f"  {'jump from':>12}{'faces':>12}{'gate':>8}{'upwind':>8}{'attempt':>9}"
+              f"{'exact':>9}{'linear':>8}{'HLLD':>8}")
+        for b in range(hist.shape[1]):
+            nf = int(hist[R["all"], b])
+            if not nf:
+                continue
+            lab = ("< 1e-16" if b == 0 else ">= 1" if b == hist.shape[1] - 1
+                   else f"1e{b - 17:d}")
+            at = int(hist[R["attempted"], b])
+            ex = int(hist[R["exact"], b])
+            lf = int(hist[R["linear_fallback"], b])
+            q = lambda x, base: f"{100.0 * x / base:7.2f}%" if base else "      -"
+            print(f"  {lab:>12}{nf:>12}{q(hist[R['weak'], b], nf)}"
+                  f"{q(hist[R['upwind'], b], nf)}{q(at, nf):>9}"
+                  f"{q(ex, at):>9}{q(lf, at)}{q(at - ex - lf, at)}")
+    print()
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("harvest")
     ap.add_argument("--csv", default=None, help="write the per-sweep coverage here")
     a = ap.parse_args()
 
+    face_ledger(a.harvest)
     rows = load_coverage(a.harvest)
     if not rows:
         print("no coverage shards in", a.harvest)
@@ -113,7 +214,7 @@ def main():
         cls = []
         for f in files:
             z = np.load(f)
-            n += z["U_L"].shape[0]
+            n += z["attempts"].shape[0]
             att.append(z["attempts"])
             if kind == "unsolved":
                 reason.append(z["reason"])

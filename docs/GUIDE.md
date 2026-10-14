@@ -547,6 +547,9 @@ keeps a valid flux.
       │                                 (RMHD_PLANAR_PRECHECK, on)
       │     continuation in a tilt angle, last; non-planar faces only
       │                                 (RMHD_CONTINUATION, off)
+      │     a face every rung lost: the linearised solver if its jump is
+      │       below 1e-2, else HLLD     (RMHD_WEAK_FALLBACK_TAU=1e-2, on;
+      │                                 it only acts with the gate opened)
       │
       ├─ the faces BELOW the weak-jump gate: the linearised solver
       │                                 (RMHD_WEAK_FLUX=linear, on; never "exact")
@@ -574,7 +577,14 @@ run: scheme, grid, git revision, cost).
 interfaces as training data, and **coverage bitmaps**: for every face of every
 sweep, whether it was attempted, whether it came out exact, which solver
 answered, and why a face was never tried. `scripts/plot_rotor_output.py`
-turns those into the solver map.
+turns those into the solver map. Each sweep also stores `jump_hist`: its
+faces by decade of relative jump, per outcome (gated, upwind, attempted,
+exact, linearised fallback). The run's totals of every map land in
+`run_meta.json` (`harvest.faces`, `harvest.jump_hist`; a resumed run: since
+the restart), and `scripts/harvest_summary.py RUN/harvest` prints the whole
+run's face ledger -- where every face's flux came from, which ML seed
+answered, what each rung answered, what fell back to the linearised flux
+and what to HLLD, by decade of jump.
 
 **The worker pool** (`exact_pool.py`, `RMHD_POOL`) spreads the seven-wave
 solve over processes. A sweep's wall time is set by its *slowest lane*, which

@@ -186,6 +186,8 @@ def main():
         from rmhd.batched import shock_b as _SB
         meta.update(tau_weak=a.tau_weak, tau_bt=a.tau_bt,
                     weak_flux=_EF._WEAK_FLUX,
+                    weak_fallback_tau=(_EF._WEAK_FALLBACK_TAU
+                                       if _EF._WEAK_FLUX == "linear" else 0.0),
                     rungs=dict(RMHD_PLANAR5_FALLBACK=int(_EF._PLANAR5_FALLBACK),
                                RMHD_FAST_EDGE_SCAN=int(_SB.edge_scan_wanted()),
                                RMHD_PLANAR5_LADDER=int(_EF._PLANAR5_LADDER),
@@ -415,6 +417,9 @@ def main():
                         s_per_step=round(wall / max(steps_here, 1), 3),
                         stopped_early=True,
                         finished=time.strftime("%Y-%m-%dT%H:%M:%S"))
+            if harvester is not None:
+                # what happened to every face of this segment
+                meta.update(harvest=harvester.summary())
             _write_meta(out, meta)
             print(f"stopped after {steps_here} steps at t={t:.6f} "
                   f"(step {step}); restart file written "
@@ -425,7 +430,11 @@ def main():
     log.close()
     if harvester is not None:
         # the final partial buffers were never written before this call
-        print("harvest:", harvester.close(), flush=True)
+        hs = harvester.close()
+        print("harvest:", hs, flush=True)
+        # what happened to every face of this segment (a resumed run: since
+        # the restart; scripts/harvest_summary.py reads the whole run)
+        meta.update(harvest=hs)
     if rec is not None:
         os.makedirs(os.path.dirname(a.envelope) or ".", exist_ok=True)
         summ = rec.save(a.envelope, problem=a.problem, n=a.n,

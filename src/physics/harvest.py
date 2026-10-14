@@ -95,6 +95,12 @@ class Harvester:
         # attempted-but-not-exact interface kept it by fallback (its reason is
         # in the unsolved shards).  Packed bits, ~1 KB per sweep at 64^2.
         self._coverage = []        # list of dict(idir, n, attempted, exact)
+        # running totals over this process's sweeps (a resumed run: since
+        # the restart; the coverage shards hold every sweep), returned by
+        # `summary()` and so written into run_meta.json at the end
+        self.totals = dict.fromkeys(self.TOTAL_KEYS, 0)
+        self.jump_hist_total = np.zeros(
+            (len(self.JUMP_HIST_ROWS), len(self.JUMP_EDGES) + 1), np.int64)
         self.n_sweeps = 0
         self.n_solved = 0
         self.n_unsolved = 0
@@ -246,10 +252,24 @@ class Harvester:
     # what answered a face, in the order the flux assembly decides it
     COVERAGE_KEYS = ("attempted", "exact", "routed", "seven", "planar5",
                      "three_wave", "degenerate", "verified",
-                     "bad", "weak", "upwind", "planar4", "continuation")
+                     "bad", "weak", "upwind", "planar4", "continuation",
+                     "linear_fallback")
+    # The relative jump of every face, by decade: bin 0 is a jump below
+    # 1e-16 (the two states agree to rounding), bin k = 1..16 is
+    # [10^(k-17), 10^(k-16)), bin 17 a jump of 1 or more.  One histogram per
+    # row below, per sweep -- what happened to the faces of each size,
+    # without the harvest rows.  HLLD after an attempt = attempted - exact -
+    # linear_fallback, per bin.
+    JUMP_EDGES = 10.0 ** np.arange(-16, 1)
+    JUMP_HIST_ROWS = ("all", "bad", "weak", "upwind", "attempted", "exact",
+                      "linear_fallback")
+    TOTAL_KEYS = ("faces", "bad", "weak", "upwind", "routed", "attempted",
+                  "exact", "verified", "seven", "planar5", "three_wave",
+                  "planar4", "continuation", "degenerate", "linear_fallback",
+                  "hlld_after_attempt")
 
     def record_coverage(self, idir, n_interfaces, attempted_idx, exact_idx,
-                        routed_idx=None, **masks):
+                        routed_idx=None, jump=None, **masks):
         """One sweep's coverage: which faces were attempted, which came out
         exact, and -- the point of the extra masks -- WHICH SOLVER answered
         each one and why the rest were never tried.  Not subject to the
@@ -269,6 +289,13 @@ class Harvester:
             degenerate  answered in a degenerate class (exact in its limit)
             verified    the answer passed the full seven-wave residual
             bad, weak, upwind   why a face was never attempted
+            linear_fallback   attempted, lost by every exact rung, and given
+                        the linearised flux instead of HLLD (its jump is below
+                        RMHD_WEAK_FALLBACK_TAU); never exact
+
+        ``jump`` (optional, over the whole sweep) is each face's relative
+        jump; with it the sweep also stores ``jump_hist``, the faces of
+        each decade of jump per row of ``JUMP_HIST_ROWS``.
 
         Everything is packed to bits, so eleven maps of a 128^2 sweep cost
         about 22 kB.  This is what `scripts/plot_rotor_output.py` draws.
@@ -285,6 +312,7 @@ class Harvester:
         rec = dict(sweep=self.n_sweeps, idir=int(idir), n=n,
                    attempted=np.packbits(att), exact=np.packbits(ex),
                    routed=np.packbits(rt))
+        unpacked = dict(attempted=att, exact=ex, routed=rt)
         for k in self.COVERAGE_KEYS[3:]:
             m = masks.get(k)
             full = np.zeros(n, dtype=np.bool_)
@@ -300,6 +328,24 @@ class Harvester:
                         "sweep) or %d (the attempted subset)"
                         % (k, m.size, n, sel.size))
             rec[k] = np.packbits(full)
+            unpacked[k] = full
+        for k in self.TOTAL_KEYS[1:-1]:
+            self.totals[k] += int(unpacked[k].sum())
+        self.totals["faces"] += n
+        self.totals["hlld_after_attempt"] += int(
+            (att & ~ex & ~unpacked["linear_fallback"]).sum())
+        if jump is not None:
+            jb = np.digitize(np.asarray(jump, dtype=float).reshape(-1),
+                             self.JUMP_EDGES)
+            if jb.size != n:
+                raise ValueError("jump has %d entries, expected %d"
+                                 % (jb.size, n))
+            unpacked["all"] = np.ones(n, dtype=np.bool_)
+            h = np.stack([np.bincount(jb[unpacked[r]],
+                                      minlength=len(self.JUMP_EDGES) + 1)
+                          for r in self.JUMP_HIST_ROWS]).astype(np.int64)
+            rec["jump_hist"] = h
+            self.jump_hist_total += h
         self._coverage.append(rec)
         self.n_sweeps += 1
         # the call is complete: its rows, their twins and this map go into
@@ -328,16 +374,24 @@ class Harvester:
                 idir=np.array([d["idir"] for d in c], dtype=np.int8),
                 n=np.array([d["n"] for d in c], dtype=np.int64),
                 **{k: np.stack([d[k] for d in c], axis=0)
-                   for k in self.COVERAGE_KEYS})
+                   for k in self.COVERAGE_KEYS},
+                **({"jump_hist": np.stack([d["jump_hist"] for d in c])}
+                   if all("jump_hist" in d for d in c) else {}))
             c.clear()
         self._shard += 1
         self._flush_due = False
 
     def summary(self):
+        """Counts for run_meta.json: the rows written, and what happened to
+        every face this process saw (``faces``: the TOTAL_KEYS; ``jump_hist``
+        the summed per-decade histograms, rows ``jump_rows``)."""
         return dict(harvest_solved=self.n_solved,
                     harvest_unsolved=self.n_unsolved,
                     harvest_sweeps=self.n_sweeps,
-                    harvest_dir=self.out_dir)
+                    harvest_dir=self.out_dir,
+                    faces=dict(self.totals),
+                    jump_rows=list(self.JUMP_HIST_ROWS),
+                    jump_hist=self.jump_hist_total.tolist())
 
     def close(self):
         self.flush()
