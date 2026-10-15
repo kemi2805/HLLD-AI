@@ -524,7 +524,8 @@ keeps a valid flux.
       │
       ├─ GATES — most faces stop here
       │     bad      superluminal or non-positive state
-      │     weak     relative jump < 1e-2: exact and HLLD agree to O(jump²)
+      │     weak     relative jump < 1e-2: the linearised flux, exact to O(jump²)
+      │                (HLLD only to O(jump); docs/what_we_solve.md 4c)
       │     upwind   the whole fan lies on one side: HLLD is already exact
       │
       ├─ CANONICAL ORIENTATION: every face is replaced by the canonical

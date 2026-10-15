@@ -1,0 +1,3142 @@
+% The Riemann Problem in Special-Relativistic Magnetohydrodynamics
+% Lecture notes.  Build:  latexmk -pdf rmhd_riemann_course.tex
+\documentclass[11pt,a4paper,oneside,openany]{book}
+
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage{amsmath,amssymb,amsthm,mathtools,bm}
+\usepackage{stmaryrd}
+\usepackage[a4paper,top=2.6cm,bottom=2.8cm,left=2.7cm,right=2.7cm,headheight=14pt]{geometry}
+\usepackage{microtype}
+\usepackage{booktabs,array,tabularx,multirow}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,calc,decorations.pathreplacing,patterns}
+\usepackage{pgfplots}
+\pgfplotsset{compat=1.18}
+\usepgfplotslibrary{polar}
+\usepackage[most]{tcolorbox}
+\usepackage{caption}
+\captionsetup{font=small,labelfont=bf}
+\usepackage[authoryear,round]{natbib}
+\usepackage{url}
+\usepackage[colorlinks=true,linkcolor=blue!55!black,citecolor=green!35!black,
+            urlcolor=blue!55!black]{hyperref}
+% citation commands used in the text
+\newcommand{\textcite}{\citet}
+\newcommand{\parencite}{\citep}
+% links used in the bibliography
+\newcommand{\arxiv}[1]{\href{https://arxiv.org/abs/#1}{arXiv:#1}}
+\newcommand{\doi}[1]{\href{https://doi.org/#1}{doi:#1}}
+\usepackage[capitalise,nameinlink]{cleveref}
+
+% ---------------------------------------------------------------- theorem-like
+\theoremstyle{definition}
+\newtheorem{definition}{Definition}[chapter]
+\newtheorem{example}{Example}[chapter]
+\newtheorem{exercise}{Exercise}[chapter]
+\theoremstyle{plain}
+\newtheorem{proposition}{Proposition}[chapter]
+\newtheorem{lemma}{Lemma}[chapter]
+\theoremstyle{remark}
+\newtheorem{remark}{Remark}[chapter]
+\crefname{exercise}{Exercise}{Exercises}
+\crefname{proposition}{Proposition}{Propositions}
+\crefname{definition}{Definition}{Definitions}
+\crefname{remark}{Remark}{Remarks}
+\crefname{example}{Example}{Examples}
+
+\newenvironment{solution}{\par\smallskip\noindent\small\textit{Solution.}\ }{\par\medskip}
+
+% boxes
+\newtcolorbox{codebox}[1][]{colback=gray!6,colframe=gray!55,boxrule=0.5pt,arc=1.5pt,
+  left=4pt,right=4pt,top=3pt,bottom=3pt,fonttitle=\bfseries\small,
+  title={In the code#1},breakable}
+\newtcolorbox{keybox}[1][]{colback=blue!3,colframe=blue!45!black,boxrule=0.5pt,arc=1.5pt,
+  left=4pt,right=4pt,top=3pt,bottom=3pt,fonttitle=\bfseries\small,title={#1},breakable}
+
+% ---------------------------------------------------------------- notation
+\newcommand{\jump}[1]{\llbracket #1\rrbracket}
+\newcommand{\avg}[1]{(\!(#1)\!)}
+\newcommand{\dd}{\mathrm{d}}
+\newcommand{\vv}{\bm{v}}
+\newcommand{\BB}{\bm{B}}
+\newcommand{\EE}{\bm{E}}
+\newcommand{\SSS}{\bm{S}}
+\newcommand{\UU}{\bm{U}}
+\newcommand{\FF}{\bm{F}}
+\newcommand{\VV}{\bm{V}}
+\newcommand{\calB}{\mathcal{B}}
+\newcommand{\calA}{\mathcal{A}}
+\newcommand{\calN}{\mathcal{N}}
+\newcommand{\Ptot}{P}
+\newcommand{\vB}{\eta}
+\newcommand{\sgn}{\operatorname{sign}}
+\newcommand{\code}[1]{\texttt{\detokenize{#1}}}
+\newcommand{\file}[1]{\texttt{\detokenize{#1}}}
+% flag for anything not verified against a source or the code
+\newcommand{\unverified}[1]{\footnote{\textbf{Not independently verified:} #1}}
+
+\hypersetup{pdftitle={The Riemann Problem in Special-Relativistic Magnetohydrodynamics},
+            pdfauthor={Lecture notes}}
+
+\begin{document}
+
+% ======================================================================== title
+\begin{titlepage}
+\centering
+\vspace*{3cm}
+{\Huge\bfseries The Riemann Problem in\\[0.3em] Special-Relativistic Magnetohydrodynamics\par}
+\vspace{1.2cm}
+{\Large Lecture notes for a graduate course\par}
+\vspace{0.6cm}
+{\large with derivations, exercises, and notes on an exact solver in practice\par}
+\vspace{2.5cm}
+\begin{minipage}{0.82\textwidth}
+\small
+These notes develop the theory of the one-dimensional Riemann problem of ideal
+special-relativistic magnetohydrodynamics (SRMHD) from the conservation laws up to
+the exact and approximate solvers used in multidimensional codes. Derivations are
+given step by step. The algebraic identities marked as such were checked
+symbolically or numerically with the script \file{sympy_checks.py} that accompanies
+these notes (\cref{app:verification}). Statements about the reference
+implementation (the exact solver in \file{rmhd_final} and the finite-volume code in
+\file{HLLD}) are restricted to what its source and its documentation record.
+\end{minipage}
+\vfill
+{\small Version of 15 October 2026\par}
+\end{titlepage}
+
+\frontmatter
+\tableofcontents
+
+% ======================================================================== conventions
+\chapter*{Conventions and notation}
+\addcontentsline{toc}{chapter}{Conventions and notation}
+
+\paragraph{Units and metric.} We use units with $c=1$ and the Minkowski metric
+$g_{\mu\nu}=\operatorname{diag}(-1,1,1,1)$ in Cartesian coordinates $(t,x,y,z)$, so
+covariant derivatives reduce to partial derivatives. Greek indices run over
+$0,\dots,3$, Latin indices over $1,2,3$; repeated indices are summed. The magnetic field
+is measured in Heaviside--Lorentz-type units in which the factor $\sqrt{4\pi}$ has been
+absorbed into $\BB$: the magnetic pressure is $b^2/2$ and the Maxwell stress has no
+$4\pi$. (A Gaussian field is $\sqrt{4\pi}$ times ours.) This is the convention of the
+codes discussed here.
+
+\paragraph{Fluid variables.} $\rho$ is the rest-mass density, $\epsilon$ the specific
+internal energy, $p$ the gas pressure, $h=1+\epsilon+p/\rho$ the specific enthalpy of
+the gas, $\vv$ the three-velocity, $W=(1-v^2)^{-1/2}$ the Lorentz factor and
+$u^\mu=W(1,\vv)$ the four-velocity. The laboratory magnetic field is $\BB$, the comoving
+field four-vector is $b^\mu$, and
+\begin{equation*}
+\vB\equiv\vv\cdot\BB,\qquad
+b^2\equiv b^\mu b_\mu,\qquad
+w\equiv\rho h+b^2,\qquad
+\Ptot\equiv p+\tfrac12 b^2,\qquad
+\sigma\equiv \frac{b^2}{\rho h}.
+\end{equation*}
+$w$ is the \emph{total} enthalpy density, $\Ptot$ the \emph{total} pressure and
+$\sigma$ the magnetisation. Two warnings about other people's notation: the exact solver
+of \textcite{GiacomazzoRezzolla2006} writes $h$ for the \emph{total} specific enthalpy
+$h_g+b^2/\rho$ and $h_g$ for ours, and \textcite{Anton2010} write $\mathcal{E}$ for our
+$w$. Where we quote their equations we translate them.
+
+\paragraph{Speeds.} $c_s$ is the sound speed, $c_a^2=b^2/w$ the square of the Alfvén speed
+in the fluid frame, and $\zeta^2=c_s^2+c_a^2-c_s^2c_a^2$. Characteristic speeds in the
+laboratory are written $\lambda$, with subscripts e (entropy), A (Alfvén), s (slow), f
+(fast). Shock speeds are $V_s$, with Lorentz factor $W_s$.
+
+\paragraph{Jumps.} Across a discontinuity, ``a'' labels the state \emph{ahead} of the
+front (into which it moves) and ``b'' the state \emph{behind}. Following
+\textcite{GiacomazzoRezzolla2006} we write
+\begin{equation*}
+\jump{Q}\equiv Q_a-Q_b,\qquad \avg{Q}\equiv Q_a+Q_b .
+\end{equation*}
+
+\paragraph{Planar symmetry.} In the Riemann problem all quantities depend on $t$ and on
+the coordinate $x$ normal to the initial discontinuity. ``Normal'' quantities carry the
+index $x$ (or $n$), ``tangential'' ones the indices $y,z$ (or $t$, as in $B_t$).
+
+\paragraph{Code references.} File names refer to the two repositories of the reference
+implementation: \file{HLLD/} (finite-volume code; e.g.\ \file{src/physics/hlld.py}) and
+\file{rmhd_final/} (exact solver; e.g.\ \file{rmhd/batched/planar5_b.py}). Its
+documentation is cited by file name: \file{HLLD/docs/GUIDE.md} (``the guide'') and
+\file{HLLD/docs/what_we_solve.md} (``the solver record'').
+
+\mainmatter
+
+% ======================================================================== chapter 1
+\chapter{Introduction}\label{ch:intro}
+
+\section{Hyperbolic conservation laws and the Riemann problem}
+
+Ideal relativistic magnetohydrodynamics, like ideal gas dynamics, is a system of
+conservation laws. In one space dimension it has the form
+\begin{equation}\label{eq:cl1d}
+\partial_t\UU+\partial_x\FF(\UU)=0,
+\end{equation}
+where $\UU\in\mathbb{R}^m$ collects densities of conserved quantities and $\FF(\UU)$
+their fluxes. The system is \emph{hyperbolic} if the Jacobian
+$\mathsf{A}(\UU)=\partial\FF/\partial\UU$ has real eigenvalues and a complete set of
+eigenvectors for every admissible $\UU$; the eigenvalues are the speeds at which small
+disturbances propagate. Solutions of \eqref{eq:cl1d} develop discontinuities in finite
+time even from smooth data, so they are understood in the weak (integral) sense,
+\begin{equation}\label{eq:integralform}
+\int_{x_1}^{x_2}\UU(x,t_2)\,\dd x=\int_{x_1}^{x_2}\UU(x,t_1)\,\dd x
+-\int_{t_1}^{t_2}\bigl[\FF(\UU(x_2,t))-\FF(\UU(x_1,t))\bigr]\dd t ,
+\end{equation}
+supplemented by admissibility conditions that select the physically relevant weak
+solution (\cref{ch:discontinuities}).
+
+\begin{definition}[Riemann problem]
+The Riemann problem for \eqref{eq:cl1d} is the initial-value problem with piecewise
+constant data
+\begin{equation}\label{eq:rpdata}
+\UU(x,0)=\begin{cases}\UU_L,& x<0,\\ \UU_R,& x>0.\end{cases}
+\end{equation}
+\end{definition}
+
+Both \eqref{eq:cl1d} and \eqref{eq:rpdata} are invariant under the scaling
+$x\to\alpha x$, $t\to\alpha t$ with $\alpha>0$. If the (admissible) solution is unique,
+it must therefore be invariant too, $\UU(x,t)=\UU(\alpha x,\alpha t)$, i.e.\ it depends on
+$x$ and $t$ only through the similarity variable
+\begin{equation}
+\xi\equiv x/t .
+\end{equation}
+The solution is a fan of \emph{waves} emanating from the origin and separating constant
+states. A wave is either a discontinuity moving at constant speed (shock, contact,
+rotational discontinuity) or a centred \emph{rarefaction}, a smooth self-similar fan.
+For an $m$-component strictly hyperbolic system with genuinely nonlinear or linearly
+degenerate fields, the classical theory \parencite{Lax1957} gives, for data close
+enough together, exactly one wave per characteristic family and $m-1$ intermediate
+constant states. Ideal MHD violates the hypotheses of that theorem at some states, which
+is the source of most of the difficulty treated in these notes.
+
+\section{Godunov's method}\label{sec:godunov}
+
+Divide the line into cells $C_i=[x_{i-1/2},x_{i+1/2}]$ of width $\Delta x$ and store cell
+averages $\UU_i^n=\Delta x^{-1}\int_{C_i}\UU(x,t^n)\,\dd x$. Applying
+\eqref{eq:integralform} to $C_i\times[t^n,t^{n+1}]$ gives the \emph{exact} relation
+\begin{equation}\label{eq:fvupdate}
+\UU_i^{n+1}=\UU_i^{n}-\frac{\Delta t}{\Delta x}\bigl(\hat\FF_{i+1/2}-\hat\FF_{i-1/2}\bigr),
+\qquad
+\hat\FF_{i+1/2}=\frac{1}{\Delta t}\int_{t^n}^{t^{n+1}}\FF\bigl(\UU(x_{i+1/2},t)\bigr)\dd t .
+\end{equation}
+Any numerical method of this form is conservative: the sum of $\UU_i\Delta x$ changes
+only through the boundary fluxes. \textcite{Godunov1959} closed \eqref{eq:fvupdate} by
+replacing the unknown $\UU(x,t^n)$ with the piecewise-constant function equal to
+$\UU_i^n$ in $C_i$. Every interface then carries a Riemann problem with data
+$(\UU_i^n,\UU_{i+1}^n)$. As long as waves from neighbouring interfaces do not reach the
+interface during the step, i.e.\ under the Courant--Friedrichs--Lewy condition
+\begin{equation}
+\frac{\Delta t}{\Delta x}\,\max|\lambda|\le 1,
+\end{equation}
+the solution \emph{at} $x_{i+1/2}$ is the constant $\UU^\ast_{i+1/2}=
+\UU_{\mathrm{RP}}(\xi=0;\UU_i^n,\UU_{i+1}^n)$, and the flux integral is exact:
+\begin{equation}\label{eq:godunovflux}
+\hat\FF_{i+1/2}=\FF\bigl(\UU_{\mathrm{RP}}(0;\UU_i^n,\UU_{i+1}^n)\bigr).
+\end{equation}
+(The stricter bound $1/2$ guarantees that waves from neighbouring interfaces do not
+interact inside a cell; it is needed for the reconstruct--evolve--average interpretation
+but not for \eqref{eq:godunovflux}, which only uses the value on the interface.)
+
+\begin{figure}[t]
+\centering
+\begin{tikzpicture}[x=1.15cm,y=1.0cm,>=Stealth]
+  % x-t plane with local Riemann fans
+  \draw[->] (-0.3,2.4) -- (10.4,2.4) node[right] {$x$};
+  \draw[->] (-0.3,2.4) -- (-0.3,4.4) node[above] {$t$};
+  \draw[gray!60] (-0.3,4.0) -- (10.2,4.0) node[right,black,font=\small] {$t^{n+1}$};
+  \node[left,font=\small] at (-0.3,2.4) {$t^n$};
+  \foreach \i in {1,...,4}{
+    \begin{scope}[shift={(2*\i,2.4)}]
+      \draw[red!70!black] (0,0) -- (-0.75,1.6);
+      \draw[red!70!black,dashed] (0,0) -- (0.15,1.6);
+      \draw[red!70!black] (0,0) -- (0.6,1.6);
+      \draw[very thick,blue!60!black] (0,0) -- (0,1.6);
+    \end{scope}
+  }
+  % piecewise-constant data
+  \foreach \i/\h in {0/1.6,1/1.25,2/0.7,3/0.85,4/0.45}{
+    \draw[thick,blue!60!black] (2*\i,\h) -- (2*\i+2,\h);
+    \node[font=\small] at (2*\i+1,\h+0.25) {$\UU_{\i}^n$};
+  }
+  \foreach \i in {0,...,5}{\draw[gray] (2*\i,0) -- (2*\i,2.2);}
+  \draw[->] (-0.3,0) -- (10.4,0) node[right] {$x$};
+\end{tikzpicture}
+\caption{Godunov's method. Bottom: cell averages define piecewise-constant data at $t^n$.
+Top: each interface carries a Riemann problem; the solution on the interface ($\xi=0$,
+thick line) is constant in time and gives the flux \eqref{eq:godunovflux}.}
+\label{fig:godunov}
+\end{figure}
+
+Godunov's scheme is first-order accurate, conservative, and \emph{upwind}: it uses
+characteristic information to decide which side of the interface each piece of
+information comes from. With the exact Riemann solution it inherits the admissibility
+of the exact waves. Its accuracy is raised by \emph{reconstructing} a piecewise
+polynomial from the averages and solving Riemann problems between the reconstructed
+interface values (\cref{ch:multid}). If a conservative scheme converges as the grid is
+refined, its limit is a weak solution \parencite[see the Lax--Wendroff theorem
+in][]{LeVeque2002}; which weak solution is a separate question, and one that will
+return in \cref{ch:nonunique}.
+
+\subsection*{Why the Riemann problem is the building block}
+
+Three properties make the Riemann problem the natural ``atom'' of a shock-capturing
+scheme. (i)~It contains, exactly, the nonlinear wave structure that a scheme has to
+respect at a discontinuity, including the correct jump conditions. (ii)~Its solution is
+self-similar, so the flux at $\xi=0$ is a function of two states only, $\hat\FF=
+\hat\FF(\UU_L,\UU_R)$, which can be evaluated face by face. (iii)~Every approximate
+solver used in practice---HLL, HLLC, HLLD, Roe-type---is a model of the exact Riemann
+fan that keeps some of its waves and discards others (\cref{ch:approx}); the exact
+solution is the end point against which they are measured \parencite{Toro2009}.
+
+\section{Why relativistic MHD}
+
+Relativistic magnetised outflows and plasmas are central to high-energy astrophysics:
+jets from active galactic nuclei and X-ray binaries, pulsar winds and their nebulae,
+gamma-ray-burst outflows, and accretion flows and magnetospheres of compact objects.
+Numerical models of these systems solve the equations of relativistic MHD with
+Godunov-type schemes; reviews of the methods are given by \textcite{MartiMuller2015} and
+in the textbook of \textcite{RezzollaZanotti2013}. Three features make the relativistic
+magnetised case harder than Newtonian MHD:
+\begin{itemize}[nosep]
+\item the characteristic speeds are bounded by $c$ and crowd together as the flow or the
+  field becomes relativistic, and they are roots of a quartic rather than of a
+  biquadratic;
+\item the conserved and primitive variables are related implicitly, so every flux
+  evaluation needs a nonlinear inversion (\cref{sec:c2p});
+\item in strongly magnetised regions the gas pressure is a small difference of large
+  numbers, $p=\Ptot-b^2/2$, so small relative errors in the total pressure produce
+  large relative errors (or negative values) in $p$.
+\end{itemize}
+
+\section{The exact solver in practice, and a roadmap}
+
+The exact solution of the SRMHD Riemann problem was given by
+\textcite{GiacomazzoRezzolla2006}, building on the special case of purely tangential
+fields by \textcite{Romero2005} and on the relativistic hydrodynamic solvers of
+\textcite{MartiMuller1994}, \textcite{Pons2000}, \textcite{RezzollaZanotti2001} and
+\textcite{RezzollaZanottiPons2003}. Approximate solvers of the HLL family
+\parencite{MignoneBodo2006,MignoneUglianoBodo2009} and linearised solvers
+\parencite{Komissarov1999,Balsara2001,Anton2010} are what multidimensional codes use.
+These notes are written for a reader who works on an exact SRMHD solver that is used as
+the flux function of a two-dimensional constrained-transport code. That implementation
+is described where it illustrates the theory (\cref{sec:student-impl,sec:failure-classes}),
+always as recorded in its own documentation.
+
+\paragraph{Roadmap.}
+\Cref{ch:equations} derives the equations of ideal SRMHD and their conservative form.
+\Cref{ch:characteristics} derives the characteristic speeds, their ordering and their
+degeneracies. \Cref{ch:discontinuities,ch:rarefactions} treat the two kinds of
+elementary waves, discontinuities and rarefactions. \Cref{ch:hydro} solves the
+relativistic hydrodynamic Riemann problem completely, as a warm-up. \Cref{ch:srmhd}
+assembles the seven-wave SRMHD problem and describes exact solution methods, including
+the reference implementation. \Cref{ch:nonunique} discusses compound waves and
+non-uniqueness. \Cref{ch:approx} derives the approximate solvers HLL, HLLC and HLLD and
+reviews linearised solvers. \Cref{ch:multid} places the Riemann solver in a
+multidimensional finite-volume code with constrained transport and lists the standard
+tests. The appendices collect the algebra of $b^\mu$, the eigenstructure, a notation
+table and a record of what was verified and how.
+
+\section*{Exercises}
+\addcontentsline{toc}{section}{Exercises}
+
+\begin{exercise}\label{ex:selfsimilar}
+Show that if $\UU(x,t)$ solves \eqref{eq:cl1d} with data \eqref{eq:rpdata}, then so does
+$\UU_\alpha(x,t)=\UU(\alpha x,\alpha t)$ for every $\alpha>0$. Conclude that a unique
+solution is a function of $x/t$.
+\end{exercise}
+\begin{solution}
+$\partial_t\UU_\alpha=\alpha(\partial_t\UU)(\alpha x,\alpha t)$ and
+$\partial_x\FF(\UU_\alpha)=\alpha(\partial_x\FF(\UU))(\alpha x,\alpha t)$, so
+\eqref{eq:cl1d} holds; the data are scale invariant. Uniqueness gives
+$\UU=\UU_\alpha$ for all $\alpha$; choose $\alpha=1/t$.
+\end{solution}
+
+\begin{exercise}
+For linear advection $\partial_t u+a\partial_x u=0$ with $a>0$, show that Godunov's
+method is the first-order upwind scheme $u_i^{n+1}=u_i^n-a\frac{\Delta t}{\Delta x}
+(u_i^n-u_{i-1}^n)$, and that it is stable for $a\Delta t/\Delta x\le1$.
+\end{exercise}
+
+\begin{exercise}
+Write the integral form \eqref{eq:integralform} on a rectangle that contains a single
+discontinuity moving at constant speed $V_s$, and let the rectangle shrink onto the
+discontinuity. Derive the Rankine--Hugoniot condition $\FF_a-\FF_b=V_s(\UU_a-\UU_b)$.
+(This is used throughout \cref{ch:discontinuities}.)
+\end{exercise}
+
+% ======================================================================== chapter 2
+\chapter{The equations of ideal SRMHD}\label{ch:equations}
+
+\section{Fluid}
+
+The rest-mass current and the energy--momentum tensor of a perfect fluid are
+\begin{equation}
+J^\mu=\rho u^\mu,\qquad
+T^{\mu\nu}_{\mathrm{fl}}=\rho h\,u^\mu u^\nu+p\,g^{\mu\nu},
+\end{equation}
+with $u^\mu u_\mu=-1$ and $h=1+\epsilon+p/\rho$. In the fluid rest frame
+$T^{00}_{\mathrm{fl}}=e\equiv\rho(1+\epsilon)$ is the energy density and
+$T^{ij}_{\mathrm{fl}}=p\,\delta^{ij}$.
+
+\section{Electromagnetic field and the ideal-MHD condition}\label{sec:bmu}
+
+Let $F^{\mu\nu}$ be the Faraday tensor and ${}^\ast\!F^{\mu\nu}$ its dual. In the
+laboratory frame we choose the components
+\begin{equation}\label{eq:dualF}
+{}^\ast\!F^{0i}=B^i,\qquad {}^\ast\!F^{ij}=-\varepsilon^{ijk}E_k ,
+\end{equation}
+with $\varepsilon^{ijk}$ the three-dimensional Levi-Civita symbol. With this choice the
+homogeneous Maxwell equations $\partial_\mu{}^\ast\!F^{\mu\nu}=0$ read
+$\nabla\cdot\BB=0$ ($\nu=0$) and $\partial_t\BB+\nabla\times\EE=0$ ($\nu=j$).
+
+The comoving (fluid-frame) electric and magnetic fields are the four-vectors
+\begin{equation}
+e^\mu=F^{\mu\nu}u_\nu,\qquad b^\mu={}^\ast\!F^{\mu\nu}u_\nu .
+\end{equation}
+Both are orthogonal to $u^\mu$ by antisymmetry. A perfect conductor cannot sustain an
+electric field in its rest frame; the \emph{ideal-MHD condition} is $e^\mu=0$, which in
+the laboratory frame reads
+\begin{equation}\label{eq:idealmhd}
+\EE=-\vv\times\BB .
+\end{equation}
+
+\begin{proposition}[Comoving field]\label{prop:bmu}
+Under \eqref{eq:idealmhd},
+\begin{align}
+b^0&=W(\vv\cdot\BB)=W\vB, \label{eq:b0}\\
+b^i&=\frac{B^i}{W}+b^0v^i, \label{eq:bi}\\
+b^2&=b^\mu b_\mu=\frac{B^2}{W^2}+(\vv\cdot\BB)^2, \label{eq:b2}
+\end{align}
+$u_\mu b^\mu=0$, and ${}^\ast\!F^{\mu\nu}=u^\mu b^\nu-u^\nu b^\mu$.
+\end{proposition}
+
+\begin{proof}
+With $u_\nu=W(-1,\vv)$, \eqref{eq:dualF} gives
+$b^0={}^\ast\!F^{0i}u_i=W\,\BB\cdot\vv$ and
+$b^i={}^\ast\!F^{i0}u_0+{}^\ast\!F^{ij}u_j=WB^i-W\varepsilon^{ijk}v_jE_k
+=W\,[\BB-\vv\times\EE]^i$.
+With $\EE=-\vv\times\BB$,
+$\vv\times\EE=-\vv\times(\vv\times\BB)=v^2\BB-\vv(\vv\cdot\BB)$, so
+$b^i=W[(1-v^2)B^i+v^i\vB]=B^i/W+W\vB\,v^i$, which is \eqref{eq:bi}. Then
+$u_\mu b^\mu=W(-b^0+\vv\cdot\bm{b})=W(-W\vB+\vB/W+W\vB v^2)=0$. Finally
+$b^2=-(b^0)^2+|\bm b|^2=-W^2\vB^2+B^2/W^2+2\vB^2+W^2\vB^2v^2=B^2/W^2+\vB^2$. For the
+last statement compute $u^0b^i-u^ib^0=W(B^i/W+W\vB v^i)-Wv^iW\vB=B^i={}^\ast\!F^{0i}$;
+the spatial components follow in the same way.
+\end{proof}
+
+Inverting \eqref{eq:bi}, the laboratory field is $B^i=u^0b^i-u^ib^0=W(b^i-b^0v^i)$.
+In the fluid rest frame $b^\mu=(0,\BB')$: $b^\mu$ \emph{is} the rest-frame magnetic
+field, and $b^2$ its invariant strength. The \emph{magnetic pressure} is $b^2/2$.
+
+\paragraph{Electromagnetic stress--energy.} In our units
+$T^{\mu\nu}_{\mathrm{em}}=F^{\mu\alpha}F^{\nu}{}_{\alpha}-\frac14g^{\mu\nu}F_{\alpha\beta}F^{\alpha\beta}$.
+Under the ideal-MHD condition,
+\begin{equation}\label{eq:Tem}
+T^{\mu\nu}_{\mathrm{em}}=b^2u^\mu u^\nu+\tfrac12b^2g^{\mu\nu}-b^\mu b^\nu .
+\end{equation}
+\emph{Proof.} In the fluid rest frame the field is purely magnetic, $\BB'=\bm b$, and the
+Maxwell tensor has $T^{00}=b^2/2$, $T^{0i}=0$, $T^{ij}=\frac12b^2\delta^{ij}-b^ib^j$.
+The right-hand side of \eqref{eq:Tem} evaluated with $u^\mu=(1,\bm 0)$ and
+$b^\mu=(0,\bm b)$ gives the same components. Both sides are tensors, so they agree in
+every frame. \qed
+
+\section{Total energy--momentum tensor and the conservation laws}
+
+Adding fluid and field,
+\begin{equation}\label{eq:Tmunu}
+\boxed{\;T^{\mu\nu}=(\rho h+b^2)\,u^\mu u^\nu+\Bigl(p+\frac{b^2}{2}\Bigr)g^{\mu\nu}-b^\mu b^\nu
+=w\,u^\mu u^\nu+\Ptot\,g^{\mu\nu}-b^\mu b^\nu\;}
+\end{equation}
+The equations of ideal SRMHD are conservation of rest mass, of energy--momentum, and
+the homogeneous Maxwell equations:
+\begin{equation}\label{eq:covariant}
+\nabla_\mu(\rho u^\mu)=0,\qquad
+\nabla_\mu T^{\mu\nu}=0,\qquad
+\nabla_\mu{}^\ast\!F^{\mu\nu}=\nabla_\mu(u^\mu b^\nu-u^\nu b^\mu)=0 .
+\end{equation}
+The inhomogeneous Maxwell equations only determine the current and charge densities,
+which ideal MHD does not need. Together with an equation of state the system
+\eqref{eq:covariant} is closed.
+
+\section{Conservative form}\label{sec:consform}
+
+In flat spacetime and Cartesian coordinates, \eqref{eq:covariant} is a system of
+conservation laws $\partial_t\UU+\partial_i\FF^i=0$. Reading off the time components:
+
+\paragraph{Mass.} $D\equiv\rho u^0=\rho W$ with flux $F^i(D)=\rho Wv^i$.
+
+\paragraph{Momentum.} $S_j\equiv T^{0j}=wW^2v_j-b^0b_j$. Substituting
+\eqref{eq:b0}--\eqref{eq:b2},
+\begin{equation}
+wW^2v_j-b^0b_j=\Bigl(\rho h+\frac{B^2}{W^2}+\vB^2\Bigr)W^2v_j-W\vB\Bigl(\frac{B_j}{W}+W\vB v_j\Bigr)
+=(\rho hW^2+B^2)v_j-\vB B_j .
+\end{equation}
+
+\paragraph{Energy.} $T^{00}=wW^2-\Ptot-(b^0)^2$. Since $b^2W^2-(b^0)^2=B^2$ by
+\eqref{eq:b0}--\eqref{eq:b2},
+$T^{00}=\rho hW^2+B^2-p-\frac12b^2$. One evolves either $E\equiv T^{00}$ or
+$\tau\equiv E-D$, which removes the rest-mass energy and is better conditioned in the
+Newtonian regime.
+
+\paragraph{Magnetic field.} The $\nu=j$ components of
+$\partial_\mu(u^\mu b^\nu-u^\nu b^\mu)=0$ give
+$\partial_tB^j+\partial_i(u^ib^j-u^jb^i)=0$, and
+$u^ib^j-u^jb^i=Wv^i(B^j/W+b^0v^j)-Wv^j(B^i/W+b^0v^i)=v^iB^j-v^jB^i$. The $\nu=0$
+component is the constraint $\partial_iB^i=0$.
+
+\begin{keybox}{Conserved variables and $x$-fluxes}
+\begin{equation}\label{eq:UF}
+\UU=\begin{pmatrix} D\\ S_j\\ \tau\\ B^k\end{pmatrix}
+=\begin{pmatrix}\rho W\\ (\rho hW^2+B^2)v_j-(\vv\cdot\BB)B_j\\
+\rho hW^2+B^2-p-\tfrac12\bigl[B^2/W^2+(\vv\cdot\BB)^2\bigr]-\rho W\\ B^k\end{pmatrix},
+\end{equation}
+\begin{equation}\label{eq:Fx}
+\FF^x=\begin{pmatrix} Dv_x\\ wW^2v_xv_j+\Ptot\delta_{xj}-b^xb_j\\ S_x-Dv_x\\
+v_xB^k-v^kB^x\end{pmatrix}.
+\end{equation}
+Equivalent forms: $\SSS=\rho hW^2\vv+\EE\times\BB$,
+$\tau=\rho hW^2-p-D+\frac12(E^2+B^2)$ with $E^2=|\vv\times\BB|^2=v^2B^2-\vB^2$, and
+$T^{xj}=S_jv_x+\Ptot\delta_{xj}-B^xb_j/W$.
+\end{keybox}
+
+The equivalent forms follow from $\EE\times\BB=-(\vv\times\BB)\times\BB=\vv B^2-\BB\vB$,
+from $B^2-\frac12b^2=\frac12(B^2+v^2B^2-\vB^2)$, and from expanding $b^xb_j$ with
+\eqref{eq:bi}. All of \eqref{eq:UF} was checked symbolically against the components of
+\eqref{eq:Tmunu} (\cref{app:verification}).
+
+\begin{codebox}[: conserved variables and fluxes]
+\file{HLLD/src/physics/hlld.py} builds $\UU$ and $\FF$ exactly as in \eqref{eq:UF}:
+\code{primitive_to_conserved} uses $\tau=\rho hW^2-p-D+\tfrac12(B^2+B^2v^2-\vB^2)$, and
+\code{compute_srmhd_fluxes} uses $\tau=(\rho h+b^2)W^2-(p+b^2/2)-(b^0)^2-D$, the momentum
+flux $wWv_xu_j+\Ptot\delta_{xj}-b^xb_j$ and the induction flux $v_xB^k-v^kB^x$, for any
+sweep direction (\code{idir}). The HLLD star-state algebra is written for the total
+energy, so \code{energy_form} converts $\tau\to E=\tau+D$ and $F_\tau\to F_E=F_\tau+F_D$.
+The exact solver (\file{rmhd_final/rmhd/batched/jump.py}, \code{cons_flux}) also uses
+$E=T^{00}$; its state vector is $(\rho,\Ptot,v_x,v_y,v_z,B_y,B_z)$ with $B_n=B_x$ held
+separately, and it carries the \emph{total} pressure $\Ptot$, not $p$.
+\end{codebox}
+
+\paragraph{One dimension.} In planar symmetry $\partial_y=\partial_z=0$, the
+constraint gives $\partial_xB^x=0$ and the $x$-component of the induction equation gives
+$\partial_tB^x=0$: the normal field is a constant parameter of the Riemann problem. The
+one-dimensional system has seven unknowns,
+$\UU=(D,S_x,S_y,S_z,\tau,B^y,B^z)$.
+
+\section{Equation of state and sound speed}
+
+We use the ideal gas $p=(\Gamma-1)\rho\epsilon$, so
+\begin{equation}
+h=1+\frac{\Gamma}{\Gamma-1}\frac{p}{\rho}.
+\end{equation}
+The relativistic sound speed is $c_s^2=(\partial p/\partial e)_s$ with $e=\rho(1+\epsilon)$
+\parencite{Anton2010}. Along an isentrope the first law gives $\dd\epsilon=(p/\rho^2)\dd\rho$,
+hence $\dd e=(1+\epsilon)\dd\rho+\rho\,\dd\epsilon=h\,\dd\rho$ and
+\begin{equation}\label{eq:cs}
+c_s^2=\frac{1}{h}\Bigl(\frac{\partial p}{\partial\rho}\Bigr)_s=\frac{\Gamma p}{\rho h}
+=\frac{\Gamma(\Gamma-1)p}{(\Gamma-1)\rho+\Gamma p}<\Gamma-1 ,
+\end{equation}
+the bound being approached as $p/\rho\to\infty$; causality ($c_s<1$) holds for
+$\Gamma\le2$.
+
+\begin{codebox}[: equation of state]
+\file{HLLD/src/physics/eos.py} implements a hybrid EOS, $p=K\rho^\Gamma+
+(\Gamma_{\rm th}-1)\rho(\epsilon-\epsilon_{\rm cold})$, with
+$c_s^2=(\Gamma p_{\rm cold}+\Gamma_{\rm th}p_{\rm th})/(\rho h)$. All production runs and
+scripts construct it with $K=0$ and $\Gamma_{\rm th}=\Gamma$, which is the ideal gas
+above. The exact solver forms $p=\Ptot-b^2/2$ inside every routine and uses
+$h=1+\Gamma p/[(\Gamma-1)\rho]$ and $c_s^2=\Gamma p/(\rho h)$
+(\file{rmhd/batched/wave_speeds_b.py}).
+\end{codebox}
+
+\section{Primitive recovery}\label{sec:c2p}
+
+The fluxes are functions of the primitive variables $(\rho,\vv,p,\BB)$, but the scheme
+evolves $\UU$. Recovering the primitives is a nonlinear problem with no closed-form
+solution. Its structure is easiest to see with the variable $Z\equiv\rho hW^2$. From
+\eqref{eq:UF},
+\begin{equation}
+\SSS\cdot\BB=(\rho hW^2+B^2)\vB-\vB B^2=Z\,\vB ,
+\end{equation}
+so $\vB=(\SSS\cdot\BB)/Z$; squaring $\SSS$ then gives
+\begin{equation}\label{eq:c2p-v2}
+v^2=\frac{S^2Z^2+(\SSS\cdot\BB)^2(2Z+B^2)}{Z^2(Z+B^2)^2},
+\end{equation}
+and the energy equation becomes one equation in $Z$ \parencite{MignoneBodo2006},
+\begin{equation}\label{eq:c2p-f}
+f(Z)\equiv Z-p(Z)+\Bigl(1-\frac{1}{2W^2}\Bigr)B^2-\frac{(\SSS\cdot\BB)^2}{2Z^2}-E=0,
+\qquad
+p(Z)=\frac{\Gamma-1}{\Gamma}\,\frac{Z-DW}{W^2},
+\end{equation}
+where $W=W(Z)$ through \eqref{eq:c2p-v2} and $E=\tau+D$. The identities
+\eqref{eq:c2p-v2}--\eqref{eq:c2p-f} were checked in \cref{app:verification}.
+\textcite{Noble2006} compared one- and two-variable schemes of this kind for general
+relativistic MHD; \textcite{Kastaun2021} reformulated the inversion as a root-finding
+problem in $\mu=1/(\rho hW)$ with a bracketing interval that is guaranteed to contain
+the unique solution, which makes it robust across the physical parameter space.
+
+\begin{codebox}[: primitive recovery]
+\file{HLLD/src/physics/c2p.py} implements the scheme of \textcite{Kastaun2021},
+vectorised over cells: a bracketed root-find for $\mu=1/(\rho hW)$. According to the
+guide (Part~2.6) the bracketed secant was found to stall on hot, fast gas
+(e.g.\ $(\rho,p,v)=(0.1,1,0.99)$ left a relative error $\sim10^{-6}$), so cells that it
+leaves unconverged are re-solved by bisection; cells where recovery still fails are
+counted (\code{c2p_bad}) and floored.
+\end{codebox}
+
+\section{Newtonian limit}\label{sec:newtonian}
+
+Introduce a bookkeeping parameter $\delta$ with $\vv=O(\delta)$, $\BB=O(\delta)$ (Alfvén
+speeds comparable with flow speeds) and $p,\rho\epsilon=O(\delta^2)\rho$. Expanding
+\eqref{eq:UF} (checked symbolically, \cref{app:verification}):
+\begin{align}
+D&=\rho+O(\delta^2), & S_x&=\rho v_x+O(\delta^3),\\
+\tau&=\rho\epsilon+\tfrac12\rho v^2+\tfrac12B^2+O(\delta^4), &
+T^{xx}&=\rho v_x^2+p+\tfrac12B^2-B_x^2+O(\delta^4),
+\end{align}
+and the energy flux $S_x-Dv_x=\bigl(\tfrac12\rho v^2+\rho\epsilon+p+B^2\bigr)v_x-(\vv\cdot\BB)B_x
++O(\delta^5)$. These are the conserved variables and fluxes of Newtonian ideal MHD in
+Heaviside--Lorentz units; the induction equation is unchanged. The relativistic
+corrections enter through $W$, through the enthalpy $\rho h$ as inertia, and through the
+electric-field terms $\EE\times\BB$ and $E^2/2$ (displacement current), which make the
+momentum of the field $\vv B^2-\BB\vB$ part of $\SSS$.
+
+\section*{Exercises}
+\addcontentsline{toc}{section}{Exercises}
+
+\begin{exercise}
+Verify $u_\mu b^\mu=0$ and $b^2=B^2/W^2+\vB^2$ directly from \eqref{eq:b0}--\eqref{eq:bi},
+and show that $b^2W^2-(b^0)^2=B^2$.
+\end{exercise}
+\begin{solution}
+$b^2W^2-(b^0)^2=(B^2/W^2+\vB^2)W^2-W^2\vB^2=B^2$.
+\end{solution}
+
+\begin{exercise}
+Show that $\SSS=\rho hW^2\vv+\EE\times\BB$ and $\tau=\rho hW^2-p-D+\frac12(E^2+B^2)$, and
+interpret each term.
+\end{exercise}
+
+\begin{exercise}
+Show that $T^{ij}=S_jv^i+\Ptot\delta^{ij}-B^ib^j/W$. (Expand $b^ib^j$ with
+\eqref{eq:bi}.)
+\end{exercise}
+
+\begin{exercise}
+Show that $c_s^2<\Gamma-1$ for the ideal gas and that $c_s\to0$ as $p/\rho\to0$. For
+$\Gamma=4/3$ what is the largest possible sound speed?
+\end{exercise}
+\begin{solution}
+From \eqref{eq:cs}, $c_s^2=(\Gamma-1)\Gamma p/[(\Gamma-1)\rho+\Gamma p]$, increasing in
+$p/\rho$ with limit $\Gamma-1$; for $\Gamma=4/3$, $c_s<1/\sqrt3$.
+\end{solution}
+
+\begin{exercise}
+Derive \eqref{eq:c2p-v2} and \eqref{eq:c2p-f}. Show that for $\BB=0$ the problem
+reduces to one equation for $Z$ with $v^2=S^2/(Z^2)$, i.e.\ $v=S/(E+p)$.
+\end{exercise}
+
+\begin{exercise}
+Expand $\tau$ to fourth order in $\delta$ and identify the leading relativistic
+correction to the kinetic energy.
+\end{exercise}
+\begin{solution}
+With $W^2=1+v^2+v^4+\dots$ and $D=\rho W$, $\rho hW^2-p-D=\rho(1+\epsilon)W^2+p(W^2-1)-\rho W$;
+the kinetic part $\rho(W^2-W)=\rho(\frac12v^2+\frac58v^4+\dots)$, so the first
+correction is $\frac58\rho v^4$, plus $\rho\epsilon v^2+pv^2$ from the internal energy
+and pressure.
+\end{solution}
+
+% ======================================================================== chapter 3
+\chapter{Characteristics and hyperbolicity}\label{ch:characteristics}
+
+\section{The one-dimensional system}
+
+In planar symmetry the system \eqref{eq:UF} has seven components,
+$\UU=(D,S_x,S_y,S_z,\tau,B^y,B^z)^{\mathsf T}$, and $B^x$ is a constant parameter. Written
+in quasi-linear form,
+\begin{equation}
+\partial_t\UU+\mathsf{A}(\UU)\,\partial_x\UU=0,\qquad \mathsf{A}=\frac{\partial\FF^x}{\partial\UU},
+\end{equation}
+or, in primitive variables $\VV=(\rho,v_x,v_y,v_z,p,B^y,B^z)$,
+\begin{equation}
+\partial_t\VV+\tilde{\mathsf A}\,\partial_x\VV=0,\qquad
+\tilde{\mathsf A}=\Bigl(\frac{\partial\UU}{\partial\VV}\Bigr)^{-1}\frac{\partial\FF^x}{\partial\VV}.
+\end{equation}
+The two matrices are similar and have the same eigenvalues, the \emph{characteristic speeds}
+$\lambda$. A small-amplitude disturbance proportional to a right eigenvector $\bm r_k$
+travels at $\lambda_k$. Writing $\mathsf A$ out explicitly is laborious; it is much more
+economical to find the characteristic speeds covariantly and then specialise to the
+$x$-direction, which is what we do now.
+
+\section{Characteristic speeds from a covariant plane-wave analysis}\label{sec:covariant}
+
+A characteristic hypersurface $\phi(x^\mu)=\text{const}$ is a surface across which
+derivatives of the solution may jump. For a plane front moving along $x$ with
+laboratory speed $\lambda$ we take $\phi=x-\lambda t$, i.e.
+\begin{equation}
+\phi_\mu\equiv\partial_\mu\phi=(-\lambda,1,0,0).
+\end{equation}
+Following \textcite{Anile1989}, \textcite{Komissarov1999} and \textcite{Anton2010} we
+build three Lorentz scalars from $\phi_\mu$:
+\begin{equation}\label{eq:aBG}
+a\equiv u^\mu\phi_\mu=W(v_x-\lambda),\qquad
+\calB\equiv b^\mu\phi_\mu=b^x-\lambda b^0,\qquad
+G\equiv\phi^\mu\phi_\mu=1-\lambda^2 .
+\end{equation}
+(\textcite{MignoneBodo2006} use $a=W(\lambda-v_x)$; only $a^2$ enters the quartic below.)
+
+\begin{lemma}[Rest-frame meaning of the scalars]\label{lem:restframe}
+Let $V$ be the phase speed of the front measured in the fluid rest frame and $\theta$ the
+angle between the rest-frame magnetic field $\bm b$ and the front normal. Then
+\begin{equation}\label{eq:Vrest}
+V^2=\frac{a^2}{G+a^2},\qquad b^2\cos^2\theta=\frac{\calB^2}{G+a^2}.
+\end{equation}
+\end{lemma}
+
+\begin{proof}
+In the rest frame $u^\mu=(1,\bm 0)$ and $b^\mu=(0,\bm b)$; write $\phi_\mu=(\phi_0',\bm\phi')$.
+The front $\phi_0't'+\bm\phi'\cdot\bm x'=\text{const}$ moves along $\bm\phi'/|\bm\phi'|$
+with phase speed $V=-\phi_0'/|\bm\phi'|$. Now $a=\phi_0'$, $G=-\phi_0'^2+|\bm\phi'|^2$, so
+$|\bm\phi'|^2=G+a^2$ and $V^2=a^2/(G+a^2)$. Also $\calB=\bm b\cdot\bm\phi'
+=b|\bm\phi'|\cos\theta$. Both relations involve only scalars and hold in every frame.
+\end{proof}
+
+\subsection{The dispersion relation in the fluid rest frame}
+
+Linearise the equations about a uniform state at rest, $u^\mu=(1,\bm0)$, $b^\mu=(0,\bm b)$,
+with perturbations proportional to $\exp[ik(x-Vt)]$, and choose axes so that
+$\bm b=b(\cos\theta,\sin\theta,0)$. To first order $\delta u^\mu=(0,\delta\vv)$;
+$u_\mu b^\mu=0$ gives $\delta b^0=\bm b\cdot\delta\vv$; $B^i=u^0b^i-u^ib^0$ gives
+$\delta\BB=\delta\bm b$; and $\delta\Ptot=\delta p+\bm b\cdot\delta\bm b$. From
+\eqref{eq:Tmunu}, $\delta T^{0i}=w\,\delta v^i-(\bm b\cdot\delta\vv)\,b^i$ and
+$\delta T^{ij}=\delta\Ptot\,\delta^{ij}-b^i\delta b^j-\delta b^ib^j$. The divergence
+constraint gives $\delta b_x=0$. The linearised equations are (after dividing by $ik$)
+\begin{align}
+&-V\delta\rho+\rho\,\delta v_x=0, \label{eq:lin-mass}\\
+&-V\bigl[w\,\delta\vv-(\bm b\cdot\delta\vv)\bm b\bigr]+\hat{\bm x}\,\delta\Ptot-b\cos\theta\,\delta\bm b=0,
+  \label{eq:lin-mom}\\
+&-V\delta\bm b=b\cos\theta\,\delta\vv-\bm b\,\delta v_x, \label{eq:lin-ind}\\
+&\delta p=hc_s^2\,\delta\rho . \label{eq:lin-ent}
+\end{align}
+The term $(\bm b\cdot\delta\vv)\bm b$ in \eqref{eq:lin-mom} is the relativistic one: it
+comes from $b^0b^i$ in the momentum density, i.e.\ from the displacement current.
+
+\paragraph{Alfvén waves.} The $z$-components decouple: $-Vw\,\delta v_z-b\cos\theta\,
+\delta b_z=0$ and $-V\delta b_z=b\cos\theta\,\delta v_z$ give
+\begin{equation}\label{eq:alfven-rest}
+V^2=c_a^2\cos^2\theta,\qquad c_a^2\equiv\frac{b^2}{w}=\frac{b^2}{\rho h+b^2}.
+\end{equation}
+$c_a<1$ always, in contrast with the Newtonian Alfvén speed $B/\sqrt\rho$.
+
+\paragraph{Magnetosonic waves.} Eliminate $\delta\rho$, $\delta p$ and $\delta b_y=
+(b/V)(\sin\theta\,\delta v_x-\cos\theta\,\delta v_y)$, so that
+$\delta\Ptot=V^{-1}[(\rho hc_s^2+b^2\sin^2\theta)\delta v_x-b^2\sin\theta\cos\theta\,\delta v_y]$.
+The $x$- and $y$-components of \eqref{eq:lin-mom}, multiplied by $V$, become
+\begin{equation}
+\begin{pmatrix}
+\rho hc_s^2+b^2\sin^2\theta-V^2(\rho h+b^2\sin^2\theta) & -(1-V^2)b^2\sin\theta\cos\theta\\
+-(1-V^2)b^2\sin\theta\cos\theta & b^2\cos^2\theta-V^2(\rho h+b^2\cos^2\theta)
+\end{pmatrix}
+\begin{pmatrix}\delta v_x\\ \delta v_y\end{pmatrix}=0 .
+\end{equation}
+Its determinant equals $\rho h\,[\,wV^4-(b^2+\rho hc_s^2+c_s^2b^2\cos^2\theta)V^2+
+c_s^2b^2\cos^2\theta\,]$ (checked symbolically), so with $c_a^2=b^2/w$:
+\begin{equation}\label{eq:ms-rest}
+\boxed{\;V^4-\bigl(c_a^2+c_s^2-c_s^2c_a^2\sin^2\theta\bigr)V^2+c_s^2c_a^2\cos^2\theta=0\;}
+\end{equation}
+The Newtonian relation has $c_a^2+c_s^2$ in the middle coefficient; the relativistic
+correction $-c_s^2c_a^2\sin^2\theta$ comes from the displacement-current term. Together
+with the entropy mode ($V=0$, $\delta p=\delta\vv=\delta\bm b=0$, $\delta\rho\ne0$),
+\eqref{eq:alfven-rest} and \eqref{eq:ms-rest} account for all seven modes.
+
+\subsection{Laboratory-frame speeds}
+
+Substituting \eqref{eq:Vrest} into the rest-frame relations and multiplying by powers of
+$G+a^2$ turns them into polynomials in $\lambda$:
+
+\paragraph{Entropy (contact) wave.} $a=0$:
+\begin{equation}
+\lambda_{\rm e}=v_x .
+\end{equation}
+
+\paragraph{Alfvén waves.} $V^2=c_a^2\cos^2\theta$ becomes $w\,a^2=\calB^2$, i.e.
+$\sqrt{w}\,W(v_x-\lambda)=\pm(b^x-\lambda b^0)$. Solving for $\lambda$,
+\begin{equation}\label{eq:lamA}
+\boxed{\;\lambda_A^{(\pm)}=\frac{b^x\pm\sqrt{w}\,u^x}{b^0\pm\sqrt{w}\,u^0}
+=v_x+\frac{B^x(1-v^2)}{\vB\pm\sqrt{w}}\;}
+\end{equation}
+The second form follows by inserting \eqref{eq:b0}--\eqref{eq:bi} and dividing numerator
+and denominator by $W$. It is the form used by \textcite{GiacomazzoRezzolla2006} and by the
+code.
+
+\begin{proposition}[Which Alfvén speed is which]\label{prop:alfvensign}
+$\sqrt w>|\vB|$, hence $\sgn(\lambda_A^{(\pm)}-v_x)=\pm\sgn(B^x)$. For $B^x>0$,
+$\lambda_A^{(-)}<v_x<\lambda_A^{(+)}$; for $B^x<0$ the labels are reversed.
+\end{proposition}
+\begin{proof}
+$w=\rho h+b^2>b^2=B^2/W^2+\vB^2\ge\vB^2$, so $\vB+\sqrt w>0>\vB-\sqrt w$; the sign of
+$\lambda_A^{(\pm)}-v_x$ is that of $B^x/(\vB\pm\sqrt w)$.
+\end{proof}
+
+\begin{codebox}[: the Alfvén pair for $B_n<0$]
+The labels $(\pm)$ in \eqref{eq:lamA} refer to the sign in front of $\sqrt w$, not to the
+direction of propagation; \textcite{Anton2010} make the same remark about their
+eq.~(38). In the exact solver every helper that returned the pair as
+\code{(la, ra)} (left, right) had used the $(-)$ root as ``left''. For $B_n<0$ this
+built rotations of the wrong family. The code now orders the pair by value (e.g.\
+\file{rmhd/shock_speed.py}: \code{if not (la <= ra): la, ra = ra, la}, commented
+``labelled by the sign of sqrt(rho h+b\^{}2): swapped for B\_n < 0'').
+\end{codebox}
+
+\paragraph{Magnetosonic waves.} Inserting \eqref{eq:Vrest} into \eqref{eq:ms-rest},
+multiplying by $(G+a^2)^2$ and using $c_a^2/b^2=1/w$ gives
+$(1-\zeta^2)a^4-G\,(\zeta^2a^2-c_s^2\calB^2/w)=0$ with $\zeta^2=c_s^2+c_a^2-c_s^2c_a^2$.
+Multiplying by $w$ and using $w(1-\zeta^2)=\rho h(1-c_s^2)$ and $w\zeta^2=b^2+\rho hc_s^2$:
+\begin{equation}\label{eq:quartic}
+\boxed{\;\rho h(1-c_s^2)\,a^4-(1-\lambda^2)\bigl[(b^2+\rho hc_s^2)\,a^2-c_s^2\calB^2\bigr]=0,
+\qquad a=W(v_x-\lambda),\ \ \calB=b^x-\lambda b^0\;}
+\end{equation}
+a quartic in $\lambda$ whose four roots are the slow and fast speeds. We checked
+(\cref{app:verification}) that \eqref{eq:quartic} is identical to eq.~(56) of
+\textcite{MignoneBodo2006}, to the normalised form eq.~(4.50) of
+\textcite{GiacomazzoRezzolla2006} and eq.~(16) of \textcite{DelZanna2003} (which divide by
+$w$ and use $\tilde b^\mu=b^\mu/\sqrt w$), to $c_s^2\calN_4=0$ with $\calN_4$ of
+\textcite[eq.~35]{Anton2010}, and coefficient by coefficient to the quartic coded in
+\file{rmhd/wave_speeds.py} and \file{rmhd/batched/wave_speeds_b.py}.\footnote{The same
+quartic is attributed also to \textcite{Leismann2005}; that paper's full text could not
+be accessed for this check, so the comparison with it was not made.}
+
+\begin{remark}[The full characteristic determinant]
+In the covariant variables $(u^\mu,b^\mu,p,s)$ of \textcite{Anile1989} the system has ten
+unknowns, and the characteristic determinant factorises as
+$\det(\mathcal A^\alpha\phi_\alpha)=w\,a^2\calA^2\calN_4$ with $\calA=wa^2-\calB^2$
+\parencite[eq.~33]{Anton2010}. The squares reflect duplicate, unphysical roots introduced
+by the constraints $u_\mu u^\mu=-1$ and $u_\mu b^\mu=0$; the physical speeds are the seven
+roots of $a\,\calA\,\calN_4=0$ found above. \Cref{app:eigen} gives the matrix and the
+eigenvectors.
+\end{remark}
+
+\section{Rest-frame speeds and their ordering}\label{sec:ordering}
+
+Write $X=V^2$ and $P(X)=X^2-QX+c_s^2c_a^2\cos^2\theta$ with
+$Q=c_a^2+c_s^2-c_s^2c_a^2\sin^2\theta$. Let $X_s\le X_f$ be the roots (slow and fast).
+
+\begin{proposition}[Ordering and bounds]\label{prop:ordering}
+For $0<c_s<1$ and $0\le c_a<1$,
+\begin{equation}
+0\le X_s\le c_a^2\cos^2\theta\le X_f\le\zeta^2<1,\qquad \zeta^2\le 2X_f .
+\end{equation}
+Equality in any of the first three inequalities requires $\cos\theta=0$ or
+$\sin\theta=0$.
+\end{proposition}
+
+\begin{proof}
+$P$ is an upward parabola in $X$.
+\begin{enumerate}[label=(\roman*),nosep]
+\item $P(0)=c_s^2c_a^2\cos^2\theta\ge0$ and
+  $P(c_a^2\cos^2\theta)=-c_a^4\cos^2\theta\sin^2\theta\,(1-c_s^2)\le0$, so the Alfvén
+  value lies between the roots and both roots are non-negative.
+\item $Q-\zeta^2=c_s^2c_a^2\cos^2\theta\ge0$, hence
+  $P(\zeta^2)=c_s^2c_a^2\cos^2\theta\,(1-\zeta^2)\ge0$; and the vertex lies to the left of
+  $\zeta^2$, because $\zeta^2-Q/2=\tfrac12(\zeta^2-c_s^2c_a^2\cos^2\theta)\ge0$. Therefore
+  $\zeta^2$ lies to the right of both roots, $X_f\le\zeta^2$.
+\item $\zeta^2=1-(1-c_s^2)(1-c_a^2)<1$.
+\item $X_f\ge Q/2\ge\zeta^2/2$.
+\end{enumerate}
+The polynomial identities used here were checked symbolically.
+\end{proof}
+
+So in the fluid frame the speeds are ordered exactly as in Newtonian MHD,
+slow $\le$ Alfvén $\le$ fast, all are subluminal, and the fast speed is largest
+perpendicular to the field, where it equals $\zeta$. \Cref{fig:friedrichs} shows the
+phase-speed (Friedrichs) diagram.
+
+\begin{figure}[t]
+\centering
+\begin{tikzpicture}
+\begin{polaraxis}[width=7.6cm,ymax=0.85,ytick={0.2,0.4,0.6,0.8},xtick={0,30,...,330},
+  legend style={at={(1.32,0.98)},anchor=north west,font=\small,draw=none},
+  every axis plot/.append style={line width=0.9pt}]
+  % c_s^2 = 0.2, c_a^2 = 0.45: Q = 0.65 - 0.09 sin^2
+  \addplot[blue!70!black,domain=0:360,samples=361,data cs=polar]
+    ({x},{sqrt((0.65-0.09*sin(x)^2+sqrt((0.65-0.09*sin(x)^2)^2-0.36*cos(x)^2))/2)});
+  \addplot[red!70!black,domain=0:360,samples=361,data cs=polar]
+    ({x},{sqrt(0.45)*abs(cos(x))});
+  \addplot[green!45!black,domain=0:360,samples=361,data cs=polar]
+    ({x},{sqrt(max(0,(0.65-0.09*sin(x)^2-sqrt((0.65-0.09*sin(x)^2)^2-0.36*cos(x)^2))/2))});
+  \addplot[gray,dashed,domain=0:360,samples=181,data cs=polar] ({x},{sqrt(0.56)});
+  \legend{fast,Alfvén,slow,$\zeta$}
+\end{polaraxis}
+\end{tikzpicture}
+\caption{Rest-frame phase speeds $V(\theta)$ for $c_s^2=0.2$, $c_a^2=0.45$
+($\theta$ measured from $\bm b$, which points to the right). The fast speed reaches
+$\zeta=\sqrt{0.56}$ (dashed) at $\theta=90^\circ$; at $\theta=0$ the Alfvén speed
+coincides with the fast speed (a Type~II degeneracy, \cref{sec:degeneracies}).}
+\label{fig:friedrichs}
+\end{figure}
+
+\section{Properties of the laboratory-frame speeds}
+
+\paragraph{Ordering.} The seven laboratory speeds are ordered as
+\begin{equation}\label{eq:order}
+\lambda_{\rm f}^-\le\lambda_{\rm A}^-\le\lambda_{\rm s}^-\le\lambda_{\rm e}\le
+\lambda_{\rm s}^+\le\lambda_{\rm A}^+\le\lambda_{\rm f}^+ ,
+\end{equation}
+where now the superscripts denote the lower and upper value of each pair
+\parencite[eq.~42]{Anton2010}, a result due to \textcite{Anile1989}. Aberration destroys
+the symmetry of each pair about $v_x$. We do not reprove \eqref{eq:order}; the following
+lemma is the key monotonicity behind it and is useful in its own right.
+
+\begin{lemma}[Monotone map]\label{lem:monotone}
+Along the $x$-direction, the rest-frame phase speed $V(\lambda)$ of \eqref{eq:Vrest}
+increases monotonically from $0$ at $\lambda=v_x$ to $1$ at $\lambda=\pm1$ on either side
+of $v_x$.
+\end{lemma}
+\begin{proof}
+$V^2=1/(1+R)$ with $R=G/a^2=(1-\lambda^2)/[W^2(v_x-\lambda)^2]$, and
+$\dd R/\dd\lambda=2(1-\lambda v_x)/[W^2(v_x-\lambda)^3]$, which is negative for
+$\lambda>v_x$ and positive for $\lambda<v_x$ (since $1-\lambda v_x>0$).
+\end{proof}
+
+\begin{proposition}[An isotropic bound on the fast speeds]\label{prop:fastbound}
+Let $\lambda_\zeta^\pm$ be the roots of $(1-\zeta^2)W^2(\lambda-v_x)^2=\zeta^2(1-\lambda^2)$,
+\begin{equation}\label{eq:lamzeta}
+\lambda_\zeta^\pm=\frac{v_x(1-\zeta^2)\pm\zeta\sqrt{(1-v^2)\,[1-v^2\zeta^2-v_x^2(1-\zeta^2)]}}
+{1-v^2\zeta^2}.
+\end{equation}
+Then $\lambda_\zeta^-\le\lambda_{\rm f}^-$ and $\lambda_{\rm f}^+\le\lambda_\zeta^+$.
+\end{proposition}
+\begin{proof}
+At $\lambda_\zeta^\pm$ the rest-frame phase speed is exactly $\zeta$; at $\lambda_{\rm
+f}^\pm$ it is $\sqrt{X_f(\theta)}\le\zeta$ (\cref{prop:ordering}). By
+\cref{lem:monotone} the fast root lies closer to $v_x$.
+\end{proof}
+
+Equation \eqref{eq:lamzeta} is the speed of a hypothetical isotropic wave of rest-frame
+speed $\zeta$, boosted with the flow. \textcite{GammieMcKinneyToth2003} introduced this
+replacement of the full dispersion relation (their eq.~28) and noted that it overestimates
+the comoving fast speed by a bounded factor; \cref{prop:ordering} makes this precise:
+$\zeta\le\sqrt2\,\sqrt{X_f}$. Because it needs only a square root it is a convenient
+signal-speed estimate; HARM uses it, and so does the reference code.
+
+\paragraph{Special cases.} For $B^x=0$ one finds $\calB=b^x-\lambda b^0=\vB\,a$ and
+\eqref{eq:quartic} factorises as
+\begin{equation}\label{eq:quad-bx0}
+a^2\Bigl\{\rho h(1-c_s^2)a^2-(1-\lambda^2)\bigl[\rho hc_s^2+b^2-c_s^2\vB^2\bigr]\Bigr\}=0,
+\end{equation}
+so the slow speeds collapse onto $\lambda_e=v_x$ (as do both Alfvén speeds, by
+\eqref{eq:lamA}) and the fast pair solves a quadratic; this is eq.~(58) of
+\textcite{MignoneBodo2006}. For $\vv=0$, \eqref{eq:quartic} reduces to the biquadratic
+$w\lambda^4-(b^2+\rho hc_s^2+c_s^2B_x^2)\lambda^2+c_s^2B_x^2=0$, their eq.~(57), which is
+\eqref{eq:ms-rest} with $\cos^2\theta=B_x^2/B^2$.
+
+\begin{codebox}[: wave speeds]
+\file{rmhd/wave_speeds.py} (scalar) and \file{rmhd/batched/wave_speeds_b.py} (batched)
+compute the coefficients of \eqref{eq:quartic} divided by $w$, with $\tilde b^\mu=
+b^\mu/\sqrt w$ and \code{eps2} $=\zeta^2$, exactly as in eq.~(4.50) of
+\textcite{GiacomazzoRezzolla2006}. The scalar code has a separate expression for
+$|B_x|\le10^{-15}$. The batched code finds the roots by Ferrari's closed form (default) or
+the eigenvalues of the companion matrix, polishes them with Newton iterations on the
+quartic, and returns the Alfvén speeds from the same intermediates. The HLL/HLLD signal
+speeds in \file{HLLD/src/physics/hlld.py} (\code{compute_cp_cm}) are the isotropic bound
+\eqref{eq:lamzeta} with \code{v02} $=\zeta^2$; $c_{\max}$ and $c_{\min}$ are then
+clamped to be non-negative.
+\end{codebox}
+
+\section{Degeneracies}\label{sec:degeneracies}
+
+The inequalities in \eqref{eq:order} can be equalities. The classification follows
+\textcite{Komissarov1999} and \textcite{Anton2010}, who characterise it by the component
+$b_n$ of $b^\mu$ along the Alfvén front normal in the fluid frame,
+$b_n^2=\calB^2/(G+a^2)$ evaluated at the Alfvén speed:
+\begin{description}[nosep,leftmargin=1.2em]
+\item[Type I] ($b_n=0$; for $x$-propagation, $B^x=0$): both Alfvén speeds and both slow
+  speeds coincide with the entropy speed, $\lambda_A^\pm=\lambda_s^\pm=\lambda_e=v_x$.
+  The Riemann fan has three waves: two fast waves and a tangential discontinuity.
+\item[Type II] ($b_t=0$, i.e.\ $b_n^2=b^2$; the field is along the wave normal in the fluid
+  frame): an Alfvén speed coincides with the fast or the slow speed of the same class.
+  In Newtonian MHD both Alfvén waves are then degenerate. In RMHD, because of aberration,
+  the condition can hold for one Alfvén wave and not the other; only when the tangential
+  velocity vanishes is the classical behaviour recovered \parencite{Anton2010}.
+\item[Type II$'$] (Type II with $c_s^2=c_a^2$): an Alfvén speed coincides with
+  \emph{both} magnetosonic speeds of its class (a triple point, the relativistic
+  counterpart of the triple umbilic point of Newtonian MHD; cf.\ \cref{fig:friedrichs}
+  at $\theta=0$ when $c_s=c_a$).
+\end{description}
+
+At degenerate states the eigenvectors of \cref{app:eigen} vanish or become linearly
+dependent, so they no longer form a basis; for a solver that projects on characteristic
+fields this is fatal. \textcite{BrioWu1988} cured this in Newtonian MHD by renormalising
+the eigenvectors; \textcite{Komissarov1999} gave relativistic eigenvectors valid through
+Type~II degeneracies; \textcite{Anton2010} gave renormalised right and left eigenvectors
+that are regular and complete at all physical states, including both types (their
+eqs.~52 and 65--67 for the Alfvén waves).
+
+\paragraph{Loss of strict hyperbolicity and of convexity.} At degenerate states the system
+is hyperbolic but not strictly hyperbolic. Moreover, the entropy and Alfvén
+characteristic fields are linearly degenerate ($\nabla_{\UU}\lambda_k\cdot\bm r_k\equiv0$),
+while the magnetosonic fields are not genuinely nonlinear everywhere: their convexity
+depends on the magnetic field \parencite{BrioWu1988,Ibanez2015}. Both properties are
+hypotheses of the classical existence and uniqueness theory, and their failure is what
+allows compound waves and non-unique solutions (\cref{ch:nonunique}).
+
+\paragraph{Near-degeneracy.} For a numerical solver, nearly coincident speeds are worse
+than exactly coincident ones: the system is nominally seven-wave but the Jacobian of any
+formulation that treats the two waves separately is nearly singular. On the interface
+states of the reference 2D rotor run the Alfvén and slow speeds differ by a median of
+$5.5\times10^{-3}$, against $0.28$ between fast and Alfvén (the guide, \S1.2).
+
+\begin{codebox}[: classifying an interface]
+\file{rmhd/batched/classify.py} classifies each interface before any solve, with
+thresholds relative to the width of the wave fan: \code{FULL7} (seven waves),
+\code{COPLANAR}, \code{ALFVEN_DEGEN} (Type I), \code{SLOW_DEGEN} and \code{FAST_DEGEN}
+(Type II with the slow or fast wave). The degenerate classes are handed to a reduced
+solver (the guide, \S1.7).
+\end{codebox}
+
+\section*{Exercises}
+\addcontentsline{toc}{section}{Exercises}
+
+\begin{exercise}
+Show that the Alfvén speeds \eqref{eq:lamA} are the roots of $\calA=wa^2-\calB^2=0$, and
+that $\lambda_A^{(+)}\lambda_A^{(-)}$ and $\lambda_A^{(+)}+\lambda_A^{(-)}$ are rational
+functions of the state. Evaluate both speeds for $\vv=0$.
+\end{exercise}
+\begin{solution}
+For $\vv=0$: $\vB=0$, $W=1$, so $\lambda_A^{(\pm)}=\pm B^x/\sqrt w=\pm c_a\cos\theta$, the
+rest-frame result.
+\end{solution}
+
+\begin{exercise}
+Carry out the elimination leading to \eqref{eq:ms-rest} and show that for $\theta=\pi/2$
+the fast speed is $\zeta$ and the slow speed vanishes, while for $\theta=0$ the roots are
+$c_s^2$ and $c_a^2$.
+\end{exercise}
+
+\begin{exercise}
+Show that $\zeta\le\sqrt2\max(c_s,c_a)$ and find the state for which the isotropic bound
+overestimates the fast speed the most. Compare with the statement of
+\textcite{GammieMcKinneyToth2003}.
+\end{exercise}
+\begin{solution}
+The worst case is $\theta=0$, where $X_f=\max(c_s^2,c_a^2)$; for $c_s=c_a=c\ll1$,
+$\zeta^2=2c^2-c^4\approx2X_f$.
+\end{solution}
+
+\begin{exercise}
+Starting from \eqref{eq:quartic} with $B^x=0$, derive \eqref{eq:quad-bx0}. Show that if
+moreover $\vv\cdot\BB=0$ the fast speeds are those of a gas with sound speed $\zeta$.
+\end{exercise}
+
+\begin{exercise}
+For $B^x<0$, which of $\lambda_A^{(\pm)}$ is the left-going Alfvén speed? Construct a
+state with $B^x=-1$ and check numerically that using the $(-)$ root as ``left'' gives a
+speed larger than $v_x$.
+\end{exercise}
+
+\begin{exercise}
+Using \cref{lem:monotone}, show that every characteristic speed satisfies
+$|\lambda|<1$ whenever $c_s<1$.
+\end{exercise}
+\begin{solution}
+All rest-frame speeds are $\le\zeta<1$; the monotone map sends $V<1$ to $|\lambda|<1$.
+\end{solution}
+
+
+% ======================================================================== chapter 4
+\chapter{Discontinuities}\label{ch:discontinuities}
+
+\section{Rankine--Hugoniot conditions}
+
+Let a discontinuity move with constant speed $V_s$ and separate the state $a$ ahead of it
+from the state $b$ behind it. Applying the integral form \eqref{eq:integralform} to a
+small rectangle that the discontinuity crosses diagonally and letting it shrink gives the
+Rankine--Hugoniot (RH) conditions
+\begin{equation}\label{eq:RH}
+\jump{\FF^x}=V_s\jump{\UU},\qquad\text{i.e.}\quad \FF^x_a-\FF^x_b=V_s(\UU_a-\UU_b).
+\end{equation}
+With \eqref{eq:UF}--\eqref{eq:Fx} these are seven conditions (mass, three momentum
+components, energy, two tangential field components), plus $\jump{B^x}=0$.
+
+\paragraph{Covariant form.} The front is the hypersurface $x-V_st=\text{const}$, with
+unit spacelike normal
+\begin{equation}
+n_\mu=W_s(-V_s,1,0,0),\qquad n_\mu n^\mu=1,\qquad W_s=(1-V_s^2)^{-1/2}.
+\end{equation}
+For any tensor current, $X^{\mu\nu}n_\nu=W_s(X^{\mu x}-V_sX^{\mu0})$, so \eqref{eq:RH}
+is equivalent to \parencite{Anile1989,GiacomazzoRezzolla2006}
+\begin{equation}\label{eq:RHcov}
+\jump{\rho u^\mu}n_\mu=0,\qquad \jump{T^{\mu\nu}}n_\nu=0,\qquad
+\jump{{}^\ast\!F^{\mu\nu}}n_\nu=0 .
+\end{equation}
+For the last one, ${}^\ast\!F^{00}=0$ and ${}^\ast\!F^{0x}=B^x$ give $\jump{B^x}=0$,
+while ${}^\ast\!F^{j0}=-B^j$ and ${}^\ast\!F^{jx}=u^jb^x-u^xb^j=-(v_xB^j-v^jB^x)$ give
+the induction jump $V_s\jump{B^j}=\jump{v_xB^j-v^jB^x}$.
+
+\section{Mass flux and the classification of discontinuities}
+
+Define the rest-mass flux through the front and the normal component of the comoving
+field,
+\begin{equation}\label{eq:J}
+J\equiv-\rho u^\mu n_\mu=\rho WW_s(V_s-v_x),\qquad
+B_n\equiv b^\mu n_\mu=\frac{W_s}{W}B^x-\frac{\vB J}{\rho}.
+\end{equation}
+These are eqs.~(4.5) and (4.28) of \textcite{GiacomazzoRezzolla2006}. The first condition
+of \eqref{eq:RHcov} says $\jump{J}=0$. It also gives a useful identity: for any $Q$,
+\begin{equation}\label{eq:jumpidentity}
+\jump{Q\,(V_s-v_x)}=\frac{J}{W_s}\Bigl\llbracket\frac{Q}{D}\Bigr\rrbracket ,
+\end{equation}
+because $V_s-v_x=J/(W_sD)$ on both sides. Two classes follow:
+\begin{itemize}[nosep]
+\item $J=0$: no mass crosses the front; it moves with the fluid, $V_s=v_{x,a}=v_{x,b}$.
+  These are \emph{contact} and \emph{tangential} discontinuities.
+\item $J\neq0$: mass crosses the front. These are \emph{shocks} (compressive,
+  $\jump{\rho}\ne0$) and \emph{rotational} (Alfvén) discontinuities.
+\end{itemize}
+
+It is convenient to write the projections of the fluxes on $n_\nu$ with \eqref{eq:J}.
+With $u^\mu n_\mu=-J/\rho$ and $h_t\equiv w/\rho=h+b^2/\rho$ (the total specific
+enthalpy),
+\begin{align}
+T^{\mu\nu}n_\nu&=-Jh_t\,u^\mu+\Ptot\,n^\mu-B_n\,b^\mu, \label{eq:Tn}\\
+{}^\ast\!F^{\mu\nu}n_\nu&=u^\mu(b^\nu n_\nu)-b^\mu(u^\nu n_\nu)=B_n\,u^\mu+\frac{J}{\rho}\,b^\mu
+\equiv C^\mu. \label{eq:Cmu}
+\end{align}
+The RH conditions are therefore $\jump{J}=0$, $\jump{-Jh_tu^\mu+\Ptot n^\mu-B_nb^\mu}=0$
+and $\jump{C^\mu}=0$.
+
+\section{Contact and tangential discontinuities}
+
+\begin{proposition}\label{prop:contact}
+Let $J=0$.
+\begin{enumerate}[label=(\alph*),nosep]
+\item If $B^x\ne0$ (contact discontinuity), then $\vv$, $\BB$, $\Ptot$ and $p$ are
+  continuous; only $\rho$ (and with it $\epsilon$, $h$) can jump.
+\item If $B^x=0$ (tangential discontinuity), then $v_x$ and $\Ptot$ are continuous, and
+  $\rho$, $p$, the tangential velocity and the tangential field can all jump.
+\end{enumerate}
+\end{proposition}
+
+\begin{proof}
+With $J=0$, \eqref{eq:J} gives $B_n=W_sB^x/W$ and \eqref{eq:Cmu} gives
+$C^\mu=(W_sB^x/W)u^\mu=W_sB^x(1,\vv)$.
+(a) $\jump{C^\mu}=0$ and $B^x\neq0$ give $\jump{\vv}=0$, hence $\jump{W}=0$ and
+$\jump{B_n}=0$. The momentum condition reduces to $\jump{\Ptot}n^\mu=B_n\jump{b^\mu}$;
+contracting with $n_\mu$ gives $\jump{\Ptot}=B_n\jump{B_n}=0$, and then $\jump{b^\mu}=0$.
+Since $B^i=u^0b^i-u^ib^0$ with $u^\mu$ continuous, $\jump{\BB}=0$; $b^2$ is continuous, so
+$p=\Ptot-b^2/2$ is too.
+(b) With $B^x=0$, $B_n=0$ and $C^\mu=0$ identically; the momentum condition is
+$\jump{\Ptot}n^\mu=0$. The definition of $J$ gives $V_s=v_{x,a}=v_{x,b}$. Nothing else is
+constrained.
+\end{proof}
+
+Across a contact the solution is thus fixed by $(\rho_a,\rho_b)$ alone. Across a
+tangential discontinuity the gas pressure may jump as long as the total pressure does
+not: magnetic pressure can balance gas pressure. This is the central wave of the
+three-wave fan for $B^x=0$ (\cref{sec:bx0}).
+
+\section{Three invariants of discontinuities with \texorpdfstring{$J\ne0$}{J != 0}}
+
+\begin{proposition}[Shock invariants]\label{prop:invariants}
+Across any discontinuity with $J\neq0$,
+\begin{align}
+&\jump{H}=0,\qquad H\equiv\frac{B_n^2}{J^2}-\frac{b^2}{\rho^2}, \label{eq:invH}\\
+&\jump{h\,B_n}=0, \label{eq:invhB}\\
+&\jump{\Ptot}+J^2\Bigl\llbracket\frac{h}{\rho}\Bigr\rrbracket=0, \label{eq:magtaub}
+\end{align}
+where $h$ is the specific enthalpy of the gas and $\Ptot$ the total pressure.
+\end{proposition}
+
+\begin{proof}
+$C^\mu$ in \eqref{eq:Cmu} is continuous, and so is every scalar built from it and from
+other continuous vectors. Using $u_\mu u^\mu=-1$, $u_\mu b^\mu=0$, $u_\mu n^\mu=-J/\rho$,
+$b_\mu n^\mu=B_n$, $n_\mu n^\mu=1$:
+\begin{itemize}[nosep]
+\item $C_\mu C^\mu=J^2b^2/\rho^2-B_n^2=-J^2H$. Since $J$ is continuous and nonzero,
+  $\jump{H}=0$.
+\item Contract $C_\mu$ with the continuous vector $T^{\mu\nu}n_\nu$ of \eqref{eq:Tn}:
+  $C_\mu u^\mu=-B_n$, $C_\mu n^\mu=B_nJ/\rho-B_nJ/\rho=0$, $C_\mu b^\mu=Jb^2/\rho$, so
+  $C_\mu T^{\mu\nu}n_\nu=JB_n(h_t-b^2/\rho)=JB_nh$. Hence $\jump{hB_n}=0$.
+\item Contract \eqref{eq:Tn} with $n_\mu$: $n_\mu T^{\mu\nu}n_\nu=J^2h_t/\rho+\Ptot-B_n^2$,
+  which is continuous. Writing $h_t/\rho=h/\rho+b^2/\rho^2$,
+  $\jump{\Ptot}+J^2\jump{h/\rho}-J^2\jump{B_n^2/J^2-b^2/\rho^2}=0$, and the last term
+  vanishes by \eqref{eq:invH}.\qedhere
+\end{itemize}
+\end{proof}
+
+Equation \eqref{eq:magtaub} is eq.~(4.26) of \textcite{GiacomazzoRezzolla2006}, who quote
+the invariance of $H$ from \textcite{Anile1989}; they use \eqref{eq:invhB} in their
+$B_t$-method. Remarkably, \eqref{eq:magtaub} has the same form as in hydrodynamics, with
+the total pressure but the \emph{gas} enthalpy. A second relation, the
+\emph{Lichnerowicz adiabat}, follows from the remaining jump conditions; in our notation it
+reads \parencite[eq.~4.27]{GiacomazzoRezzolla2006}
+\begin{equation}\label{eq:lichnerowicz}
+\jump{h^2}-\Bigl(\!\Bigl(\frac{h}{\rho}\Bigr)\!\Bigr)\jump{\Ptot}-H\jump{b^2}
++2\Bigl\llbracket\frac{b^2h}{\rho}\Bigr\rrbracket-2J^2H\Bigl\llbracket\frac{h}{\rho}\Bigr\rrbracket=0 .
+\end{equation}
+We have not reproduced its derivation, but all of
+\eqref{eq:invH}--\eqref{eq:lichnerowicz} were checked to 40 digits on a fast shock
+constructed numerically from the full RH system (\cref{app:verification}). For $\bm b=0$,
+$H=0$ and \eqref{eq:lichnerowicz} is the Taub adiabat of \cref{sec:taub}.
+
+\section{Rotational (Alfvén) discontinuities}\label{sec:rotational}
+
+\begin{proposition}[Alfvén discontinuities]\label{prop:alfven}
+Suppose $J\neq0$ and $\rho$, $p$ and $b^2$ are continuous (hence $h$, $w$ and $\Ptot$ are).
+Then either the discontinuity is trivial ($\jump{u^\mu}=0$) or
+\begin{equation}\label{eq:JAlfven}
+J^2=\frac{\rho^2B_n^2}{w}.
+\end{equation}
+Writing $J=s\rho B_n/\sqrt w$ with $s=\pm1$, the four-vector
+\begin{equation}\label{eq:sigma}
+\sigma^\mu\equiv b^\mu+s\sqrt{w}\,u^\mu
+\end{equation}
+is continuous across the front, and the front moves with the Alfvén speed of either state,
+\begin{equation}\label{eq:VsAlfven}
+V_s=\frac{\sigma^x}{\sigma^0}=\frac{b^x+s\sqrt w\,u^x}{b^0+s\sqrt w\,u^0}=\lambda_A^{(s)} .
+\end{equation}
+\end{proposition}
+
+\begin{proof}
+From \eqref{eq:invhB} with $h$ continuous, $B_n$ is continuous. The momentum and Maxwell
+conditions become $-Jh_t\jump{u^\mu}-B_n\jump{b^\mu}=0$ and
+$B_n\jump{u^\mu}+(J/\rho)\jump{b^\mu}=0$. Eliminating $\jump{b^\mu}=-(\rho B_n/J)\jump{u^\mu}$
+gives $(J^2h_t-\rho B_n^2)\jump{u^\mu}=0$, i.e.\ \eqref{eq:JAlfven} since $\rho h_t=w$.
+Then $\rho B_n/J=s\sqrt w$ and $\jump{b^\mu+s\sqrt wu^\mu}=0$. Finally,
+$J=s\rho B_n/\sqrt w$ with \eqref{eq:J} reads $\sqrt w\,W(V_s-v_x)=s(b^x-V_sb^0)$, whose
+solution is \eqref{eq:VsAlfven}; it can be evaluated on either side because $\sigma^\mu$ is
+continuous.
+\end{proof}
+
+The continuity of $\sigma^\mu$ is the relativistic Walén relation. In the Newtonian
+limit $\sigma^\mu\to(s\sqrt\rho,\ s\sqrt\rho\,\vv+\BB)$, so $\vv+s\BB/\sqrt\rho$ and the
+normal velocity are continuous and the tangential field rotates rigidly. In SRMHD the
+consequences are different \parencite{Komissarov1997}; in the words of later summaries
+\parencite{MignoneBodo2006,MignoneUglianoBodo2009}, the thermodynamic quantities stay
+continuous, but the tangential field components trace ellipses rather than circles and
+the normal velocity $v_x$ jumps. The spatial vector
+$\bm K\equiv\bm\sigma/\sigma^0$ is continuous, and its $x$-component is the Alfvén speed;
+this is the invariant on which the HLLD solver of \cref{sec:hlld} is built.
+
+\begin{example}[A relativistic rotational discontinuity]
+\Cref{app:verification} constructs rotational discontinuities numerically: fix the state
+ahead, compute $\sigma^\mu$, pick $u^z$ behind, and solve $u_\mu\sigma^\mu=-s\sqrt w$
+(which is $u_\mu b^\mu=0$) together with $\jump{B^x}=0$ for $u^x,u^y$ behind. All seven RH
+conditions then hold to $10^{-40}$ with $V_s=\lambda_A^{(s)}$. For the ahead state
+$(\rho,\Ptot,\vv,\BB)=(1,\,2,\,(0.2,0.3,-0.1),\,(0.8,0.7,0.4))$, $\Gamma=5/3$, one
+left-going example has $v_x$ changing by $8.9\times10^{-3}$ and $|B_t|$ by $-2.3\%$ across
+the front, while $\rho$, $p$ and $b^2$ are unchanged.
+\end{example}
+
+\paragraph{Coplanar data.} If the tangential fields and velocities of the two states lie in
+one plane containing the normal (as in every face of a two-dimensional flow), the only
+rotational discontinuities that keep the solution in that plane are the trivial one and
+a reversal of the tangential field. In the solver record (\S2) this is the reason the
+Alfvén unknowns degenerate on 2D runs: a continuous angle collapses to a binary choice.
+
+\begin{codebox}[: Alfvén discontinuities]
+\file{rmhd/alfven_solver.py} and the batched \file{rmhd/batched/alfven_b.py} hold $\rho$
+and $\Ptot$ fixed and solve eqs.~(4.15)--(4.17), (4.19)--(4.20) of
+\textcite{GiacomazzoRezzolla2006} for $(v_x,v_y,v_z,B_y,B_z)$ behind, at
+$V_s=\lambda_A$, by Newton's method. The system has more than one root, and roots that
+satisfy the reduced equations but violate conservation exist; candidate roots are
+therefore ranked by the worst normalised residual of the seven RH conditions
+(\file{rmhd/batched/jump.py}, scaled by the flux magnitudes, not by the jump, so that
+weak discontinuities are not penalised).
+\end{codebox}
+
+\section{Shocks}\label{sec:shocks}
+
+\subsection{The relativistic hydrodynamic Taub adiabat}\label{sec:taub}
+
+For $\bm b=0$ the momentum condition is $\jump{-Jhu^\mu+p\,n^\mu}=0$, i.e.
+$J\jump{hu^\mu}=\jump{p}n^\mu$.
+
+\begin{proposition}[Taub adiabat]\label{prop:taub}
+Across a relativistic hydrodynamic shock \parencite{Taub1948}
+\begin{equation}\label{eq:taub}
+\jump{h^2}=\Bigl(\frac{h_a}{\rho_a}+\frac{h_b}{\rho_b}\Bigr)\jump{p},\qquad
+J^2=-\frac{\jump{p}}{\jump{h/\rho}} .
+\end{equation}
+\end{proposition}
+\begin{proof}
+Contract $J(h_au_a^\mu-h_bu_b^\mu)=\jump{p}n^\mu$ with $h_au_{a\mu}+h_bu_{b\mu}$. The left
+side is $J(-h_a^2+h_b^2)$, the cross terms cancelling. The right side is
+$\jump{p}(h_au_a\cdot n+h_bu_b\cdot n)=-\jump{p}J(h_a/\rho_a+h_b/\rho_b)$. Divide by $-J$.
+The second relation is the $n_\mu$-contraction, $\jump{J^2h/\rho+p}=0$, i.e.\
+\eqref{eq:magtaub} with $\bm b=0$.
+\end{proof}
+
+For a given ahead state and post-shock pressure, \eqref{eq:taub} with the EOS determines
+$h_b$ and $\rho_b$; for the ideal gas it is a quadratic for $h_b$ (\cref{ch:hydro}). In the
+Newtonian limit $h\to1+\epsilon+p/\rho$ with $\epsilon,p/\rho\ll1$ and \eqref{eq:taub}
+reduces to the Hugoniot relation $\jump{\epsilon}=-\tfrac12(p_a+p_b)\jump{1/\rho}$
+(\cref{ex:hugoniot}). \textcite{Thorne1973} discusses the properties of the Taub adiabat.
+
+\subsection{Magnetosonic shocks}
+
+Fast and slow shocks have $J\ne0$, $\jump{\rho}\ne0$, and all components may jump. Given
+the ahead state and the post-shock \emph{total} pressure $\Ptot_b$, the jump conditions
+can be solved in closed form for the post-shock state as a function of $V_s$
+\parencite[eqs.~4.13--4.25 and Appendix~A]{GiacomazzoRezzolla2006}; $V_s$ is then the
+root of \eqref{eq:magtaub}, which must be found numerically. This is the ``$p$-method''.
+The admissible windows for the root are set by the characteristic speeds of the ahead
+state: a right-going fast shock has $V_s\in(\lambda_A^+,1)$, a right-going slow shock
+$V_s\in(v_x,\lambda_A^+)$, and symmetrically on the left.
+
+\begin{codebox}[: shock speeds]
+\file{rmhd/shock_speed.py} evaluates the residual
+$f(V_s)=\jump{\Ptot}+J^2\jump{h/\rho}$, building the post-shock state with
+\file{rmhd/postshock.py} (\code{postshock_pressure}, a translation of the original
+Fortran), and searches the windows $(-1,\lambda_A^-)$, $(\lambda_A^+,1)$,
+$(\lambda_A^-,v_x)$, $(v_x,\lambda_A^+)$ for the left fast, right fast, left slow and
+right slow shock. Because $f$ can have several roots and NaN bands (where the post-shock
+state is unphysical), the window is scanned on fixed nodes, refined near its edges, and
+the bracketed root is polished by a NaN-tolerant bisection. The solver record (\S5a)
+documents a case where a pair of roots closer than one scan step was missed and the fix
+(a pair-splitting scan), and that on 119 of 120 such pairs exactly one root was an
+evolutionary fast shock.
+\end{codebox}
+
+\begin{example}[A relativistic fast shock]\label{ex:fastshock}
+Take the ahead state with $\rho=1$, $\Ptot=2$ (gas pressure $p=0.842$),
+$\vv=(0.1,\,0.2,\,0.05)$, $\BB=(1.2,\,0.9,\,0.3)$ and $\Gamma=5/3$, and impose
+$\Ptot_b=3$ behind a right-going shock. Solving the seven RH conditions for the state behind and $V_s$
+(\cref{app:verification}) gives $V_s=0.86778$ and
+\[
+(\rho,v_x,v_y,v_z,B^y,B^z)_b=(1.2966,\,0.2911,\,0.1262,\,0.0291,\,1.3518,\,0.4430).
+\]
+The right-going fast speeds are $\lambda_{\rm f}^+=0.8275$ ahead and $0.8943$ behind, and the
+right-going Alfvén speed behind is $0.6128$, so
+$\lambda_{\rm f}^+(\UU_a)<V_s<\lambda_{\rm f}^+(\UU_b)$ and $V_s>\lambda_{\rm A}^+(\UU_b)$: an
+evolutionary $1\to2$ fast shock (\cref{sec:admissibility}). The tangential field grows from
+$|B_t|=0.949$ to $1.422$, and the invariants of \cref{prop:invariants} and the Lichnerowicz
+adiabat hold to $10^{-39}$.
+\end{example}
+
+\paragraph{What a shock does to the tangential field.} In Newtonian MHD a fast shock
+increases $|B_t|$ and a slow shock decreases it; the limiting cases are the
+\emph{switch-on} shock (fast, with $B_t=0$ ahead) and the \emph{switch-off} shock (slow,
+with $B_t=0$ behind). \textcite{Komissarov2003} showed that relativistic switch-on and
+switch-off shocks exist as limits of fast and slow shocks, as in the Newtonian
+case.\unverified{the content of this statement was checked against the abstract of the
+preprint arXiv:astro-ph/0206076 by the same author on limit shocks of relativistic MHD;
+the text of the journal paper \citet{Komissarov2003} was not accessed.} A
+lab-frame rule ``slow shocks weaken $|B_t|$'' is, however, not reliable in SRMHD when the
+flow has a tangential velocity: the solver record (\S5a) documents a slow shock that
+\emph{strengthens} the lab-frame tangential field (tangential velocity $0.52$) and a fast
+shock that weakens it. A solver that chooses between shock and rarefaction by the sign of
+the change of $|B_t|$ inherits this problem (\cref{sec:failure-classes}).
+
+\section{Admissibility}\label{sec:admissibility}
+
+The RH conditions admit discontinuities that are not physical, for instance rarefaction
+shocks. Two classical criteria select the admissible ones.
+
+\paragraph{Lax conditions.} A discontinuity is a Lax $k$-shock if the characteristics of
+family $k$ run into it from both sides, while the characteristics of the other families
+cross it \parencite{Lax1957}. For a right-going shock of family $k$ this means
+$\lambda_k(\UU_a)<V_s<\lambda_k(\UU_b)$, $\lambda_{k-1}(\UU_b)<V_s$ and
+$V_s<\lambda_{k+1}(\UU_a)$.
+
+\paragraph{Evolutionary condition.} Perturb a discontinuity slightly. The linearised jump
+conditions are equations for the amplitudes of the \emph{outgoing} small-amplitude waves
+(those carried away from the front on either side) and for the perturbation of the front
+speed; the incoming waves are given. The problem has a unique solution only if the number
+of unknowns equals the number of equations \parencite{JeffreyTaniuti1964,FalleKomissarov2001}.
+For a shock whose two states are coplanar---always the case in Newtonian MHD, where
+shocks do not rotate the tangential field---the reflection symmetry $z\to-z$ splits the
+linearised problem into two independent parts: the out-of-plane (Alfvénic) part, two
+equations ($z$-momentum and $B^z$) with no front-speed perturbation, which needs exactly
+\emph{two} outgoing Alfvén waves; and the in-plane part, five equations for the outgoing
+magnetosonic and entropy waves plus the front speed, which needs exactly \emph{four}.
+Classify each side of a right-going front by where $V_s$ lies among that state's
+right-going speeds:
+\begin{equation}
+\text{1: }V_s>\lambda_{\rm f}^+,\quad
+\text{2: }\lambda_{\rm A}^+<V_s<\lambda_{\rm f}^+,\quad
+\text{3: }\lambda_{\rm s}^+<V_s<\lambda_{\rm A}^+,\quad
+\text{4: }\lambda_{\rm e}<V_s<\lambda_{\rm s}^+ .
+\end{equation}
+An outgoing characteristic is one faster than $V_s$ on the ahead side or slower than $V_s$
+on the behind side. Counting them (\cref{tab:shocks}) shows that only the transitions
+$1\to2$ (fast shock) and $3\to4$ (slow shock), ahead state first, have the right numbers.
+The \emph{intermediate} shocks $1\to3$, $1\to4$, $2\to3$ and $2\to4$ all have one outgoing
+Alfvén wave instead of two and are non-evolutionary in ideal MHD (for $2\to3$ the total
+is six, but split as $1+5$). Switch-on and switch-off shocks are limiting cases of fast and
+slow shocks.
+
+\begin{table}[t]
+\centering\small
+\begin{tabular}{@{}llcl@{}}
+\toprule
+transition (ahead$\to$behind) & name & outgoing: Alfvén + in-plane & ideal-MHD status\\
+\midrule
+$1\to2$ & fast shock & $2+4$ & evolutionary\\
+$3\to4$ & slow shock & $2+4$ & evolutionary\\
+$1\to3$ & intermediate & $1+4$ & non-evolutionary\\
+$1\to4$ & intermediate & $1+3$ & non-evolutionary\\
+$2\to3$ & intermediate & $1+5$ & non-evolutionary\\
+$2\to4$ & intermediate & $1+4$ & non-evolutionary\\
+\midrule
+required & & $2+4$ &\\
+\bottomrule
+\end{tabular}
+\caption{Counting of outgoing characteristics for a right-going coplanar shock. The
+rotational discontinuity ($V_s=\lambda_A$, linearly degenerate field) is not in this
+table: it is neither compressive nor of Lax type.}
+\label{tab:shocks}
+\end{table}
+
+\paragraph{The status of intermediate shocks.} Whether intermediate shocks are physical
+has been debated for decades. \textcite{Wu1987,Wu1988,Wu1990} showed in dissipative
+simulations that they form from smooth waves and possess stable structures.
+\textcite{FalleKomissarov2001} argued from the relation between evolutionary conditions and
+dissipative shock structure that non-evolutionary shocks are inadmissible, explained the
+intermediate shocks seen in planar MHD simulations, and suggested modifications of numerical
+schemes to avoid them in symmetric problems. \textcite{InoueInutsuka2007} found that in
+dissipative MHD all shock types, including intermediate shocks, are evolutionary. Exact
+solvers take different positions: \textcite{GiacomazzoRezzolla2006} exclude compound waves
+and intermediate shocks by construction, whereas the Newtonian solver of
+\textcite{TakahashiYamada2014} includes all types of intermediate shocks and switch-on/off
+waves and can find all solutions of a given problem. We return to the consequences in
+\cref{ch:nonunique}.
+
+\begin{codebox}[: which shock roots are accepted]
+The solver record (\S5a) traced 120 fast waves on which the standard scan had found no
+shock: each had a pair of roots, and on 119 of them exactly one root was evolutionary
+(two-sided Lax on the fast family \emph{and} super-Alfvénic behind, i.e.\ $1\to2$), the
+other leaving the flow sub-Alfvénic behind (an intermediate shock). The Lax condition on
+the fast family alone, which is what the scan checks, admits both. The pair-splitting
+scan (\code{RMHD_FAST_EDGE_SCAN}, on by default) runs on the lanes the standard scan gave
+up on; it splits the pair where the shock speed equals the Alfvén speed behind and takes
+the first root outward from there. An evolutionary
+selection of slow-shock roots exists but is parked (\code{RMHD_EVOLUTIONARY}). Every
+accepted answer must in addition pass the full RH residual and the wave-order gate
+(\cref{sec:student-impl}).
+\end{codebox}
+
+\section*{Exercises}
+\addcontentsline{toc}{section}{Exercises}
+
+\begin{exercise}
+Verify that $T^{\mu\nu}n_\nu=W_s(T^{\mu x}-V_sT^{\mu0})$ and hence that
+$\jump{T^{\mu\nu}}n_\nu=0$ is equivalent to the momentum and energy rows of
+\eqref{eq:RH}. Derive \eqref{eq:jumpidentity}.
+\end{exercise}
+
+\begin{exercise}\label{ex:hugoniot}
+Show that \eqref{eq:taub} reduces to the Newtonian Hugoniot relation
+$\epsilon_b-\epsilon_a=\frac12(p_a+p_b)(1/\rho_a-1/\rho_b)$ when $\epsilon$ and
+$p/\rho$ are small.
+\end{exercise}
+\begin{solution}
+Write $h=1+\epsilon+p/\rho$; to first order in small quantities
+$h_a^2-h_b^2\approx2(\epsilon_a-\epsilon_b)+2(p_a/\rho_a-p_b/\rho_b)$ and
+$(h_a/\rho_a+h_b/\rho_b)(p_a-p_b)\approx(1/\rho_a+1/\rho_b)(p_a-p_b)$. Rearranging gives the
+Hugoniot relation.
+\end{solution}
+
+\begin{exercise}
+Show that the Lichnerowicz adiabat \eqref{eq:lichnerowicz} reduces to \eqref{eq:taub} for
+$\bm b=0$, and that for an Alfvén discontinuity ($\jump{\rho}=\jump{p}=\jump{b^2}=0$) it
+is satisfied identically.
+\end{exercise}
+
+\begin{exercise}
+Starting from \eqref{eq:sigma}, show that $u_\mu\sigma^\mu=-s\sqrt w$ and
+$\sigma_\mu\sigma^\mu=b^2-w=-\rho h$ on both sides of a rotational discontinuity, and
+explain why these are consistent with the continuity of $\sigma^\mu$.
+\end{exercise}
+\begin{solution}
+$u_\mu\sigma^\mu=u_\mu b^\mu+s\sqrt w\,u_\mu u^\mu=-s\sqrt w$, and
+$\sigma_\mu\sigma^\mu=b^2+2s\sqrt w\,u_\mu b^\mu+w\,u_\mu u^\mu=b^2-w$. Both sides have
+the same $w$ and $b^2$, as required.
+\end{solution}
+
+\begin{exercise}
+Reproduce \cref{tab:shocks}. Why is the total count of outgoing characteristics not a
+sufficient test for coplanar shocks?
+\end{exercise}
+
+\begin{exercise}
+In the Newtonian limit, show that \eqref{eq:sigma} gives the Walén relation
+$\jump{\vv+s\BB/\sqrt{\rho}}=0$ and $\jump{|B_t|}=0$ for a rotational discontinuity.
+\end{exercise}
+
+
+% ======================================================================== chapter 5
+\chapter{Rarefaction waves}\label{ch:rarefactions}
+
+\section{Self-similar simple waves}
+
+A rarefaction is a continuous self-similar solution $\UU=\UU(\xi)$, $\xi=x/t$. Substituting
+into $\partial_t\UU+\mathsf A\,\partial_x\UU=0$ with $\partial_t=-(\xi/t)\dd/\dd\xi$ and
+$\partial_x=t^{-1}\dd/\dd\xi$ gives
+\begin{equation}\label{eq:simplewave}
+\bigl(\mathsf A(\UU)-\xi\,\mathsf I\bigr)\,\frac{\dd\UU}{\dd\xi}=0 .
+\end{equation}
+A non-constant solution therefore needs $\xi=\lambda_k(\UU(\xi))$ for some family $k$, with
+$\dd\UU/\dd\xi$ parallel to the right eigenvector $\bm r_k$. Differentiating
+$\xi=\lambda_k(\UU(\xi))$ gives $1=\nabla_{\UU}\lambda_k\cdot\dd\UU/\dd\xi$, hence
+\begin{equation}\label{eq:fanode}
+\boxed{\;\frac{\dd\UU}{\dd\xi}=\frac{\bm r_k(\UU)}{\nabla_{\UU}\lambda_k\cdot\bm r_k(\UU)}\;}
+\end{equation}
+This requires $\nabla_{\UU}\lambda_k\cdot\bm r_k\ne0$ along the wave: the $k$-th field must
+be genuinely nonlinear there. Linearly degenerate fields (entropy, Alfvén) have no
+rarefactions; their simple waves are discontinuities moving at the characteristic
+speed. A $k$-rarefaction joining a left state $\UU_l$ to a right state $\UU_r$ occupies
+$\lambda_k(\UU_l)\le\xi\le\lambda_k(\UU_r)$ and is admissible only if $\lambda_k$
+increases monotonically through the fan. The edge facing the undisturbed state is the
+\emph{head}, the other the \emph{tail}.
+
+Along the integral curve any function $w(\UU)$ with $\nabla_{\UU}w\cdot\bm r_k=0$ is
+constant: a $k$-\emph{Riemann invariant}. An $m$-component system has $m-1$ independent
+ones for each family. In practice it is easier to parametrise the curve by a physical
+variable, e.g.\ the pressure: $\dd\UU/\dd p=\bm r_k/r_k^{(p)}$, where $r_k^{(p)}$ is the
+pressure component of $\bm r_k$ in primitive variables.
+
+\section{Relativistic hydrodynamics}\label{sec:hydro-raref}
+
+For normal flow ($v_y=v_z=0$) take $\VV=(\rho,v,p)$ with $v\equiv v_x$. The eigenvalues of
+$\tilde{\mathsf A}$ are
+\begin{equation}
+\lambda_{\rm e}=v,\qquad \lambda_\pm=\frac{v\pm c_s}{1\pm vc_s},
+\end{equation}
+the relativistic composition of the flow speed with $\pm c_s$, and along the $\pm$ acoustic
+eigenvectors
+\begin{equation}\label{eq:dvdp}
+\frac{\dd v}{\dd p}=\pm\frac{1}{W^2\rho hc_s},\qquad \dd p=hc_s^2\,\dd\rho
+\end{equation}
+(both checked from the Jacobian in \cref{app:verification}). With the rapidity
+$\vartheta=\operatorname{artanh}v$, $\dd\vartheta=W^2\dd v$, so \eqref{eq:dvdp} becomes
+$\dd\vartheta=\pm\dd p/(\rho hc_s)=\pm c_s\,\dd\rho/\rho$. The Riemann invariants are
+therefore
+\begin{equation}\label{eq:riemanninv}
+\mathcal J_\pm=\vartheta\pm\int\frac{c_s}{\rho}\,\dd\rho ,
+\end{equation}
+with $\mathcal J_+$ constant across a left-going ($\lambda_-$) rarefaction and
+$\mathcal J_-$ constant across a right-going ($\lambda_+$) one.
+
+\paragraph{Ideal gas.} On the isentrope $p=K\rho^\Gamma$ one finds
+$c_s\,\dd\rho/\rho=2\,\dd c_s/(\Gamma-1-c_s^2)$ (checked symbolically), so
+\begin{equation}
+\int\frac{c_s}{\rho}\dd\rho=\mathcal G(c_s)\equiv\frac{1}{\sqrt{\Gamma-1}}
+\ln\frac{\sqrt{\Gamma-1}+c_s}{\sqrt{\Gamma-1}-c_s} ,
+\end{equation}
+and across a rarefaction facing the state $a$ (sign $s=-1$ for a left-going wave, $+1$ for a
+right-going one)
+\begin{equation}\label{eq:raref-hydro}
+\operatorname{artanh}v_b=\operatorname{artanh}v_a+s\,\bigl[\mathcal G(c_{s,b})-\mathcal G(c_{s,a})\bigr],
+\qquad \rho_b=\rho_a\Bigl(\frac{p_b}{p_a}\Bigr)^{1/\Gamma}.
+\end{equation}
+Inside the fan the state at $\xi$ follows from $\xi=\lambda_s(v,c_s)$ together with
+\eqref{eq:raref-hydro}.
+
+\paragraph{Tangential velocities.} With $v_t\ne0$ the tangential momentum equation gives one
+more invariant. For the self-similar flow, $\dd(S_t/D)=0$ across the wave, i.e.
+\begin{equation}\label{eq:Ainv}
+A\equiv hWv_t=\text{const},\qquad\text{hence}\qquad
+v_t^2=\frac{A^2(1-v_x^2)}{h^2+A^2},
+\end{equation}
+and the acoustic ODE becomes \parencite{Pons2000}
+\begin{equation}\label{eq:pmm-ode}
+\frac{\dd v_x}{\dd p}=s\,\frac{(1-v_x^2)\sqrt{h^2+A^2(1-c_s^2)}}{(h^2+A^2)\,\rho\,c_s},
+\end{equation}
+which reduces to \eqref{eq:dvdp} for $A=0$. We checked \eqref{eq:pmm-ode} and the
+invariance of $A$ against the eigenvectors of the four-variable Jacobian
+(\cref{app:verification}). The tangential velocity enters through $h^2+A^2$: unlike in
+Newtonian hydrodynamics, the normal and tangential motions are coupled through the
+Lorentz factor.
+
+\section{Relativistic MHD}\label{sec:mhd-raref}
+
+For SRMHD the self-similar equations \eqref{eq:simplewave} are seven ODEs for
+$(\rho,\Ptot,v_x,v_y,v_z,B^y,B^z)$, written out by \textcite[eqs.~4.43--4.49]{GiacomazzoRezzolla2006}.
+Non-trivial solutions need $\xi$ to be a root of the magnetosonic quartic \eqref{eq:quartic}
+(their eq.~4.50): fans exist only in the fast and slow families. There is no closed form
+for the integral curves, and \textcite{GiacomazzoRezzolla2006} integrate them numerically
+with the total pressure as the independent variable (six ODEs; their Appendix~B). Two
+structural facts are worth deriving.
+
+\paragraph{The Alfvén singularity.} The right-hand sides of Appendix~B of
+\textcite{GiacomazzoRezzolla2006} contain the factor
+\begin{equation}
+\mathcal R=\frac{1}{\rho hW^4(\vB^2-w)\,(\lambda_A^{(+)}-\xi)(\lambda_A^{(-)}-\xi)}
+\end{equation}
+and, in the equations for $\dd B^y/\dd\Ptot$ and $\dd B^z/\dd\Ptot$, the denominator
+\begin{equation}\label{eq:Bydenom}
+(B^x)^2+2B^x\vB W^2(v_x-\xi)+W^4(\vB^2-w)(v_x-\xi)^2
+=W^4(\vB^2-w)\,(\lambda_A^{(+)}-\xi)(\lambda_A^{(-)}-\xi).
+\end{equation}
+The factorisation follows by viewing the left side as a quadratic in $W^2(v_x-\xi)$ with
+roots $-B^x/(\vB\pm\sqrt w)$, i.e.\ $\xi=\lambda_A^{(\pm)}$ by \eqref{eq:lamA}; it was
+checked symbolically. So the fan equations are singular exactly where the fan speed
+$\xi$ (a fast or slow speed) equals an Alfvén speed: at a Type~II degeneracy.
+\textcite{GiacomazzoRezzolla2006} note that such points cannot be integrated without a
+regularisation, which their code does not include. Since $\lambda_s\le\lambda_A\le
+\lambda_f$, a slow fan approaches this singularity when the field becomes nearly normal to
+the front.
+
+\paragraph{Other parametrisations.} Between the two slow waves GR06 use the tangential field
+as the unknown. Their slow fans are integrated with $|B_t|$ as the independent variable at
+fixed angle $\psi=\arctan(B^z/B^y)$, and, when the field rotates inside the slow fan (as in
+Balsara's test~5), with $\psi$ itself \parencite[\S5.2]{GiacomazzoRezzolla2006}. Note that
+in SRMHD $\psi$ need not be constant across fast and slow waves, unlike in Newtonian MHD.
+
+\paragraph{End points and admissibility.} A fan is integrated from the head (the state
+it faces, at $\xi=\lambda_k(\UU_a)$) until the independent variable reaches its target; the
+tail speed is $\lambda_k$ of the end state. The fan is admissible only if $\lambda_k$ is
+monotone along it. If it is not---because the field is not genuinely nonlinear along the
+path---the wave must be replaced by a compound structure (\cref{ch:nonunique}).
+
+\begin{codebox}[: fans]
+\file{rmhd/rarefaction.py} integrates the fan ODEs with fixed-step fourth-order
+Runge--Kutta, with three independent variables: the total pressure (\code{'pressure'}, 800
+steps), $|B_t|$ at fixed $\psi$ (\code{'normB'}, 500 steps) and $\psi$ (\code{'psi'}, 1000
+steps). The right-hand sides contain the factors $(\lambda_A^{(+)}-\xi)(\lambda_A^{(-)}-\xi)$
+discussed above. The batched versions are in \file{rmhd/batched/rarefaction_b.py} and
+\file{fan_njit.py}.
+
+Which variable to use matters. The solver record (\S5a) measured, along the slow family at
+the input states, $\dd\ln\Ptot/\dd\ln|B_t|\approx-0.005$ (median) on interfaces the
+five-wave solver answers, and $-0.54$ to $-0.69$ on unsolved interfaces where the field is
+nearly normal to the face: there $|B_t|$ hardly moves along the slow family, so a slow wave
+steered by $|B_t|$ is steered by a coordinate that does not change. The four-unknown solver
+(\cref{sec:student-impl}) therefore chooses, for each slow wave, between $B_t$ and $\Ptot$
+from the tangent of the slow family.
+\end{codebox}
+
+\section{The state on the ray \texorpdfstring{$\xi=0$}{xi = 0}}
+
+Godunov's flux needs the state at $\xi=0$. If $\xi=0$ falls inside a fan, the integration
+is continued from the head only until $\lambda_k(\UU)=0$. In the code this is
+\code{state_at_xi} in \file{rmhd/batched/ray_b.py}, which also handles the case of a
+constant zone.
+
+\section*{Exercises}
+\addcontentsline{toc}{section}{Exercises}
+
+\begin{exercise}
+Show that \eqref{eq:fanode} implies $\dd\lambda_k/\dd\xi=1$ along the fan, and that a
+rarefaction across which $\lambda_k$ would have to decrease is not a solution.
+\end{exercise}
+
+\begin{exercise}
+Derive \eqref{eq:dvdp} directly from the self-similar form of the mass, momentum and
+energy equations of relativistic hydrodynamics (normal flow). \emph{Hint:} the mass
+equation gives $(v-\xi)\rho'+\rho\,W^2(1-v\xi)\,v'=0$.
+\end{exercise}
+
+\begin{exercise}
+Gas at rest with sound speed $c_a$ fills $x>0$; $x<0$ is vacuum. The gas expands to the
+left through a right-going rarefaction. Show that the gas--vacuum interface moves with
+$v_{\rm vac}=-\tanh\mathcal G(c_a)$. Evaluate it for $\Gamma=5/3$, $p/\rho=1$, and compare
+with the Newtonian escape speed $2c_s/(\Gamma-1)$ evaluated with the same $c_s$.
+\end{exercise}
+\begin{solution}
+At the vacuum end $\rho\to0$, so $c_s\to0$ and $\mathcal G\to0$; \eqref{eq:raref-hydro}
+gives $|\operatorname{artanh}v_{\rm vac}|=\mathcal G(c_a)$. For $\Gamma=5/3$, $p/\rho=1$:
+$h=3.5$, $c_a^2=5/10.5$, $c_a\approx0.690$, $\sqrt{\Gamma-1}\approx0.816$, so
+$\mathcal G\approx1.225\ln(1.506/0.126)\approx3.04$ and $|v_{\rm vac}|\approx0.995$. The
+Newtonian formula would give $2.07$, faster than light.
+\end{solution}
+
+\begin{exercise}
+Show that $A=hWv_t$ is continuous across a relativistic hydrodynamic shock as well.
+\emph{Hint:} use \eqref{eq:jumpidentity} on the tangential momentum.
+\end{exercise}
+
+\begin{exercise}
+Prove the factorisation \eqref{eq:Bydenom}.
+\end{exercise}
+
+
+% ======================================================================== chapter 6
+\chapter{The relativistic hydrodynamic Riemann problem}\label{ch:hydro}
+
+Before the seven-wave problem we solve the three-wave one completely. The method---express
+the state behind each outer wave as a function of the pressure behind it, then match at
+the contact---is exactly the one generalised to SRMHD in \cref{ch:srmhd}. It is due to
+\textcite{MartiMuller1994} for normal flow and to \textcite{Pons2000} for arbitrary
+tangential velocities; \textcite{RezzollaZanotti2001,RezzollaZanottiPons2003} added an
+a~priori determination of the wave pattern.
+
+\section{Structure of the solution}
+
+The solution consists of a left-going wave (shock or rarefaction), a contact
+discontinuity, and a right-going wave:
+\begin{equation}
+L\;\longrightarrow\;\mathcal W_\leftarrow\;\longrightarrow\;L_\ast\;\longrightarrow\;
+\mathcal C\;\longrightarrow\;R_\ast\;\longrightarrow\;\mathcal W_\rightarrow\;
+\longrightarrow\;R .
+\end{equation}
+Across the contact $p$ and $v_x$ are continuous (\cref{prop:contact} with $\bm b=0$), so
+the unknowns are $p_\ast$ and $v_\ast$; $\rho$ and the tangential velocity jump. Each
+outer wave is a shock if the pressure rises across it ($p_\ast$ larger than the pressure
+of the state it faces) and a rarefaction otherwise.
+
+\section{The shock branch}\label{sec:hydro-shock}
+
+Let $a$ be the state the shock faces and $p_b$ the pressure behind it. Using the mass flux
+$j\equiv J=\rho_aW_aW_s(V_s-v_{x,a})$ of \eqref{eq:J} (positive for a right-going shock):
+\begin{enumerate}[label=(\roman*)]
+\item \emph{Post-shock enthalpy.} The Taub adiabat \eqref{eq:taub} with the ideal-gas
+  relation $\rho_b=\Gamma p_b/[(\Gamma-1)(h_b-1)]$ is a quadratic for $h_b$,
+  \begin{equation}\label{eq:taubquad}
+  \Bigl[1+\frac{(\Gamma-1)(p_a-p_b)}{\Gamma p_b}\Bigr]h_b^2
+  -\frac{(\Gamma-1)(p_a-p_b)}{\Gamma p_b}\,h_b
+  +\frac{h_a(p_a-p_b)}{\rho_a}-h_a^2=0,
+  \end{equation}
+  whose positive root is the physical one.
+\item \emph{Mass flux.} $j^2=(p_b-p_a)/(h_a/\rho_a-h_b/\rho_b)$, from \eqref{eq:taub}.
+\item \emph{Shock speed.} Solving $j=\rho_aW_aW_s(V_s-v_{x,a})$ for $V_s$,
+  \begin{equation}\label{eq:Vsj}
+  V_s=\frac{\rho_a^2W_a^2v_{x,a}+j\sqrt{j^2+\rho_a^2W_a^2(1-v_{x,a}^2)}}{\rho_a^2W_a^2+j^2},
+  \end{equation}
+  with $j>0$ for a right-going and $j<0$ for a left-going shock.
+\item \emph{Post-shock normal velocity.} The momentum condition with
+  \eqref{eq:jumpidentity} gives $h_bW_bv_{x,b}=h_aW_av_{x,a}+W_s(p_b-p_a)/j$, and the energy
+  and mass conditions give $h_bW_b=h_aW_a+(p_b-p_a)\bigl[W_sv_{x,a}/j+1/(\rho_aW_a)\bigr]$.
+  Dividing,
+  \begin{equation}\label{eq:vbshock}
+  v_{x,b}=\frac{h_aW_av_{x,a}+W_s(p_b-p_a)/j}
+  {h_aW_a+(p_b-p_a)\bigl[W_sv_{x,a}/j+1/(\rho_aW_a)\bigr]} .
+  \end{equation}
+\end{enumerate}
+These are the relations of \textcite{Pons2000} (see also eq.~4.13 of \textcite{Romero2005},
+who write them for the magnetised case of \cref{sec:romero}). They hold with tangential
+velocities too, if $W_a$ includes $v_{t,a}$; the tangential velocity behind follows from
+the invariance of $A=hWv_t$ (\cref{ex:Ashock}) and \eqref{eq:Ainv}. A shock built from
+(i)--(iv) satisfies all jump conditions to 38 digits (\cref{app:verification}).
+
+\paragraph{Derivation of (iv).} With $S/D=hWv_x$ and $E/D=hW-p/D$, the momentum and energy
+jumps read $(j/W_s)\jump{hWv_x}=\jump{p}$ and $(j/W_s)\jump{hW-p/D}=\jump{pv_x}$, and mass
+conservation gives $1/D_b=1/D_a+(W_s/j)(v_{x,a}-v_{x,b})$. Substituting the last relation
+into the energy jump, the terms in $v_{x,b}$ cancel and $h_bW_b$ follows; the momentum jump
+gives $h_bW_bv_{x,b}$.
+
+\section{The rarefaction branch}
+
+Across a rarefaction facing $a$, \eqref{eq:raref-hydro} gives $v_{x,b}$ in closed form for
+normal flow. With tangential velocities one integrates \eqref{eq:pmm-ode} from $p_a$ to $p_b$
+along the isentrope.
+
+\section{The equation for the central pressure}
+
+Define, for the left and right waves,
+\begin{equation}
+v_{L\ast}(p)=\begin{cases}\mathcal S_L(p),&p>p_L\\ \mathcal R_L(p),&p\le p_L\end{cases},
+\qquad
+v_{R\ast}(p)=\begin{cases}\mathcal S_R(p),&p>p_R\\ \mathcal R_R(p),&p\le p_R\end{cases},
+\end{equation}
+where $\mathcal S$ and $\mathcal R$ denote the shock and rarefaction branches of
+\cref{sec:hydro-shock} and \eqref{eq:raref-hydro}. The solution is the root of
+\begin{equation}\label{eq:pstar}
+\boxed{\;v_{L\ast}(p_\ast)=v_{R\ast}(p_\ast)\;}
+\end{equation}
+$v_{L\ast}$ decreases and $v_{R\ast}$ increases monotonically with $p$, so for normal flow
+\eqref{eq:pstar} has exactly one root, which bisection or a safeguarded Newton iteration
+finds reliably \parencite{MartiMuller1994}. \Cref{fig:hydro-pstar} shows the two curves
+for a strong blast wave.
+
+\begin{figure}[t]
+\centering
+\begin{tikzpicture}
+\begin{semilogxaxis}[width=11.5cm,height=6.6cm,xmin=0.01,xmax=1e4,ymin=-0.85,ymax=1.05,
+  xlabel={$p$},ylabel={$v_x$},grid=major,grid style={gray!20},
+  legend style={at={(0.02,0.04)},anchor=south west,font=\small},
+  every axis plot/.append style={line width=1pt}]
+\addplot[blue!70!black] table[x index=0,y index=1,row sep=\\]{
+0.01 0.999974 0.000000\\
+0.0125893 0.999967 0.018018\\
+0.0158489 0.999959 0.036874\\
+0.0199526 0.999949 0.056646\\
+0.0251189 0.999936 0.077448\\
+0.0316228 0.999920 0.099422\\
+0.0398107 0.999900 0.122729\\
+0.0501187 0.999874 0.147549\\
+0.0630957 0.999843 0.174065\\
+0.0794328 0.999804 0.202456\\
+0.1 0.999755 0.232883\\
+0.125893 0.999693 0.265476\\
+0.158489 0.999616 0.300316\\
+0.199526 0.999519 0.337413\\
+0.251189 0.999398 0.376690\\
+0.316228 0.999247 0.417957\\
+0.398107 0.999058 0.460900\\
+0.501187 0.998821 0.505075\\
+0.630957 0.998524 0.549913\\
+0.794328 0.998152 0.594747\\
+1 0.997686 0.638849\\
+1.25893 0.997104 0.681483\\
+1.58489 0.996374 0.721970\\
+1.99526 0.995461 0.759732\\
+2.51189 0.994319 0.794339\\
+3.16228 0.992889 0.825528\\
+3.98107 0.991102 0.853197\\
+5.01187 0.988867 0.877393\\
+6.30957 0.986073 0.898278\\
+7.94328 0.982585 0.916099\\
+10 0.978232 0.931152\\
+12.5893 0.972805 0.943756\\
+15.8489 0.966048 0.954229\\
+19.9526 0.957647 0.962875\\
+25.1189 0.947221 0.969974\\
+31.6228 0.934315 0.975774\\
+39.8107 0.918383 0.980495\\
+50.1187 0.898788 0.984324\\
+63.0957 0.874793 0.987421\\
+79.4328 0.845571 0.989919\\
+100 0.810217 0.991930\\
+125.893 0.767786 0.993547\\
+158.489 0.717347 0.994844\\
+199.526 0.658069 0.995883\\
+251.189 0.589330 0.996715\\
+316.228 0.510845 0.997380\\
+398.107 0.422806 0.997912\\
+501.187 0.325987 0.998336\\
+630.957 0.221808 0.998675\\
+794.328 0.112304 0.998945\\
+1000 0.000000 0.999160\\
+1258.93 -0.112316 0.999332\\
+1584.89 -0.221890 0.999468\\
+1995.26 -0.326234 0.999577\\
+2511.89 -0.423318 0.999663\\
+3162.28 -0.511702 0.999732\\
+3981.07 -0.590568 0.999787\\
+5011.87 -0.659680 0.999831\\
+6309.57 -0.719282 0.999866\\
+7943.28 -0.769968 0.999893\\
+10000 -0.812557 0.999915\\
+};
+\addplot[red!70!black] table[x index=0,y index=2,row sep=\\]{
+0.01 0.999974 0.000000\\
+0.0125893 0.999967 0.018018\\
+0.0158489 0.999959 0.036874\\
+0.0199526 0.999949 0.056646\\
+0.0251189 0.999936 0.077448\\
+0.0316228 0.999920 0.099422\\
+0.0398107 0.999900 0.122729\\
+0.0501187 0.999874 0.147549\\
+0.0630957 0.999843 0.174065\\
+0.0794328 0.999804 0.202456\\
+0.1 0.999755 0.232883\\
+0.125893 0.999693 0.265476\\
+0.158489 0.999616 0.300316\\
+0.199526 0.999519 0.337413\\
+0.251189 0.999398 0.376690\\
+0.316228 0.999247 0.417957\\
+0.398107 0.999058 0.460900\\
+0.501187 0.998821 0.505075\\
+0.630957 0.998524 0.549913\\
+0.794328 0.998152 0.594747\\
+1 0.997686 0.638849\\
+1.25893 0.997104 0.681483\\
+1.58489 0.996374 0.721970\\
+1.99526 0.995461 0.759732\\
+2.51189 0.994319 0.794339\\
+3.16228 0.992889 0.825528\\
+3.98107 0.991102 0.853197\\
+5.01187 0.988867 0.877393\\
+6.30957 0.986073 0.898278\\
+7.94328 0.982585 0.916099\\
+10 0.978232 0.931152\\
+12.5893 0.972805 0.943756\\
+15.8489 0.966048 0.954229\\
+19.9526 0.957647 0.962875\\
+25.1189 0.947221 0.969974\\
+31.6228 0.934315 0.975774\\
+39.8107 0.918383 0.980495\\
+50.1187 0.898788 0.984324\\
+63.0957 0.874793 0.987421\\
+79.4328 0.845571 0.989919\\
+100 0.810217 0.991930\\
+125.893 0.767786 0.993547\\
+158.489 0.717347 0.994844\\
+199.526 0.658069 0.995883\\
+251.189 0.589330 0.996715\\
+316.228 0.510845 0.997380\\
+398.107 0.422806 0.997912\\
+501.187 0.325987 0.998336\\
+630.957 0.221808 0.998675\\
+794.328 0.112304 0.998945\\
+1000 0.000000 0.999160\\
+1258.93 -0.112316 0.999332\\
+1584.89 -0.221890 0.999468\\
+1995.26 -0.326234 0.999577\\
+2511.89 -0.423318 0.999663\\
+3162.28 -0.511702 0.999732\\
+3981.07 -0.590568 0.999787\\
+5011.87 -0.659680 0.999831\\
+6309.57 -0.719282 0.999866\\
+7943.28 -0.769968 0.999893\\
+10000 -0.812557 0.999915\\
+};
+\addplot[only marks,mark=*,mark size=2pt] coordinates {(18.597,0.96041)};
+\node[font=\small,anchor=south east] at (axis cs:18,0.7) {$(p_\ast,v_\ast)$};
+\addplot[only marks,mark=square*,mark size=1.6pt,gray] coordinates {(1000,0) (0.01,0)};
+\legend{$v_{L\ast}(p)$ (left wave),$v_{R\ast}(p)$ (right wave)}
+\end{semilogxaxis}
+\end{tikzpicture}
+\caption{The functions $v_{L\ast}(p)$ and $v_{R\ast}(p)$ for the blast wave
+$(\rho,p,v_x)_L=(1,1000,0)$, $(\rho,p,v_x)_R=(1,0.01,0)$, $\Gamma=5/3$. Each curve is a
+rarefaction branch below the pressure of its state (grey squares) and a shock branch above
+it. They cross at $p_\ast=18.597$, $v_\ast=0.96041$.}
+\label{fig:hydro-pstar}
+\end{figure}
+
+\begin{example}[Blast wave]\label{ex:blast}
+For the data of \cref{fig:hydro-pstar} the left wave is a rarefaction and the right wave a
+shock. Solving \eqref{eq:pstar} in 30-digit arithmetic with the formulas above gives
+$p_\ast=18.5970787$, $v_\ast=0.96040961$, $\rho_{L\ast}=0.0915518$,
+$\rho_{R\ast}=10.41558$ and a shock speed $V_s=0.98680$. The exact solver of the reference
+implementation (built-in case~3 of \file{rmhd/initial_data.py}, run with $B=0$) returns
+$p_\ast=18.5970777$ and $v_\ast=0.96040961$; the relative difference in $p_\ast$,
+$5\times10^{-8}$, is consistent with its fixed-step integration of the fan and its
+$10^{-8}$ tolerance. The thin dense shell behind the shock ($\rho_{R\ast}/\rho_R\approx10.4$,
+more than the Newtonian limit $(\Gamma+1)/(\Gamma-1)=4$) is the hallmark of relativistic
+blast waves.
+\end{example}
+
+\section{Wave patterns and the relative velocity}
+
+Which of the four patterns (shock--shock, shock--rarefaction, rarefaction--shock,
+rarefaction--rarefaction) occurs is decided by where $p_\ast$ lies relative to $p_L$ and
+$p_R$, and hence by the velocity jump between the initial states. Because $v_{L\ast}$ and
+$v_{R\ast}$ are monotone, the limiting cases are obtained by evaluating them at $p=p_L$ and
+$p=p_R$. \textcite{RezzollaZanotti2001} showed that the pattern is determined by the
+relativistic relative velocity of the initial states compared with such limiting values,
+which removes the initial guesswork, and \textcite{RezzollaZanottiPons2003} extended this to
+flows with tangential velocities.
+
+\section{Tangential velocities}
+
+With $v_t\ne0$ the problem is still a two-unknown problem in $(p_\ast,v_\ast)$, but the
+tangential velocity couples to the normal one through $W$: $A=hWv_t$ is invariant across
+shocks and rarefactions (not across the contact), the shock relations
+\eqref{eq:Vsj}--\eqref{eq:vbshock} use the full $W_a$, and the rarefaction branch uses
+\eqref{eq:pmm-ode}. Large tangential velocities can change the wave pattern for fixed
+thermodynamic states, and the pattern changes continuously as $v_t$ varies
+\parencite{Pons2000,RezzollaZanottiPons2003}. The tangential velocity changes its
+magnitude across a wave but, since $\jump{S_y/D}=\jump{S_z/D}=0$, not its direction
+\parencite[\S5.2]{GiacomazzoRezzolla2006}.
+
+\section*{Exercises}
+\addcontentsline{toc}{section}{Exercises}
+
+\begin{exercise}
+Derive \eqref{eq:taubquad} and show that its positive root satisfies $h_b>h_a$ when
+$p_b>p_a$.
+\end{exercise}
+
+\begin{exercise}
+Derive \eqref{eq:Vsj}. Show that $|V_s|\to1$ as $|j|\to\infty$ and that $V_s\to v_{x,a}$ as
+$j\to0$.
+\end{exercise}
+
+\begin{exercise}\label{ex:Ashock}
+Using \eqref{eq:jumpidentity}, show that across a hydrodynamic shock
+$\jump{hWv_t}=0$, and that the tangential velocity behind is
+$v_t^2=A^2(1-v_x^2)/(h^2+A^2)$.
+\end{exercise}
+\begin{solution}
+The tangential momentum jump is $V_s\jump{S_t}=\jump{S_tv_x}$, i.e.\
+$\jump{S_t(V_s-v_x)}=0=(j/W_s)\jump{S_t/D}$ and $S_t/D=hWv_t$. Then $A^2=h^2W^2v_t^2$ with
+$W^{-2}=1-v_x^2-v_t^2$ gives the formula.
+\end{solution}
+
+\begin{exercise}[Programming]
+Implement the solver of this chapter (normal flow) and reproduce \cref{ex:blast}. Then
+give the right state a tangential velocity $v_t=0.9$ and observe how $p_\ast$ and the
+pattern change.
+\end{exercise}
+
+\begin{exercise}
+Show that for $p_L=p_R$ and $v_{x,L}>v_{x,R}$ the solution has two shocks, and for
+$v_{x,L}<v_{x,R}$ two rarefactions. What happens if $v_{x,R}-v_{x,L}$ is large enough that
+$p_\ast\to0$?
+\end{exercise}
+
+
+% ======================================================================== chapter 7
+\chapter{The SRMHD Riemann problem}\label{ch:srmhd}
+
+\section{Seven waves, eight states}
+
+For $B^x\ne0$ and generic data the solution of the SRMHD Riemann problem consists of seven
+waves: a fast wave, an Alfvén discontinuity and a slow wave moving left, a contact
+discontinuity, and a slow wave, an Alfvén discontinuity and a fast wave moving right
+(\cref{fig:sevenwave}). They separate eight constant states, $R_1=L$, $R_2,\dots,R_7$,
+$R_8=R$, in the numbering of \textcite{GiacomazzoRezzolla2006}. Fast and slow waves are
+shocks or rarefactions; the Alfvén waves and the contact are discontinuities.
+
+\begin{figure}[t]
+\centering
+\begin{tikzpicture}[x=1.0cm,y=1.0cm,>=Stealth]
+  \draw[->] (-6,0) -- (6,0) node[right] {$x$};
+  \draw[->] (0,-0.2) -- (0,4.6) node[above] {$t$};
+  \fill[red!15] (0,0) -- (155:4.4) -- (146:4.4) -- cycle;
+  \fill[red!15] (0,0) -- (30:4.4) -- (39:4.4) -- cycle;
+  \foreach \ang/\lab/\sty in {155/LF/thick, 130/LA/dashed, 112/LS/thick, 95/CD/dotted,
+                              78/RS/thick, 60/RA/dashed, 30/RF/thick}{
+    \draw[\sty,red!70!black] (0,0) -- (\ang:4.4);
+    \node[font=\small] at (\ang:4.75) {\lab};
+  }
+  \foreach \ang/\lab in {168/{$R_1=L$}, 139/$R_2$, 121/$R_3$, 103.5/$R_4$, 86.5/$R_5$,
+                         69/$R_6$, 46/$R_7$, 14/{$R_8=R$}}{
+    \node[font=\small] at (\ang:3.3) {\lab};
+  }
+\end{tikzpicture}
+\caption{The seven-wave Riemann fan of SRMHD (fast: LF, RF; Alfvén: LA, RA; slow: LS, RS;
+contact: CD). The shaded wedges indicate that fast and slow waves may be rarefaction fans.
+For $B^x=0$ the Alfvén and slow waves collapse onto the contact (three waves); for
+coplanar data the Alfvén waves are either absent or reverse the field.}
+\label{fig:sevenwave}
+\end{figure}
+
+\paragraph{Counting unknowns.} Each wave belongs to a one-parameter family of states
+reachable from the state ahead of it (a wave curve). Fixing one parameter per non-contact
+wave---six parameters---fixes $R_2,\dots,R_4$ from the left and $R_7,\dots,R_5$ from the
+right. The contact then imposes six conditions (\cref{prop:contact}): continuity of $v_x$,
+$v_y$, $v_z$, $B^y$, $B^z$ and $\Ptot$. The exact Riemann problem is therefore a system of
+six nonlinear equations in six unknowns. Every exact method is a choice of these six
+parameters, and the difficulty lies in that choice: it decides how well conditioned the
+system is and where it is even defined.
+
+\section{Special cases}\label{sec:bx0}
+
+\subsection{Purely tangential field orthogonal to the flow}\label{sec:romero}
+
+\textcite{Romero2005} solved the case $B^x=0$ with $\vv=(v_x,0,v_z)$ and $\BB=(0,B^y,0)$,
+so that $\vv\cdot\BB=0$. Then $b^0=0$ and $b^\mu=(0,0,b,0)$ with $b=B^y/W$, and
+\eqref{eq:Tmunu} becomes
+\begin{equation}
+T^{\mu\nu}=\rho\hat h\,u^\mu u^\nu+\hat p\,g^{\mu\nu}-b^\mu b^\nu,\qquad
+\hat h=h+\frac{b^2}{\rho},\qquad \hat p=p+\frac{b^2}{2}.
+\end{equation}
+The last term has only a $yy$ component, and $\partial_\mu(b^\mu b^\nu)=\partial_y(b\,b^\nu)=0$
+in a flow that depends on $(t,x)$ only. The energy--momentum equations are therefore those
+of relativistic hydrodynamics with pressure $\hat p$ and enthalpy $\hat h$. The induction
+equation is $\partial_tB^y+\partial_x(v_xB^y)=0$, and with mass conservation it says that
+$B^y/D=b/\rho$ is carried with the fluid; by \eqref{eq:jumpidentity} it is also continuous
+across shocks. So on each side of the contact $\hat B\equiv b/\rho$ is a constant, and the
+problem is relativistic hydrodynamics with the effective equation of state
+\parencite[Appendix~A]{Romero2005}
+\begin{equation}\label{eq:romeroeos}
+\hat p=p+\tfrac12\hat B^2\rho^2,\qquad
+\hat\epsilon=\epsilon+\tfrac12\hat B^2\rho,\qquad
+\hat c_s^2=\frac{hc_s^2+\hat B^2\rho}{\hat h}=c_s^2+v_A^2-c_s^2v_A^2,\quad
+v_A^2=\frac{b^2}{\rho\hat h}.
+\end{equation}
+The last identity (checked symbolically) shows that the effective sound speed is the fast
+speed $\zeta$ for propagation perpendicular to the field. Everything in \cref{ch:hydro}
+applies with hats: the three waves are fast shocks or rarefactions and a tangential
+discontinuity across which $\hat p$ and $v_x$ are continuous. Magnetic pressure raises
+$\hat p$ in the initial states and can change the wave pattern for fixed gas states
+\parencite{Romero2005}.
+
+\subsection{Normal field zero: three waves}
+
+For $B^x=0$ but $\vv\cdot\BB\ne0$ the reduction above fails, but the fan still has three
+waves (Type~I degeneracy): two fast waves and a tangential discontinuity at which only
+$v_x$ and $\Ptot$ are continuous (\cref{prop:contact}). \textcite{GiacomazzoRezzolla2006}
+solve it like the hydrodynamic problem: the states behind the fast waves are functions of
+the total pressure behind them (the $p$-method of \cref{sec:shocks} and
+\cref{sec:mhd-raref}), and the single unknown $\Ptot_\ast$ is the root of
+$v_{x,L\ast}(\Ptot_\ast)=v_{x,R\ast}(\Ptot_\ast)$.
+
+\subsection{Coplanar data: five waves}\label{sec:coplanar}
+
+If the tangential fields and velocities of $L$ and $R$ lie in one plane containing the
+normal---as on every face of a two-dimensional flow---the solution stays in that plane.
+A rotational discontinuity can then only leave the field unchanged or reverse it
+(\cref{sec:rotational}). The fan has five waves (fast, slow, contact, slow, fast), plus
+possibly a reversal at one or both Alfvén speeds, which is a discrete choice rather than a
+continuous parameter. With $B_t$ a \emph{signed} scalar, the unknowns are the two fast-wave
+strengths and the tangential field at the contact, and the contact conditions are
+$\jump{v_x}=\jump{v_t}=\jump{\Ptot}=0$: three equations in three unknowns. This is the
+formulation of the planar solver below. Coplanar Riemann problems are also where the
+non-uniqueness of \cref{ch:nonunique} lives.
+
+\section{The exact solution of Giacomazzo and Rezzolla}\label{sec:gr06}
+
+\textcite{GiacomazzoRezzolla2006} gave the first exact solution of the general problem.
+Its ingredients are:
+\begin{itemize}[nosep]
+\item \emph{the $p$-method} for the fast waves and the Alfvén discontinuities: the total
+  pressure behind the fast wave is the unknown; the post-shock state follows from the jump
+  conditions and the shock speed from \eqref{eq:magtaub}; a fast rarefaction is integrated
+  in $\Ptot$; across the Alfvén discontinuity $\rho$ and $\Ptot$ are continuous and the
+  remaining five jump conditions are solved by Newton's method at $V_s=\lambda_A$;
+\item \emph{the $B_t$-method} for the slow waves: the tangential field between the slow
+  waves is the unknown; across a slow shock the post-shock state follows from the jump
+  conditions with $(B^y,B^z)$ prescribed, the pressure from the invariance of $hB_n$
+  \eqref{eq:invhB}, and the speed again from \eqref{eq:magtaub}; a slow rarefaction is
+  integrated in $|B_t|$ (or in $\psi$ when the field rotates);
+\item \emph{a $4\times4$ Newton--Raphson iteration} on the unknowns $(\Ptot_L,B^y_c,B^z_c,
+  \Ptot_R)$---the total pressures behind the two fast waves and the tangential field at the
+  contact---with the residuals $\jump{v_x},\jump{v_y},\jump{v_z},\jump{\Ptot}$ at the
+  contact. Continuity of $B^y,B^z$ is built in by the $B_t$-method. Using the total pressure
+  as the unknown in all three pairs of regions instead would give three unknowns but five
+  conditions at the contact; GR06 found that round-off alone then prevents the five
+  conditions from being satisfied simultaneously.
+\end{itemize}
+They report that the residuals change very rapidly near the root, so the iteration
+converges only from a sufficiently close initial guess; they take it from an HLLE solution
+on about 800 cells. Their test suite---Komissarov's shock tubes, Balsara's five tests
+(\cref{tab:balsara}) and a generic Alfvén test---is solved to residuals of about
+$10^{-10}$. Two exceptions are instructive: Balsara's test~1 develops a compound wave in
+numerical solutions, which the method excludes by construction (\cref{ch:nonunique}); and in
+test~5 the left Alfvén and slow waves are so close that the Alfvén jump is resolved less
+accurately and the field rotates inside the slow rarefaction.
+
+\begin{example}[Balsara's test~2]\label{ex:balsara2}
+\Cref{tab:balsara2} reproduces the exact solution of Balsara's test~2 given by
+\textcite[Table~8]{GiacomazzoRezzolla2006}. Both initial states have $v_y=v_z$ (zero) and
+$B^y=B^z$, so the data are coplanar in the plane spanned by $\hat{\bm x}$ and
+$(\hat{\bm y}+\hat{\bm z})/\sqrt2$; accordingly $R_2=R_3$ and $R_6=R_7$: the Alfvén waves are
+silent and the fan has five waves. The left fast and slow waves are rarefactions, the right
+slow and fast waves are shocks, and across the contact only $\rho$ jumps. The built-in initial
+guess for this case in \file{rmhd/initial_data.py} (case~9),
+$(\Ptot_{\rm LF},B^y_c,B^z_c,\Ptot_{\rm RF})=(23.214,\,3.2052,\,3.2052,\,20.721)$, agrees with
+the table to the digits printed.
+\end{example}
+
+\begin{table}[t]
+\centering\small
+\begin{tabular}{@{}lrrrrrrr@{}}
+\toprule
+ & $\rho$ & $\Ptot$ & $v_x$ & $v_y$ & $v_z$ & $B^y$ & $B^z$\\
+\midrule
+$R_1=L$ & 1.000 & 78.50 & 0.0000 & 0.0000 & 0.0000 & 6.000 & 6.000\\
+$R_2$ & 0.4300 & 23.21 & 0.6344 & $-0.09981$ & $-0.09981$ & 3.045 & 3.045\\
+$R_3$ & 0.4300 & 23.21 & 0.6344 & $-0.09981$ & $-0.09981$ & 3.045 & 3.045\\
+$R_4$ & 0.3830 & 22.84 & 0.6770 & $-0.05566$ & $-0.05566$ & 3.205 & 3.205\\
+$R_5$ & 2.828 & 22.84 & 0.6770 & $-0.05566$ & $-0.05566$ & 3.205 & 3.205\\
+$R_6$ & 1.582 & 20.72 & 0.4688 & $-0.2538$ & $-0.2538$ & 3.971 & 3.971\\
+$R_7$ & 1.582 & 20.72 & 0.4688 & $-0.2538$ & $-0.2538$ & 3.971 & 3.971\\
+$R_8=R$ & 1.000 & 13.99 & 0.0000 & 0.0000 & 0.0000 & 0.7000 & 0.7000\\
+\bottomrule
+\end{tabular}
+\caption{Exact solution of Balsara's test~2 ($B^x=5$, $\Gamma=5/3$), from
+\textcite[Table~8]{GiacomazzoRezzolla2006}; $\Ptot$ is the total pressure.}
+\label{tab:balsara2}
+\end{table}
+
+\section{An exact solver used as a flux function}\label{sec:student-impl}
+
+The reference implementation (\file{rmhd_final}) ports the method above to Python, batches
+it over many interfaces, and uses it as the flux of a two-dimensional constrained-transport
+code (\file{HLLD}). What follows is a summary of its own documentation (the guide, Parts
+1, 3 and 4; the solver record, \S\S1--3, 5--5a); the numbers quoted are measurements
+recorded there, mostly on a $64^2$ relativistic rotor.
+
+\paragraph{State and frame.} Every face is rotated so that its normal is $x$; a state is the
+vector $(\rho,\Ptot,v_x,v_y,v_z,B^y,B^z)$, with $B_n=B^x$ held separately. Faces are first
+classified (\cref{sec:degeneracies}).
+
+\paragraph{Seven-wave Newton.} The production formulation has six unknowns and six residuals,
+\begin{align}
+\bm u_6&=\bigl[\ln\Ptot_{\rm LF},\ \ln|B_{t,\rm CD}|,\ \psi_{\rm CD},\ \ln\Ptot_{\rm RF},\
+\varphi_L,\ \varphi_R\bigr],\\
+\bm f_6&=\bigl[\jump{v_x},\ \jump{v_y},\ \jump{v_z},\ \jump{\Ptot},\ s_L,\ s_R\bigr],
+\end{align}
+where $\Ptot_{\rm LF},\Ptot_{\rm RF}$ are the total pressures behind the fast waves,
+$(|B_{t,\rm CD}|,\psi_{\rm CD})$ the tangential field at the contact, and
+$\varphi_{L,R}$ the rotation angles of the Alfvén waves. Each slow wave is told both
+components of the contact field but has one free parameter; the \emph{slacks}
+$s_{L,R}$ measure how far it misses. The Jacobian is a finite difference whose six probes
+are stacked into the batch; the step comes from a singular value decomposition with small
+singular values truncated, followed by a line search. Converged lanes are frozen, and every
+lane's arithmetic is bit-for-bit what it would be alone (batch independence).
+
+\paragraph{Seeds.} Because the basin of convergence is narrow, as GR06 already found, the
+Newton is seeded by a small neural network that predicts $\bm u_6$ from the two states,
+written in a canonical form that removes the symmetries of the problem. Failed lanes are
+retried from other networks' seeds and from jittered seeds. The recorded experience is that
+convergence is threshold-shaped in the quality of the seed and that more \emph{diverse}
+starts help where better single seeds do not (the guide, \S1.9).
+
+\paragraph{The five-wave planar solver.} On a 2D flow every face is coplanar to about
+$10^{-10}$ (median of the cross product of the normalised tangential fields, $7.6\times10^{-11}$
+on the rotor). There the seven-wave formulation is ill-posed in the directions it does not
+need: $\psi_{\rm CD}$ is fixed by geometry, the slow waves are over-determined, and the
+Alfvén and slow speeds nearly coincide. The planar solver (\file{rmhd/batched/planar5_b.py})
+rotates the frame so that the left tangential field points along $+y$ and solves
+\begin{equation}
+\bm u_3=[\ln\Ptot_{\rm LF},\ B_{t,\rm CD},\ \ln\Ptot_{\rm RF}],\qquad
+\bm f_3=[\jump{v_x},\ \jump{v_t},\ \jump{\Ptot}],
+\end{equation}
+with $B_{t,\rm CD}$ signed, so that a field reversal through the contact is a sign change
+and a reversal at an Alfvén speed is a discrete branch (\code{flip}). Only a small part of
+the natural box of unknowns is constructible (about 6--8\%), so the Jacobian falls back to
+backward differences where a forward probe leaves the feasible set.
+
+\paragraph{The four-unknown planar solver.} Where the field is nearly normal to the face and
+the Alfvén speed exceeds the sound speed, the fast waves carry the tangential field and the
+slow waves carry the pressure, so steering a slow wave by $B_t$ fails (\cref{ch:rarefactions}).
+The four-unknown solver (\file{rmhd/batched/planar4_b.py}) gives each wave its own strength,
+\begin{equation}
+\bm u_4=[\ln\Ptot_{\rm LF},\ s_L,\ s_R,\ \ln\Ptot_{\rm RF}],\qquad
+\bm f_4=\bigl[\jump{v_x},\ \jump{v_t},\ \jump{B_t}/\sqrt{2\Ptot},\ \jump{\Ptot}/\Ptot\bigr],
+\end{equation}
+where $s$ is the signed tangential field (kind B) or $\ln\Ptot$ (kind P) behind the slow
+wave, chosen per wave from the tangent of the slow family. It starts from slow waves of zero
+strength and carries its own certificate: every shock satisfies the full RH conditions to
+$10^{-8}$, every fan is an integral of the fan ODE, the contact closes to $10^{-8}$, the
+input is planar and the fan is ordered.
+
+\paragraph{What ``exact'' means.} An answer is accepted as exact if and only if the state
+behind it satisfies the full seven-wave jump conditions to $10^{-8}$, verified per
+interface, \emph{and} the fan is admissible: its waves are ordered in space. Two lessons are
+recorded with this definition. First, a zero residual is not a solution: the jump
+conditions do not order the waves, and a fan whose Alfvén wave lies on the wrong side of its
+slow wave can have a perfect residual, hence the wave-order gate. Second, a residual is not
+a state tolerance: the conversion factor is the condition number of the formulation, so a
+residual of $10^{-8}$ pins the state to about $10^{-7}$ in the planar form but, on about 2\%
+of coplanar faces, only to about $10^{-4}$ in the seven-wave form, whose Jacobian has a
+condition number of order $10^4$ on those faces against about $30$ elsewhere. Re-solving
+accepted faces at a tolerance of $10^{-12}$ moved the flux by a
+median of $10^{-12}$--$10^{-11}$ and at most $9.4\times10^{-7}$ (solver record, \S5b).
+
+\paragraph{The flux pipeline.} A sweep computes the HLLD flux on every face first, then
+overwrites the faces the exact solver earns (the guide, Part~4):
+\begin{enumerate}[nosep]
+\item \emph{gates}: superluminal or non-positive states keep HLLD; faces whose relative jump
+  is below $10^{-2}$ are not attempted and take a linearised flux, which agrees with the
+  exact flux to second order in the jump (\cref{sec:roe}); faces whose whole fan lies on one
+  side keep the HLLD flux, which is then the exact upwind flux;
+\item \emph{canonical orientation}: each face is replaced by the canonical member of its
+  symmetry orbit (reflection, signed exchanges of the tangential axes, $\BB\to-\BB$, with
+  $B_n\ge0$), solved, and mapped back;
+\item \emph{seven-wave Newton} from the network seeds, up to three rounds of 40
+  iterations; an answer is accepted if it converged, the state on the ray is resolved and
+  physical, and the fan is ordered;
+\item \emph{rescues} on the faces it lost: the five-wave planar solver with extra starts,
+  then the four-unknown solver (both only on faces planar to $10^{-6}$);
+\item \emph{fallback}: a face every rung lost takes the HLLD flux (or the linearised flux if
+  its jump is small);
+\item the flux is the flux of the state at $\xi=0$.
+\end{enumerate}
+
+\begin{table}[t]
+\centering\small
+\begin{tabular}{@{}lr@{}}
+\toprule
+what happens to a face (all $8.0\times10^6$ face evaluations) & share\\
+\midrule
+below the weak-jump gate (linearised flux) & 85.9\%\\
+fan entirely on one side (upwind) & 2.0\%\\
+attempted by the exact solver & 12.1\%\\
+\midrule
+of the attempted: seven-wave Newton & 43.8\%\\
+\phantom{of the attempted: }five-wave planar rescue & 50.5\%\\
+\phantom{of the attempted: }four-unknown planar solver & 2.3\%\\
+\phantom{of the attempted: }degenerate class & 1.1\%\\
+\phantom{of the attempted: }HLLD fallback & 2.28\%\\
+\phantom{of the attempted: }\textbf{solved exactly} & \textbf{97.72\%}\\
+\bottomrule
+\end{tabular}
+\caption{Provenance of the fluxes in a complete $64^2$ relativistic-rotor run with the
+production defaults (solver record, \S5a, ``Every face of one run'').}
+\label{tab:provenance}
+\end{table}
+
+\Cref{tab:provenance} shows where the fluxes of one complete run came from. Two things
+stand out. Half of the attempted faces are answered by the planar rescue, which reflects
+the coplanarity of 2D flows. And a few per cent are not answered at all; why is the subject
+of the next chapter.
+
+\section*{Exercises}
+\addcontentsline{toc}{section}{Exercises}
+
+\begin{exercise}
+Verify that the effective enthalpy and internal energy of \eqref{eq:romeroeos} are
+consistent, $\hat h=1+\hat\epsilon+\hat p/\rho$, and derive $\hat c_s$.
+\end{exercise}
+\begin{solution}
+$1+\epsilon+\tfrac12\hat B^2\rho+p/\rho+\tfrac12\hat B^2\rho=h+\hat B^2\rho=h+b^2/\rho$.
+Along an adiabat of the effective EOS $\hat B$ is constant, so
+$\partial\hat p/\partial\rho=hc_s^2+\hat B^2\rho$ and $\hat c_s^2=(hc_s^2+\hat B^2\rho)/\hat h$.
+\end{solution}
+
+\begin{exercise}
+Count unknowns and conditions in GR06's method and in the six-unknown formulation. Explain
+why each slow wave needs a ``slack'' in the latter but not in the former.
+\end{exercise}
+
+\begin{exercise}
+Let $L$ and $R$ be coplanar, with $v_z=B^z=0$ in both. Show that the reflection $z\to-z$
+maps the Riemann problem to itself, and conclude that if the solution is unique it has
+$v_z=B^z=0$ everywhere. Which components of $\bm u_6$ are then fixed, and to which values?
+\end{exercise}
+\begin{solution}
+Under $z\to-z$, $v_z\to-v_z$ and $B^z\to-B^z$ while the data are unchanged; a unique
+solution must be invariant, so $v_z=B^z=0$. Then $\psi_{\rm CD}\in\{0,\pi\}$ and
+$\varphi_L,\varphi_R\in\{0,\pi\}$: three of the six unknowns are discrete, and the
+remaining continuous problem is the three-unknown planar one.
+\end{solution}
+
+\begin{exercise}[Programming]
+Implement the three-wave solver for $B^x=0$, $\vv\cdot\BB=0$ by reusing your hydrodynamic
+solver with the effective EOS \eqref{eq:romeroeos}, and compare with the $p$-method applied
+directly to the magnetised states.
+\end{exercise}
+
+
+% ======================================================================== chapter 8
+\chapter{Non-regular solutions and non-uniqueness}\label{ch:nonunique}
+
+The construction of \cref{ch:srmhd} assumes that the solution consists of
+\emph{regular} waves: Lax shocks of the fast and slow families, rarefactions, rotational
+discontinuities and a contact. Following \textcite{Torrilhon2003jcp} we call such a
+solution an \emph{r-solution}, and a solution that contains any other wave (a compound wave
+or an intermediate shock) a \emph{c-solution}. Because MHD is neither strictly hyperbolic
+nor convex (\cref{sec:degeneracies}), c-solutions are not exotic.
+
+\section{Non-convexity and compound waves}
+
+Where $\nabla_{\UU}\lambda_k\cdot\bm r_k$ changes sign along a wave curve, the classical
+construction breaks down: a single shock or a single rarefaction cannot connect the two
+states admissibly. The admissible structure can then be a \emph{compound wave}, a shock
+with a rarefaction of the same family attached to it, the shock moving at the characteristic
+speed of the state it is attached to. \textcite{BrioWu1988} found that the MHD equations are
+not convex and observed such a slow compound wave in the numerical solution of their
+coplanar shock-tube problem, which is now a standard test. Balsara's test~1
+(\cref{tab:balsara}) is its relativistic version; \textcite{GiacomazzoRezzolla2006} report
+that its numerical solution develops a left-going slow compound wave (a slow shock adjacent
+to a slow rarefaction), which their exact solver excludes by construction. In the coplanar
+geometry a compound wave reverses the tangential field through zero while compressing the
+gas, which in Newtonian MHD no regular wave can do: a slow shock at most switches the field
+off, and a reversal at the Alfvén speed is not compressive. For SRMHD, \textcite{Ibanez2015}
+showed that the convexity of the magnetosonic fields depends on the magnetic field through a
+generalised fundamental derivative.
+
+\section{Coplanar non-uniqueness}
+
+\textcite{Barmin1996} showed that shock-capturing schemes applied to coplanar MHD data
+produce a non-evolutionary slow compound wave, and that a small out-of-plane perturbation
+of the field makes a rotational discontinuity split off, after which the compound wave
+turns into an evolutionary slow shock. \textcite{Torrilhon2003jpp,Torrilhon2003jcp} made
+this precise for Newtonian MHD with an exact solver that includes intermediate waves:
+\begin{itemize}[nosep]
+\item over a wide range of initial data the r-solution exists and is unique;
+\item for certain critical data, among them coplanar fields with vanishing transverse
+  velocities, a c-solution exists in addition; the critical data form a hypersurface of
+  codimension one, so arbitrarily close to them the solution is unique again;
+\item in his coplanar test (states with $\rho,p=1$ and $0.2$, $B_n=1$, tangential fields at
+  $180^\circ$) the r-solution has a single $180^\circ$ rotation and the c-solution a compound
+  wave instead, and the densities behind the contact differ by about 2\%;
+\item finite-volume schemes (Roe, HLLE, central) show \emph{pseudo-convergence}: on coarse
+  grids they converge towards the c-solution, and only after heavy refinement towards the
+  true one; the effect is strongest when the solution is unique but close to a non-unique
+  one, and is expected for any diffusive scheme.
+\end{itemize}
+\textcite{TakahashiYamada2013} built a solver for regular and non-regular solutions and
+found, starting from the Brio--Wu data, an initial condition with \emph{no} regular solution,
+only a non-regular one on the boundary of the regular ones, and showed that non-regular
+solutions are not unique. Their later exact solver handles all types of intermediate shocks
+and switch-on/off waves and finds all solutions of a given problem
+\parencite{TakahashiYamada2014}.
+
+\section{Selection by dissipation}
+
+If ideal MHD admits two solutions, something outside ideal MHD must select one. In
+dissipative MHD the structure of intermediate shocks depends on the dissipation; in Wu's
+simulations they form from smooth waves and their structures carry free parameters related
+to their stability \parencite{Wu1990}, and \textcite{InoueInutsuka2007} found all MHD shocks
+evolutionary once dissipation is included. A numerical scheme supplies its own
+dissipation, and therefore its own selection.
+
+\begin{keybox}{Measured: which of two exact answers a finite-volume code picks}
+The solver record (\S5) reports that Balsara's test~1 has two exact solutions in SRMHD, a
+compound wave and a single intermediate shock, $7.7\times10^{-4}$ apart in the star state.
+One-dimensional runs with HLLD and HLLE fluxes, piecewise-linear and fifth-order
+monotonicity-preserving reconstruction (also seventh order and WENO5-Z), at 1024 to 4096
+cells, all approach the intermediate-shock solution (to $9.1\times10^{-5}$ at 4096 cells),
+while the distance to the compound solution stalls near $10^{-3}$. Neither the
+reconstruction order nor the flux function changes the selection. The record's
+interpretation: the selection happens inside the discontinuity, where every scheme is first
+order and the profile is set by its dissipation, so a code that reports one of the two
+answers reports a property of its own solver.
+\end{keybox}
+
+\section{What this means for an exact solver}
+
+An exact solver built on the regular seven-wave family cannot represent compound waves or
+intermediate shocks. On data whose admissible solution is non-regular it must fail, or it
+returns a regular answer if one exists. Two further consequences matter in practice.
+\begin{itemize}[nosep]
+\item \emph{Inadmissible roots exist.} The jump conditions alone admit fans whose waves are
+  in the wrong order; the record (\S5, ``A zero residual is not a solution'') reports that
+  a residual-minimising search converged to such inadmissible roots on 11--12\% of
+  interfaces where an admissible root was known. An admissibility (wave-order) check is part
+  of the definition of a solution.
+\item \emph{Uniqueness within the regular family} is an empirical question for the
+  populations a code meets. On 7620 lanes compared by two independent routes the record
+  found no second admissible regular solution (\S5b).
+\end{itemize}
+
+\section{The failure classes of the reference implementation}\label{sec:failure-classes}
+
+The reference implementation keeps a ledger of every interface its exact solver loses.
+Three classes are documented (solver record, \S5--5a and the four-quadrant section of \S7):
+
+\begin{enumerate}
+\item \textbf{Compound waves.} Running each lost interface as a one-dimensional shock tube
+  shows a reversal of the tangential field through zero fused to a density and magnitude
+  jump---a structure outside the seven-wave family. On the $64^2$ rotor, compound
+  interfaces are 2.5\% of the attempted ones and 75.7\% of them are unsolvable (2.3\% and
+  68.1\% at $128^2$). A two-condition rule computed from the states alone,
+  \begin{equation}
+  \min(|B_{t,L}|,|B_{t,R}|)<0.3\,|B_n|\quad\text{and}\quad|\Delta\psi|>\pi/2,
+  \end{equation}
+  (the field is nearly normal to the face and its tangential part turns by more than a right
+  angle) flags 2.5\% of the attempted interfaces with 81\% precision and 79\% recall. This
+  is the regime near $B_t=0$ where the slow, Alfvén and fast speeds approach one another.
+\item \textbf{Field nearly normal to the face.} About half of what production lost on the
+  rotor (695 of 1371 failing interfaces in the ledger) is elementary according to the
+  shock-tube test. These interfaces have $|B_n|/|B_t|$ with median 4.4 (0.85 on solved
+  ones), and the Alfvén speed exceeds the sound speed. There the fast waves carry the
+  tangential field and the slow waves carry the pressure, $|B_t|$ is the wrong coordinate for
+  the slow wave, and the planar Newton's residual jumps between branches. The four-unknown
+  solver, which steers such slow waves by the pressure, certifies 135 of 200 of them; with
+  all rescue stages, the exact fraction on the ledger windows rose from 94.39\% to 97.86\%.
+\item \textbf{Slow waves riding their Alfvén waves in fast tangential flow.} In a
+  four-quadrant problem with a $45^\circ$ field (\cref{sec:tests}) 93.0\% of the attempted
+  faces were solved. The lost faces sit just inside the two quadrants moving at $0.99c$,
+  in flow with $W\approx6.4$ and magnetisation $0.045$, where the slow waves move with their
+  Alfvén waves (gap $\sim2\times10^{-4}$) and the whole inner fan is about $0.01$ wide.
+  Nothing in the solver chain closes 95\% of them; the record concludes that a formulation
+  for a slow wave travelling with its Alfvén wave is needed.
+\end{enumerate}
+
+\section*{Exercises}
+\addcontentsline{toc}{section}{Exercises}
+
+\begin{exercise}
+Explain why critical data of codimension one can make a convergent scheme look as if it
+converged to the wrong solution (pseudo-convergence), and why refining the grid eventually
+removes the effect.
+\end{exercise}
+
+\begin{exercise}
+Show that the compound-wave rule above is invariant under the symmetries used to
+canonicalise a face: rotation of the tangential plane about $x$, $\BB\to-\BB$, and the
+reflection $x\to-x$ (which exchanges $L$ and $R$ and flips the normal components).
+\end{exercise}
+\begin{solution}
+$|B_t|$ and $|B_n|$ are invariant under all three; $\Delta\psi$, the angle between the two
+tangential fields, is invariant under rotation and under $\BB\to-\BB$, and the exchange
+$L\leftrightarrow R$ only changes its sign.
+\end{solution}
+
+\begin{exercise}
+A finite-volume code converges to the intermediate-shock solution of Balsara's test~1. Should
+an exact Riemann solver used as its flux return that solution, the compound one, or none?
+Discuss in terms of consistency between the flux and the dissipation of the scheme.
+\end{exercise}
+
+
+% ======================================================================== chapter 9
+\chapter{Approximate Riemann solvers}\label{ch:approx}
+
+An approximate Riemann solver replaces the exact fan by a simpler model that still
+satisfies the integral form of the conservation law. We derive the HLL solver, then the
+two relativistic refinements that restore the contact (HLLC) and the Alfvén waves (HLLD),
+and finally describe linearised solvers.
+
+\begin{figure}[t]
+\centering
+\begin{tikzpicture}[x=0.85cm,y=0.85cm]
+  \foreach \ox/\title in {0/HLL, 6/HLLC, 12/HLLD}{
+    \draw[->] (\ox-2.6,0) -- (\ox+2.6,0);
+    \node[font=\small\bfseries] at (\ox,3.2) {\title};
+  }
+  % HLL
+  \draw[thick] (0,0) -- (-2.2,2.6) node[above,font=\scriptsize] {$S_L$};
+  \draw[thick] (0,0) -- (2.2,2.6) node[above,font=\scriptsize] {$S_R$};
+  \node[font=\scriptsize] at (0,1.6) {$\UU^{\rm hll}$};
+  \node[font=\scriptsize] at (-2.1,0.8) {$\UU_L$};
+  \node[font=\scriptsize] at (2.1,0.8) {$\UU_R$};
+  % HLLC
+  \draw[thick] (6,0) -- (3.8,2.6) node[above,font=\scriptsize] {$\lambda_L$};
+  \draw[thick] (6,0) -- (8.2,2.6) node[above,font=\scriptsize] {$\lambda_R$};
+  \draw[dotted,thick] (6,0) -- (6.5,2.6) node[above,font=\scriptsize] {$\lambda^\ast$};
+  \node[font=\scriptsize] at (5.3,1.8) {$\UU_L^\ast$};
+  \node[font=\scriptsize] at (7.0,1.8) {$\UU_R^\ast$};
+  % HLLD
+  \draw[thick] (12,0) -- (9.8,2.6) node[above,font=\scriptsize] {$\lambda_L$};
+  \draw[dashed] (12,0) -- (11.0,2.6) node[above,font=\scriptsize] {$\lambda_{aL}$};
+  \draw[dotted,thick] (12,0) -- (12.4,2.6) node[above,font=\scriptsize] {$\lambda_c$};
+  \draw[dashed] (12,0) -- (13.4,2.6) node[above,font=\scriptsize] {$\lambda_{aR}$};
+  \draw[thick] (12,0) -- (14.2,2.6) node[above,font=\scriptsize] {$\lambda_R$};
+  \node[font=\tiny] at (10.75,1.25) {$\UU_{aL}$};
+  \node[font=\tiny] at (11.75,1.95) {$\UU_{cL}$};
+  \node[font=\tiny] at (12.55,1.95) {$\UU_{cR}$};
+  \node[font=\tiny] at (13.45,1.25) {$\UU_{aR}$};
+\end{tikzpicture}
+\caption{The wave models of the HLL, HLLC and HLLD solvers. HLL keeps the two outer waves
+and one averaged state; HLLC adds the contact; HLLD adds the two Alfvén (rotational) waves,
+with a single total pressure across the whole fan. None of them models the slow waves.}
+\label{fig:hllmodels}
+\end{figure}
+
+\section{HLL}\label{sec:hll}
+
+Let $S_L\le S_R$ bound all signal speeds of the Riemann fan, i.e.\ the fan lies inside
+$S_Lt\le x\le S_Rt$. Apply the integral form \eqref{eq:integralform} to the rectangle
+$[S_LT,S_RT]\times[0,T]$: the states on its left and right edges are $\UU_L$ and $\UU_R$,
+so
+\begin{equation}
+\int_{S_LT}^{S_RT}\UU(x,T)\,\dd x=T\bigl(S_R\UU_R-S_L\UU_L+\FF_L-\FF_R\bigr).
+\end{equation}
+\textcite{HartenLaxvanLeer1983} replace the fan by a single constant state equal to this
+average,
+\begin{equation}\label{eq:Uhll}
+\UU^{\rm hll}=\frac{S_R\UU_R-S_L\UU_L+\FF_L-\FF_R}{S_R-S_L}.
+\end{equation}
+The flux on the ray $\xi=0$ follows from the integral form on $[S_LT,0]\times[0,T]$, which
+gives $\FF^{\rm hll}=\FF_L+S_L(\UU^{\rm hll}-\UU_L)$, or equivalently (using
+$[0,S_RT]$) $\FF^{\rm hll}=\FF_R+S_R(\UU^{\rm hll}-\UU_R)$. Eliminating $\UU^{\rm hll}$,
+\begin{equation}\label{eq:Fhll}
+\hat\FF=\begin{cases}
+\FF_L, & S_L\ge0,\\[2pt]
+\dfrac{S_R\FF_L-S_L\FF_R+S_LS_R(\UU_R-\UU_L)}{S_R-S_L}, & S_L<0<S_R,\\[8pt]
+\FF_R, & S_R\le0 .
+\end{cases}
+\end{equation}
+With $c_{\min}\equiv\max(0,-S_L)$ and $c_{\max}\equiv\max(0,S_R)$ the three cases merge into
+the single formula used in \file{hlld.py},
+\begin{equation}
+\hat\FF=\frac{c_{\max}\FF_L+c_{\min}\FF_R-c_{\max}c_{\min}(\UU_R-\UU_L)}{c_{\max}+c_{\min}}
+\end{equation}
+(identities checked symbolically). The HLL flux is consistent ($\hat\FF(\UU,\UU)=\FF(\UU)$),
+conservative, and robust: with suitable signal speeds \textcite{Einfeldt1988} showed it
+preserves positivity (the ``HLLE'' solver). Its weakness is equally clear: by averaging the
+fan into one state it smears every intermediate wave---contact, Alfvén and slow---over the
+numerical diffusion of the fastest waves.
+
+\paragraph{Signal speeds.} Common choices are the minimum and maximum of the outer
+characteristic speeds of the two states \parencite[as in][]{MignoneBodo2006}, from the quartic
+\eqref{eq:quartic}, or the isotropic bound \eqref{eq:lamzeta} \parencite{GammieMcKinneyToth2003},
+which by \cref{prop:fastbound} can only overestimate them. The code uses the latter.
+
+\section{HLLC for relativistic MHD}\label{sec:hllc}
+
+\textcite{MignoneBodo2006} restore the contact. The fan is modelled by two outer waves
+$\lambda_L,\lambda_R$ and a contact $\lambda^\ast$ separating two star states
+$\UU^\ast_L,\UU^\ast_R$, related by the RH conditions across each wave and constrained by
+the two consistency conditions that the star states average to $\UU^{\rm hll}$ and the star
+fluxes to $\FF^{\rm hll}$. The contact moves with the fluid, $\lambda^\ast=v_x^\ast$, and the
+total pressure and normal velocity are continuous across it.
+
+\paragraph{The case $B^x=0$.} The star states have $m_x^\ast=(E^\ast+p^\ast)v^\ast$ and
+star fluxes $F^\ast_{m_x}=m_x^\ast v^\ast+p^\ast$, $F^\ast_E=m_x^\ast$, with common
+$p^\ast,v^\ast$ ($p$ is the total pressure here). Hence on both sides
+\begin{equation}
+F^\ast_{m_x}-v^\ast F^\ast_E=p^\ast,\qquad m_x^\ast-v^\ast E^\ast=p^\ast v^\ast .
+\end{equation}
+Both relations are linear in the star quantities. The consistency conditions express
+$\UU^{\rm hll}$ and $\FF^{\rm hll}$ as averages of the two star values with weights that sum to
+one, so the relations hold for the HLL averages too:
+$p^\ast=F^{\rm hll}_{m_x}-v^\ast F^{\rm hll}_E$ and $m_x^{\rm hll}=(E^{\rm hll}+p^\ast)v^\ast$.
+Eliminating $p^\ast$:
+\begin{equation}\label{eq:hllc-quad}
+F^{\rm hll}_E\,(v^\ast)^2-\bigl(E^{\rm hll}+F^{\rm hll}_{m_x}\bigr)v^\ast+m_x^{\rm hll}=0,
+\end{equation}
+the root with the minus sign being the physical one \parencite[eq.~47]{MignoneBodo2006}.
+
+\paragraph{The case $B^x\ne0$.} Now $\vv$, $\BB$ and the total pressure are continuous at the
+contact. The tangential components of the consistency conditions give
+\begin{equation}
+\BB_t^\ast=\BB_t^{\rm hll},\qquad B^xv_t^\ast=B_t^\ast v_x^\ast-F^{\rm hll}_{B_t},
+\end{equation}
+and the normal-momentum and energy components give \parencite[eqs.~39--40]{MignoneBodo2006}
+\begin{align}
+&E^{\rm hll}v_x^\ast+p^\ast v_x^\ast-B^x(\vv^\ast\cdot\BB^\ast)=m_x^{\rm hll},\\
+&\bigl[F^{\rm hll}_E-B^x(\vv^\ast\cdot\BB^\ast)\bigr]v_x^\ast-\Bigl(\frac{B^x}{\gamma^\ast}\Bigr)^2
++p^\ast-F^{\rm hll}_{m_x}=0, \label{eq:hllc-p}
+\end{align}
+with $\gamma^\ast$ the star Lorentz factor. Multiplying the second by $v_x^\ast$ and
+subtracting the first gives a quadratic $a(v_x^\ast)^2+bv_x^\ast+c=0$ with
+\begin{equation}
+a=F^{\rm hll}_E-\BB^{\rm hll}_\perp\cdot\FF^{\rm hll}_{B_\perp},\quad
+b=-F^{\rm hll}_{m_x}-E^{\rm hll}+|\BB^{\rm hll}_\perp|^2+|\FF^{\rm hll}_{B_\perp}|^2,\quad
+c=m_x^{\rm hll}-\BB^{\rm hll}_\perp\cdot\FF^{\rm hll}_{B_\perp},
+\end{equation}
+again taking the minus root; $v_t^\ast$ and $p^\ast$ follow, and the conserved star states
+from the RH conditions across the outer waves. Two remarks of \textcite{MignoneBodo2006}
+deserve emphasis: the formulas for $B^x\ne0$ do not reduce continuously to those for $B^x=0$,
+because the contact becomes a tangential discontinuity; and the transverse velocities are
+ill-defined as $B^x\to0$, with a possible $O(1/B^x)$ term in the transverse momenta that
+vanishes for strictly two-dimensional flows ($B^z=v^z=0$) but not in general.
+
+\section{HLLD for relativistic MHD}\label{sec:hlld}
+
+\textcite{MignoneUglianoBodo2009} extend the multi-state approach of
+\textcite{MiyoshiKusano2005} to SRMHD. The model fan has five waves---fast $\lambda_L$,
+Alfvén $\lambda_{aL}$, contact $\lambda_c$, Alfvén $\lambda_{aR}$, fast $\lambda_R$---and
+four intermediate states $\UU_{aL},\UU_{cL},\UU_{cR},\UU_{aR}$; slow waves are not modelled,
+so the total pressure $p$ is the same everywhere in the fan. The single unknown is $p$.
+
+\paragraph{Across the fast waves.} With $\bm R\equiv\lambda\UU-\FF$ evaluated on the outer
+state (known; $\lambda=\lambda_L$ or $\lambda_R$), the jump conditions for the state behind
+the fast wave read \parencite[eqs.~17--20]{MignoneUglianoBodo2009}
+\begin{align}
+(\lambda-v^x)D&=R_D,\\
+(\lambda-v^x)wW^2v^k+b^k(b^x-\lambda b^0)-p\,\delta_{kx}&=R_{m_k},\\
+(\lambda-v^x)wW^2-\lambda p+b^0(b^x-\lambda b^0)&=R_E,\\
+(\lambda-v^x)B^k+B^xv^k&=R_{B^k},
+\end{align}
+with $w$ the total enthalpy and $p$ the total pressure. The last gives
+$B^k=(R_{B^k}-B^xv^k)/(\lambda-v^x)$, and combining momentum and energy gives the velocity as
+an explicit function of $p$ (their eqs.~23--30; the auxiliary quantities $\tilde A,\dots,\tilde X$
+are unrelated to those of \cref{ch:characteristics}):
+\begin{align}
+v^x&=\frac{B^x(\tilde AB^x+\lambda\tilde C)-(\tilde A+\tilde G)(p+R_{m_x})}{\tilde X},\qquad
+v^{t}=\frac{\tilde QR_{m_t}+R_{B^t}\bigl[\tilde C+B^x(\lambda R_{m_x}-R_E)\bigr]}{\tilde X},\\
+\tilde A&=R_{m_x}-\lambda R_E+p(1-\lambda^2),\quad \tilde G=|\bm R_{B_t}|^2,\quad
+\tilde C=\bm R_{m_t}\cdot\bm R_{B_t},\\
+\tilde Q&=-\tilde A-\tilde G+(B^x)^2(1-\lambda^2),\quad
+\tilde X=B^x(\tilde A\lambda B^x+\tilde C)-(\tilde A+\tilde G)(\lambda p+R_E),
+\end{align}
+and the total enthalpy is $w=p+(R_E-\vv\cdot\bm R_m)/(\lambda-v^x)$ (their eq.~31).
+
+\paragraph{Across the Alfvén waves.} The invariant of \cref{sec:rotational} is the key:
+$\bm K\equiv\bm\sigma/\sigma^0$, with $\sigma^\mu=\eta u^\mu+b^\mu$ and
+$\eta=\pm\sgn(B^x)\sqrt w$ ($+$ on the right, $-$ on the left), is continuous across the
+Alfvén wave, and $K^x=\lambda_a$. Expressed through $p$ and the outer state
+\parencite[eq.~43]{MignoneUglianoBodo2009},
+\begin{equation}
+K^k=\frac{R_{m_k}+p\,\delta_{kx}+R_{B^k}\,\eta}{\lambda p+R_E+B^x\eta}.
+\end{equation}
+
+\paragraph{At the contact.} $\BB$ is continuous; the consistency condition between the two
+Alfvén waves gives
+\begin{equation}
+\BB_c=\frac{\bigl[\BB(\lambda_a-v^x)+B^x\vv\bigr]_{aR}-\bigl[\BB(\lambda_a-v^x)+B^x\vv\bigr]_{aL}}
+{\lambda_{aR}-\lambda_{aL}},
+\end{equation}
+and inverting the definition of $\bm K$ on each side gives the velocity at the contact,
+$\vv_c=\bm K-\BB_c\,(1-K^2)/(\eta-\bm K\cdot\BB_c)$ (their eq.~47). Continuity of the
+normal velocity is the equation for $p$:
+\begin{equation}\label{eq:hlld-f}
+\boxed{\;f(p)\equiv v^x_{cR}(p)-v^x_{cL}(p)
+=\Delta K^x-B^x\Bigl[\frac{1-K_R^2}{\eta_R-\bm K_R\cdot\BB_c}-\frac{1-K_L^2}{\eta_L-\bm K_L\cdot\BB_c}\Bigr]=0,\;}
+\end{equation}
+with $\Delta K^x=K^x_R-K^x_L$. Multiplying out, this is eq.~(48) of
+\textcite{MignoneUglianoBodo2009}, $\Delta K^x[1-B^x(Y_R-Y_L)]=0$ with
+$Y_S=(1-K_S^2)/(\eta_S\Delta K^x-\bm K_S\cdot\Delta K^x\BB_c)$.
+
+\paragraph{Solution and safeguards.} MUB09 solve \eqref{eq:hlld-f} by the secant method from
+the HLL total pressure, or from the solution of the $B^x=0$ limit when
+$(B^x)^2/p^{\rm hll}<0.1$. They warn that \eqref{eq:hlld-f} may have several roots and impose
+$w_L>p$, $w_R>p$ and the ordering $v^x_{aL}>\lambda_L$, $v^x_{cL}>\lambda_{aL}$,
+$v^x_{aR}<\lambda_R$, $v^x_{cR}<\lambda_{aR}$; where these fail, they switch to HLL, which in
+their tests happened in usually less than 0.1\% of the zones. In the limit $B^x\to0$ the
+equation for $p$ becomes a quadratic and the same algorithm applies.
+
+\begin{codebox}[: HLLD]
+\file{HLLD/src/physics/hlld.py} follows MUB09: \code{HLLDComputation} evaluates the
+quantities above for a trial $p$ and returns $-f(p)$, i.e.\ the same equation with the
+opposite sign. The start is MUB09's rule (from the total pressure of the HLL state, or from
+the $B_x=0$ limit), the two starting points are moved apart until $f$ changes sign (at most
+five times), and a clamped secant iterates until $|f(p)|<10^{-10}$ (about 3.5 iterations
+according to the guide, \S2.3; Newton variants were measured to be slower and less reliable
+because the residual has several roots, and a comment in the code records an interface with
+seven sign changes of $f$ on $10^{-3}\le p\le10^2$, where the starting point decides the root). Faces fall back to HLLE when the root-find fails, when the wave order is violated, or
+when $B_n=0$ on both sides; the last is a difference from MUB09, whose formulation covers
+$B^x\to0$, and it matters in 2D because a field initially along $x$ makes every $y$-sweep
+degenerate.
+\end{codebox}
+
+\section{Roe-type and linearised solvers}\label{sec:roe}
+
+A linearised solver decomposes the jump into the characteristic fields of an averaged
+state,
+\begin{equation}
+\UU_R-\UU_L=\sum_k\alpha_k\bm r_k,\qquad
+\hat\FF=\tfrac12(\FF_L+\FF_R)-\tfrac12\sum_k|\lambda_k|\,\alpha_k\bm r_k ,
+\end{equation}
+which resolves every wave family, including contacts and Alfvén waves, as a discontinuity.
+It needs the full eigenstructure, which in SRMHD has no closed-form Roe average, and the
+eigenvectors must be renormalised at degeneracies (\cref{sec:degeneracies}).
+\textcite{Komissarov1999} built a Godunov-type scheme for RMHD on linear Riemann solvers;
+\textcite{Balsara2001} a total-variation-diminishing scheme; and \textcite{Anton2010} a
+full-wave-decomposition solver based on their renormalised eigenvectors, which they found
+less diffusive than HLL and HLLC and comparable in accuracy to HLLD, but more expensive in one
+dimension, with the relative cost improving in multidimensional runs.
+
+\begin{codebox}[: the linearised flux below the weak-jump gate]
+\file{HLLD/src/physics/linearised.py} uses a linearisation for faces whose relative jump is
+below $10^{-2}$: the Jacobian $(\partial\UU/\partial\VV)^{-1}\partial\FF/\partial\VV$ at the
+arithmetic mean state (central differences), its eigen-decomposition, and the state on the
+ray $\xi=0$, $\VV^\ast=\VV_L+\sum_{\lambda_k<0}\alpha_k\bm r_k$; the flux is $\FF(\VV^\ast)$.
+For a weak jump this agrees with the exact solution to second order in the jump, whereas
+HLLD's error is first order there. It is never counted as exact.
+\end{codebox}
+
+\section{Trade-offs}
+
+\textcite{MattiaMignone2022} compared five solvers that avoid the full eigenstructure (HLL,
+HLLC, HLLD, HLLEM and GFORCE) on standard one- and multidimensional tests. For weak to
+moderate magnetisation HLLD was the most accurate, followed by HLLC; GFORCE was less
+dissipative than HLL and equally robust at strong magnetisation, and HLLEM did not justify its
+cost. MUB09 found that HLL needed up to about twice the resolution of HLLD to match its results
+in their multidimensional tests. The exact solver is the end point of this sequence. In the
+reference implementation's $64^2$ rotor runs, $L_1(\rho)$ against a $512^2$ HLLD reference at
+$t=0.4$ is $0.2881$ with HLLD and $0.2874$ with the exact flux on the attempted faces
+(solver record, \S5a), and changing the reconstruction from piecewise-linear to fifth order
+moved the rotor some 24 times more than switching on the exact flux (\S7). On the magnetised
+four-quadrant problem at $64^2$, by contrast, the exact flux reduced $L_1(\rho)$ against the
+$512^2$ reference at $t=0.4$ from $0.1100$ (HLLD) to $0.1019$, about 7\% of the gap. Which solver is ``best'' is therefore problem- and
+resolution-dependent; what the exact solver provides unambiguously is a reference.
+
+\section*{Exercises}
+\addcontentsline{toc}{section}{Exercises}
+
+\begin{exercise}
+Derive \eqref{eq:Fhll} and show that $\hat\FF$ is continuous when $S_L$ or $S_R$ passes
+through zero.
+\end{exercise}
+
+\begin{exercise}
+Show that, for an isolated stationary contact ($\vv_L=\vv_R=0$, $p_L=p_R$, $\BB=0$,
+$\rho_L\ne\rho_R$), the HLL flux has a nonzero mass component while the HLLC flux vanishes.
+\end{exercise}
+\begin{solution}
+$F_D=0$ on both sides but $\UU_R-\UU_L\ne0$, so the HLL mass flux is
+$-S_LS_R(D_R-D_L)/(S_R-S_L)\neq0$. In HLLC, $v^\ast=0$ (the quadratic has $c=m_x^{\rm hll}=0$
+and the minus root vanishes), so the star states carry no mass flux.
+\end{solution}
+
+\begin{exercise}
+Derive \eqref{eq:hllc-quad} from the two consistency conditions, filling in the steps above.
+\end{exercise}
+
+\begin{exercise}
+Show that \eqref{eq:hlld-f} and MUB09's form $\Delta K^x[1-B^x(Y_R-Y_L)]=0$ are the same
+equation, and check that the code's residual is $-f(p)$.
+\end{exercise}
+
+
+% ======================================================================== chapter 10
+\chapter{Riemann solvers in multidimensional codes}\label{ch:multid}
+
+\section{The finite-volume update}
+
+In two dimensions the semi-discrete finite-volume scheme for cell averages $\UU_{ij}$ is
+\begin{equation}\label{eq:fv2d}
+\frac{\dd\UU_{ij}}{\dd t}=-\frac{\hat\FF_{i+1/2,j}-\hat\FF_{i-1/2,j}}{\Delta x}
+-\frac{\hat{\bm G}_{i,j+1/2}-\hat{\bm G}_{i,j-1/2}}{\Delta y}\equiv\mathcal L(\UU)_{ij},
+\end{equation}
+where each face flux is obtained from a one-dimensional Riemann problem in the direction
+normal to the face, with the left and right states reconstructed at the face. For a
+$y$-face the components are permuted so that $y$ plays the role of $x$; the normal field
+$B^y$ is then the constant parameter of that Riemann problem. The scheme is \emph{unsplit}
+when both flux differences are evaluated from the same state, as in \eqref{eq:fv2d}.
+
+\begin{codebox}[: sweeps]
+In \file{HLLD/src/physics/} a sweep computes all face fluxes in one direction
+(\file{sweep.py}). The flux functions take the direction as a parameter and cycle the
+tangential components, $t_1=(\code{idir}+1)\bmod3$, $t_2=(\code{idir}+2)\bmod3$; the exact
+solver works in its own frame, into which \code{to_solver_frame} rotates every face.
+\end{codebox}
+
+\section{Reconstruction}
+
+Godunov's scheme is first order because the data are piecewise constant. Second order in
+smooth regions is obtained by piecewise-linear reconstruction with a limited slope. With the
+monotonised-central (MC) limiter of \textcite{vanLeer1977},
+\begin{gather}
+\Delta_i=\operatorname{minmod}\Bigl(2(q_i-q_{i-1}),\ \tfrac12(q_{i+1}-q_{i-1}),\ 2(q_{i+1}-q_i)\Bigr),\\
+q^L_{i+1/2}=q_i+\tfrac12\Delta_i,\qquad q^R_{i-1/2}=q_i-\tfrac12\Delta_i,
+\end{gather}
+where $\operatorname{minmod}$ returns the argument of smallest modulus if all have the same
+sign and zero otherwise. Higher orders use weighted essentially non-oscillatory (WENO)
+reconstruction, which combines three third-order candidate stencils with nonlinear weights
+based on smoothness indicators \parencite{JiangShu1996}; the WENO-Z variant modifies the
+weights with a global smoothness indicator to reduce dissipation near critical points
+\parencite{Borges2008}. Reconstruction acts on primitive variables. In relativity it is
+safer to reconstruct the spatial four-velocity $W\vv$ than $\vv$, since any reconstructed
+$W\vv$ gives a subluminal velocity.
+
+\begin{codebox}[: reconstruction]
+\file{reconstruction.py} offers \code{pcm}, \code{minmod}, \code{mc} (production), \code{weno5z},
+\code{mp5} and \code{mp7}; it reconstructs $W\vv$, and a face whose reconstructed state
+violates the density or pressure floor falls back to piecewise-constant data (the guide,
+\S2.2).
+\end{codebox}
+
+\section{Time integration}
+
+The method of lines integrates $\dd\UU/\dd t=\mathcal L(\UU)$ with a strong-stability-preserving
+Runge--Kutta scheme; the third-order scheme of \textcite{ShuOsher1988} is
+\begin{align}
+\UU^{(1)}&=\UU^n+\Delta t\,\mathcal L(\UU^n),\notag\\
+\UU^{(2)}&=\tfrac34\UU^n+\tfrac14\bigl[\UU^{(1)}+\Delta t\,\mathcal L(\UU^{(1)})\bigr],\\
+\UU^{n+1}&=\tfrac13\UU^n+\tfrac23\bigl[\UU^{(2)}+\Delta t\,\mathcal L(\UU^{(2)})\bigr].\notag
+\end{align}
+Each stage needs the primitive variables of every cell (\cref{sec:c2p}), a reconstruction,
+and a Riemann solve on every face. The time step obeys a CFL condition with the largest
+signal speed; the reference code uses this scheme with Courant number $0.25$ (the guide,
+\S2.5).
+
+\section{Constrained transport}\label{sec:ct}
+
+The constraint $\nabla\cdot\BB=0$ is preserved by the continuous equations but not, in
+general, by a cell-centred finite-volume update. Constrained transport
+\parencite{EvansHawley1988} stores the normal field components on the faces,
+$B^x_{i-1/2,j}$ and $B^y_{i,j-1/2}$, and updates them by Stokes' theorem from the electric
+field $E_z=v_yB_x-v_xB_y$ (from $\EE=-\vv\times\BB$) at the cell corners:
+\begin{align}
+\partial_tB^x_{i-1/2,j}&=-\frac{E_{z,i-1/2,j+1/2}-E_{z,i-1/2,j-1/2}}{\Delta y},\\
+\partial_tB^y_{i,j-1/2}&=+\frac{E_{z,i+1/2,j-1/2}-E_{z,i-1/2,j-1/2}}{\Delta x}.
+\end{align}
+The discrete divergence of cell $(i,j)$,
+$(B^x_{i+1/2,j}-B^x_{i-1/2,j})/\Delta x+(B^y_{i,j+1/2}-B^y_{i,j-1/2})/\Delta y$, has a time
+derivative in which each of the four corner values appears twice with opposite signs, so it
+is conserved to round-off whatever the corner values are (\cref{ex:ct}).
+
+\paragraph{The Riemann solver supplies the EMF.} The induction fluxes of \eqref{eq:Fx} are
+\begin{equation}
+F^x(B^y)=v_xB^y-v_yB^x=-E_z,\qquad F^y(B^x)=v_yB^x-v_xB^y=+E_z ,
+\end{equation}
+so every face flux carries a face-centred value of $E_z$, upwinded by the Riemann solver in
+the direction normal to the face. Constrained transport needs it at the corners, where it
+must be upwinded in both directions. The arithmetic average of the four face values
+\parencite{BalsaraSpicer1999} lacks the upwinding along the face.
+\textcite{GardinerStone2005} derived corner EMFs that add corrections built from the
+cell-centred $E_z$, chosen by the sign of the mass flux through the adjacent faces, and that
+reduce to the one-dimensional solver's flux for grid-aligned flow.
+\textcite{MignoneDelZanna2021} give a systematic construction of upwind constrained-transport
+schemes from the information of the Riemann solver and compare the alternatives.
+
+\begin{codebox}[: the corner EMF]
+\file{ct.py} implements the Gardiner--Stone corner EMF. For the corner $(i-\frac12,j-\frac12)$,
+with face EMFs $E^{y}_{E},E^{y}_{W}$ on the $y$-faces to its east and west and
+$E^{x}_{N},E^{x}_{S}$ on the $x$-faces to its north and south, cell-centred values
+$E_{NE},E_{NW},E_{SE},E_{SW}$, and upwind signs $s$ of the mass flux on those faces,
+\begin{align*}
+E_z={}&\tfrac14\bigl(E^y_E+E^y_W+E^x_N+E^x_S\bigr)\\
+&+\tfrac18\Bigl[(1-s_S)(E^y_E-E_{SE})+(1+s_S)(E^y_W-E_{SW})\\
+&\qquad-(1-s_N)(E_{NE}-E^y_E)-(1+s_N)(E_{NW}-E^y_W)\Bigr]\\
+&+\tfrac18\Bigl[(1-s_W)(E^x_N-E_{NW})+(1+s_W)(E^x_S-E_{SW})\\
+&\qquad-(1-s_E)(E_{NE}-E^x_N)-(1+s_E)(E_{SE}-E^x_S)\Bigr],
+\end{align*}
+where $s_N,s_S$ are the signs on the north and south $x$-faces and $s_E,s_W$ on the east and
+west $y$-faces. Dropping the bracketed corrections (option \code{upwind=False}) gives the
+four-face average; with $s=0$ the corrections are the centred average of the two one-sided
+estimates. The code sets $s=0$ in a deadband around zero mass flux: in a static medium the
+computed mass flux is round-off with no definite sign, and taking its sign broke the discrete
+symmetry of the rotor. The measured
+$|\nabla\cdot\BB|$ stays at $\sim10^{-13}$ (the guide, \S2.4).
+\end{codebox}
+
+\section{Standard tests}\label{sec:tests}
+
+\paragraph{One-dimensional shock tubes.} \Cref{tab:balsara} lists the five Riemann problems of
+\textcite{Balsara2001}, which, with those of \textcite{Komissarov1999} (some of whose
+parameters were corrected in \textcite{Komissarov2002tests}), are the standard SRMHD shock
+tubes. \textcite{GiacomazzoRezzolla2006} give exact solutions for all five.
+
+\begin{table}[t]
+\centering\small
+\setlength{\tabcolsep}{4.5pt}
+\begin{tabular}{@{}ll rrrrrrrr r@{}}
+\toprule
+test & state & $\rho$ & $p$ & $v_x$ & $v_y$ & $v_z$ & $B_x$ & $B_y$ & $B_z$ & $t$\\
+\midrule
+1 ($\Gamma=2$) & L & 1.0 & 1.0 & 0.0 & 0.0 & 0.0 & 0.5 & 1.0 & 0.0 & 0.4\\
+              & R & 0.125 & 0.1 & 0.0 & 0.0 & 0.0 & 0.5 & $-1.0$ & 0.0 & \\
+2 & L & 1.0 & 30.0 & 0.0 & 0.0 & 0.0 & 5.0 & 6.0 & 6.0 & 0.4\\
+  & R & 1.0 & 1.0 & 0.0 & 0.0 & 0.0 & 5.0 & 0.7 & 0.7 & \\
+3 & L & 1.0 & 1000.0 & 0.0 & 0.0 & 0.0 & 10.0 & 7.0 & 7.0 & 0.4\\
+  & R & 1.0 & 0.1 & 0.0 & 0.0 & 0.0 & 10.0 & 0.7 & 0.7 & \\
+4 & L & 1.0 & 0.1 & 0.999 & 0.0 & 0.0 & 10.0 & 7.0 & 7.0 & 0.4\\
+  & R & 1.0 & 0.1 & $-0.999$ & 0.0 & 0.0 & 10.0 & $-7.0$ & $-7.0$ & \\
+5 & L & 1.08 & 0.95 & 0.4 & 0.3 & 0.2 & 2.0 & 0.3 & 0.3 & 0.55\\
+  & R & 1.0 & 1.0 & $-0.45$ & $-0.2$ & 0.2 & 2.0 & $-0.7$ & 0.5 & \\
+\bottomrule
+\end{tabular}
+\caption{The relativistic MHD Riemann problems of \textcite[Table~1]{Balsara2001} ($p$ is the
+gas pressure, $t$ the final time). Test~1 uses $\Gamma=2$; the others $\Gamma=1.6666$ (as
+printed; $5/3$ in \textcite{GiacomazzoRezzolla2006}). The original runs use a unit domain of
+1600 zones with the discontinuity at its centre. Verified against Balsara's table; the same
+values are in \textcite[Table~4]{GiacomazzoRezzolla2006} and in
+\file{rmhd/initial_data.py} (cases 8--12).}
+\label{tab:balsara}
+\end{table}
+
+\paragraph{The relativistic rotor.} \textcite{DelZanna2003} adapted the classical MHD rotor to
+SRMHD: a disk of radius $0.1$ with $\rho=10$ rotating rigidly with $\omega=9.95$ (rim speed
+$0.995$, $W_{\max}\approx10$) inside a static medium with $\rho=1$; uniform $p=1$ and
+$\BB=(1,0,0)$; $\Gamma=5/3$; output at $t=0.4$. The field winds up and brakes the rotor,
+launching fast and Alfvén waves; the central density is swept into a shell. The problem is
+invariant under a rotation by $\pi$, which gives a free measure of numerical error.
+
+\paragraph{The relativistic Orszag--Tang vortex.} The Newtonian vortex of
+\textcite{OrszagTang1979} has several relativistic versions.
+\textcite{vanderHolst2008} use the doubly periodic domain $[0,2\pi]^2$ with $\rho=1$,
+$p=10$, $\Gamma=4/3$, $\vv=(-A\sin y,\,A\sin x)$ with $A=0.99/\sqrt2$ (maximum $W\approx7$)
+and $\BB=(-\sin y,\,\sin2x)$. \textcite{BeckwithStone2011} use the unit square with
+$\rho=25/(36\pi)$, $p=5/(12\pi)$, $\Gamma=5/3$, velocity amplitude $0.5$ per component
+(printed as $V^i=[0.5\sin(2\pi y),0.5\sin(2\pi x)]$; the usual orientation has
+$v_x=-0.5\sin2\pi y$), and $A_z=(B_0/4\pi)\cos4\pi x+(B_0/2\pi)\cos2\pi y$ with
+$B_0=1/\sqrt{4\pi}$, shown at $t=1$. The reference code's problem combines the flow of the
+former (peak speed $0.99$, $\Gamma=4/3$) with the density, pressure and field of the latter,
+as its documentation states.
+
+\paragraph{Four-quadrant problems.} \textcite{DelZannaBucciantini2002} proposed a relativistic
+two-dimensional Riemann problem on a square divided into quadrants with
+$(\rho,v_x,v_y,p)=(0.1,0,0,0.01)$ (NE), $(0.1,0.99,0,1)$ (NW), $(0.5,0,0,1)$ (SW) and
+$(0.1,0,0.99,1)$ (SE), evolved to $t=0.4$; it produces two shocks and two shear layers.
+The reference implementation adds a uniform in-plane field
+$\BB=B_0(\cos45^\circ,\sin45^\circ,0)$, $B_0=0.5$, with $\Gamma=5/3$ on $[-0.5,0.5]^2$; its
+documentation records that no published magnetised version was found among the codes it
+checked.
+
+\section*{Exercises}
+\addcontentsline{toc}{section}{Exercises}
+
+\begin{exercise}\label{ex:ct}
+Show that the constrained-transport update preserves the discrete divergence of every cell
+exactly, for arbitrary corner values of $E_z$.
+\end{exercise}
+\begin{solution}
+Label the corners of cell $(i,j)$ $NE,NW,SE,SW$. The update gives
+$\partial_tB^x_{i+1/2,j}=-(E_{NE}-E_{SE})/\Delta y$, $\partial_tB^x_{i-1/2,j}=-(E_{NW}-E_{SW})/\Delta y$,
+$\partial_tB^y_{i,j+1/2}=(E_{NE}-E_{NW})/\Delta x$, $\partial_tB^y_{i,j-1/2}=(E_{SE}-E_{SW})/\Delta x$.
+Hence
+$\Delta x\Delta y\,\partial_t(\nabla\cdot\BB)_{ij}=-(E_{NE}-E_{SE})+(E_{NW}-E_{SW})
++(E_{NE}-E_{NW})-(E_{SE}-E_{SW})=0$.
+\end{solution}
+
+\begin{exercise}
+Show that $F^x(B^y)=-E_z$ and $F^y(B^x)=+E_z$ with $\EE=-\vv\times\BB$.
+\end{exercise}
+
+\begin{exercise}
+For Balsara's test~1, compute the magnetic and gas pressures and the magnetisation
+$\sigma=b^2/(\rho h)$ in both initial states, and identify the magnetically dominated side.
+\end{exercise}
+\begin{solution}
+With $\vv=0$, $b^2=B^2=1.25$ on both sides, so $b^2/2=0.625$. For $\Gamma=2$,
+$h=1+2p/\rho$: $h_L=3$, $\sigma_L=1.25/3\approx0.42$; $h_R=2.6$, $\rho_Rh_R=0.325$,
+$\sigma_R\approx3.8$. The right state is magnetically dominated (gas pressure $0.1$ against
+magnetic pressure $0.625$).
+\end{solution}
+
+\begin{exercise}
+Show that the MC slope equals the centred slope $\frac12(q_{i+1}-q_{i-1})$ where the data are
+smooth and monotone and the two one-sided slopes do not differ by more than a factor of
+three, and that it vanishes at local extrema.
+\end{exercise}
+
+
+% ======================================================================== appendices
+\appendix
+
+\chapter{Algebra of \texorpdfstring{$b^\mu$}{b} and the components of \texorpdfstring{$T^{\mu\nu}$}{T}}\label{app:bmu}
+
+With $u^\mu=W(1,\vv)$, $\vB=\vv\cdot\BB$ and $w=\rho h+b^2$:
+\begin{align*}
+&b^0=W\vB=\vv\cdot\bm b, &&b^i=\frac{B^i}{W}+W\vB\,v^i, &&b_0=-W\vB,\\
+&b^2=\frac{B^2}{W^2}+\vB^2, &&W^2b^2-(b^0)^2=B^2, &&B^i=u^0b^i-u^ib^0=W(b^i-b^0v^i),\\
+&u_\mu b^\mu=0, &&{}^\ast\!F^{\mu\nu}=u^\mu b^\nu-u^\nu b^\mu, &&\EE=-\vv\times\BB .
+\end{align*}
+Components of $T^{\mu\nu}=w\,u^\mu u^\nu+\Ptot g^{\mu\nu}-b^\mu b^\nu$:
+\begin{align*}
+T^{00}&=wW^2-\Ptot-(b^0)^2=\rho hW^2+B^2-p-\tfrac12b^2=\rho hW^2-p+\tfrac12(E^2+B^2),\\
+T^{0i}&=wW^2v^i-b^0b^i=(\rho hW^2+B^2)v^i-\vB B^i=\rho hW^2v^i+(\EE\times\BB)^i,\\
+T^{ij}&=wW^2v^iv^j+\Ptot\delta^{ij}-b^ib^j
+=(\rho hW^2+B^2)v^iv^j-\vB(B^iv^j+B^jv^i)-\frac{B^iB^j}{W^2}+\Ptot\delta^{ij}\\
+&=S^jv^i+\Ptot\delta^{ij}-\frac{B^ib^j}{W},
+\end{align*}
+with $E^2=v^2B^2-\vB^2$. In the fluid rest frame $b^\mu=(0,\BB')$, $T^{00}=e+\frac12b^2$,
+$T^{0i}=0$ and $T^{ij}=(p+\frac12b^2)\delta^{ij}-b^ib^j$. Useful combinations:
+$h_t=h+b^2/\rho$ (total specific enthalpy), $w=\rho h_t$, $c_a^2=b^2/w$,
+$\zeta^2=c_s^2+c_a^2-c_s^2c_a^2$, $\sigma=b^2/(\rho h)=c_a^2/(1-c_a^2)$. All identities in
+this appendix were checked symbolically (\cref{app:verification}).
+
+\chapter{Eigenstructure}\label{app:eigen}
+
+\section{Characteristic matrix in covariant variables}
+
+Following \textcite{Anile1989} and \textcite{Anton2010}, take the ten covariant variables
+$\tilde\UU=(u^\mu,b^\mu,p,s)$, $s$ the specific entropy. For a characteristic covector
+$\phi_\mu$, with $a=u^\mu\phi_\mu$, $\calB=b^\mu\phi_\mu$, $G=\phi^\mu\phi_\mu$ and
+$\mathcal E\equiv w$, the characteristic matrix acting on
+$(\delta u^\nu,\delta b^\nu,\delta p,\delta s)$ is
+\begin{equation}\label{eq:charmat}
+\mathcal A^\alpha\phi_\alpha=\begin{pmatrix}
+\mathcal E a\,\delta^\mu_\nu & m^\mu{}_\nu & l^\mu & 0^\mu\\
+\calB\,\delta^\mu_\nu & -a\,\delta^\mu_\nu & f^\mu & 0^\mu\\
+\rho h\,\phi_\nu & 0_\nu & a/c_s^2 & 0\\
+0_\nu & 0_\nu & 0 & a\end{pmatrix},
+\end{equation}
+with
+\begin{gather*}
+m^\mu{}_\nu=(\phi^\mu+2au^\mu)b_\nu-\calB\,\delta^\mu_\nu,\qquad
+l^\mu=\phi^\mu+\frac{(\rho h-b^2/c_s^2)\,a\,u^\mu+\calB\,b^\mu}{\rho h},\\
+f^\mu=\frac{1}{\rho h}\Bigl(\frac{a}{c_s^2}b^\mu-\calB u^\mu\Bigr).
+\end{gather*}
+Its determinant is
+\begin{equation}
+\det(\mathcal A^\alpha\phi_\alpha)=\mathcal E\,a^2\calA^2\calN_4,\qquad
+\calA=\mathcal Ea^2-\calB^2,\qquad
+\calN_4=\rho h\Bigl(\frac{1}{c_s^2}-1\Bigr)a^4-\Bigl(\rho h+\frac{b^2}{c_s^2}\Bigr)a^2G+\calB^2G .
+\end{equation}
+
+\begin{remark}[A sign in the printed matrix]
+In \textcite{Anton2010} the $(b,b)$ block is $-u^\mu\delta^\alpha_\beta$ in the general form
+(their eq.~22), i.e.\ $-a\,\delta^\mu_\nu$ after contraction with $\phi$, but $+a\,\delta^\mu_\nu$
+in the contracted form (their eq.~32); and $l^\mu$ includes the term $\calB b^\mu/(\rho h)$ in
+the text below eq.~32 but not in their eq.~26. We checked numerically, at an arbitrary
+state and several values of $\lambda$, that with $-a\,\delta^\mu_\nu$ and with the
+$\calB b^\mu/(\rho h)$ term the determinant identity above holds exactly and the eigenvectors
+below are exact null vectors; with $+a\,\delta^\mu_\nu$ neither holds (\cref{app:verification}).
+\end{remark}
+
+\section{Right eigenvectors}
+
+From \textcite[eqs.~46--50]{Anton2010}, who take them from \textcite{Anile1989}:
+\begin{align}
+\bm r_e&=(0^\alpha,0^\alpha,0,1)^{\mathsf T}, \\
+\bm r_{a,\pm}&=\bigl(a\,\varepsilon^\alpha,\ \calB\,\varepsilon^\alpha,\ 0,\ 0\bigr)^{\mathsf T},
+\qquad \varepsilon^\alpha=\varepsilon^\alpha{}_{\beta\gamma\delta}u^\beta\phi^\gamma b^\delta, \\
+\bm r_{m,\pm}&=\bigl(a\,d^\alpha,\ \calB\,d^\alpha+a\calA f^\alpha,\ a^2\calA,\ 0\bigr)^{\mathsf T},
+\end{align}
+for the entropy, Alfvén and magnetosonic ($m=$ s, f) waves, with
+\begin{equation}
+d^\alpha=\frac{c_s^2-1}{c_s^2}\Bigl(\frac{a^4}{G}(\phi^\alpha+au^\alpha)-\frac{a^2\calB}{\rho h}b^\alpha\Bigr),
+\qquad
+f^\alpha=\frac{1}{\rho h}\Bigl(\frac{a}{c_s^2}b^\alpha-\calB u^\alpha\Bigr),
+\end{equation}
+each evaluated at the corresponding root ($a=0$; $\calA=0$; $\calN_4=0$). At the Alfvén roots
+$\calB/a=\mp\sqrt{\mathcal E}$.
+
+\paragraph{Renormalisation.} The Alfvén vectors vanish at Type~I degeneracies ($a=\calB=0$)
+and at Type~II degeneracies ($\varepsilon^\alpha=0$ because $b^\alpha$ becomes a combination
+of $u^\alpha$ and $\phi^\alpha$). Dividing by $a$ and using $\calB/a=\mp\sqrt{\mathcal E}$ removes
+the first problem; writing $\varepsilon^\alpha=g_1\alpha^\alpha_1+g_2\alpha^\alpha_2$ in a
+basis that stays regular, dividing by $\sqrt{g_1^2+g_2^2}$ and setting
+$f_{1,2}=1/\sqrt2$ at the degenerate point removes the second \parencite[eqs.~52--67]{Anton2010}.
+This is the relativistic version of the procedure of \textcite{BrioWu1988}. The magnetosonic
+vectors are renormalised similarly \parencite[\S3.3.2]{Anton2010}; their expressions, the left
+eigenvectors, and the transformation to conserved variables are long and are not reproduced
+here.
+
+\chapter{Notation}\label{app:notation}
+
+\begin{center}
+\small
+\begin{tabular}{@{}ll@{}}
+\toprule
+symbol & meaning\\
+\midrule
+$\rho,\ \epsilon,\ p,\ h$ & rest-mass density, specific internal energy, gas pressure, gas specific enthalpy\\
+$\Gamma$ & adiabatic index of the ideal gas\\
+$\vv,\ W,\ u^\mu$ & three-velocity, Lorentz factor, four-velocity\\
+$\BB,\ \EE$ & laboratory magnetic and electric fields ($\sqrt{4\pi}$ absorbed)\\
+$b^\mu,\ b^2$ & comoving magnetic field four-vector and its square\\
+$\vB$ & $\vv\cdot\BB$\\
+$w,\ h_t$ & total enthalpy density $\rho h+b^2$, total specific enthalpy $w/\rho$\\
+$\Ptot$ & total pressure $p+b^2/2$\\
+$\sigma$ & magnetisation $b^2/(\rho h)$\\
+$D,\ \SSS,\ \tau,\ E$ & conserved density, momentum, energy minus rest mass, total energy\\
+$c_s,\ c_a,\ \zeta$ & sound speed, rest-frame Alfvén speed $b/\sqrt w$, $\sqrt{c_s^2+c_a^2-c_s^2c_a^2}$\\
+$\lambda_{\rm e},\lambda_{\rm A}^\pm,\lambda_{\rm s}^\pm,\lambda_{\rm f}^\pm$ & entropy, Alfvén, slow, fast speeds\\
+$a,\ \calB,\ G$ & $u^\mu\phi_\mu$, $b^\mu\phi_\mu$, $\phi^\mu\phi_\mu$ for $\phi_\mu=(-\lambda,1,0,0)$\\
+$V_s,\ W_s,\ n_\mu$ & front speed, its Lorentz factor, unit normal $W_s(-V_s,1,0,0)$\\
+$J,\ B_n$ & mass flux $-\rho u^\mu n_\mu$, normal comoving field $b^\mu n_\mu$\\
+$H$ & shock invariant $B_n^2/J^2-b^2/\rho^2$\\
+$\sigma^\mu,\ \bm K$ & Alfvén invariant $b^\mu+s\sqrt w\,u^\mu$, its spatial ratio $\bm\sigma/\sigma^0$\\
+$\jump{Q},\ \avg{Q}$ & $Q_a-Q_b$ and $Q_a+Q_b$ (ahead, behind)\\
+$\xi$ & similarity variable $x/t$\\
+$R_1,\dots,R_8$ & the states of the seven-wave fan\\
+$\UU^{\rm hll},\ \FF^{\rm hll}$ & HLL average state and flux\\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\chapter{What was verified, and how}\label{app:verification}
+
+The script \file{sympy_checks.py} in the directory of these notes runs every check below and
+prints one line per check (about ten seconds on a laptop). Symbolic checks use \textsc{SymPy};
+numerical ones use \textsc{mpmath} at 40 significant digits.
+
+\paragraph{Checked symbolically.}
+\begin{itemize}[nosep]
+\item \Cref{prop:bmu}: $b^\mu={}^\ast\!F^{\mu\nu}u_\nu$ with $\EE=-\vv\times\BB$ gives
+  \eqref{eq:b0}--\eqref{eq:b2}, $u_\mu b^\mu=0$ and ${}^\ast\!F^{\mu\nu}=u^\mu b^\nu-u^\nu b^\mu$.
+\item The conserved variables and fluxes \eqref{eq:UF}--\eqref{eq:Fx} from the components of
+  \eqref{eq:Tmunu}, both forms of $\tau$ used in \file{hlld.py}, and the momentum-flux form of
+  \textcite{MignoneBodo2006}.
+\item The Newtonian limits of \cref{sec:newtonian}.
+\item The rest-frame dispersion relation: the determinant of the linearised system and of
+  the $2\times2$ in-plane system; the covariantisation leading to \eqref{eq:quartic}.
+\item The identity of \eqref{eq:quartic} with the coefficients coded in
+  \file{rmhd/wave_speeds.py}, with eq.~(16) of \textcite{DelZanna2003}, and its reductions for
+  $B^x=0$ and $\vv=0$.
+\item The Alfvén speeds \eqref{eq:lamA} and $\calA=0$; the polynomial identities behind
+  \cref{prop:ordering}; the isotropic bound \eqref{eq:lamzeta} and \cref{lem:monotone}.
+\item The HLL identities; the effective sound speed \eqref{eq:romeroeos}; the relativistic
+  Riemann invariant for the ideal gas; the primitive-recovery relations
+  \eqref{eq:c2p-v2}--\eqref{eq:c2p-f}; the factorisation \eqref{eq:Bydenom}.
+\end{itemize}
+
+\paragraph{Checked numerically.}
+\begin{itemize}[nosep]
+\item The eigenvalues and acoustic eigenvectors of one-dimensional relativistic hydrodynamics,
+  \eqref{eq:dvdp}, and with tangential velocity \eqref{eq:pmm-ode} and the invariance of
+  $A=hWv_t$.
+\item Hydrodynamic shocks built from \eqref{eq:taubquad}--\eqref{eq:vbshock} satisfy all
+  jump conditions to $10^{-38}$; conversely, a shock solved from the jump conditions alone
+  satisfies the Taub adiabat \eqref{eq:taub}.
+\item A fast MHD shock solved from the full RH system satisfies \eqref{eq:invH}--\eqref{eq:magtaub}
+  and the Lichnerowicz adiabat \eqref{eq:lichnerowicz} to $10^{-39}$, and is an evolutionary
+  $1\to2$ transition.
+\item Rotational discontinuities built from \cref{prop:alfven} satisfy all RH conditions to
+  $10^{-40}$ at $V_s=\lambda_A$, with $\rho$, $p$ and $b^2$ continuous and $v_x$, $|B_t|$ not.
+\item The characteristic determinant and the eigenvectors of \cref{app:eigen}.
+\item \Cref{ex:blast} against the exact solver of the reference implementation (built-in
+  case~3).
+\end{itemize}
+
+\paragraph{Checked against the sources.} Every bibliography entry was checked on its arXiv
+page or through the Crossref record of its DOI (or a publisher or library record for books).
+Formulas quoted from papers were compared with their text: the quartic and HLLC relations
+with \textcite{MignoneBodo2006}; the HLLD relations with \textcite{MignoneUglianoBodo2009};
+the shock relations, the Lichnerowicz adiabat, the rarefaction ODEs and the test problems
+with \textcite{GiacomazzoRezzolla2006}; the effective EOS with \textcite{Romero2005}; the
+eigenstructure with \textcite{Anton2010}; \cref{tab:balsara} with Table~1 of
+\textcite{Balsara2001}; the rotor with \textcite{DelZanna2003}; the Orszag--Tang set-ups with
+\textcite{vanderHolst2008} and \textcite{BeckwithStone2011}; the four-quadrant data with
+\textcite{DelZannaBucciantini2002}. Statements about the reference implementation were
+compared with its source and with \file{HLLD/docs/GUIDE.md} and
+\file{HLLD/docs/what_we_solve.md}.
+
+\paragraph{Not verified.} (i) The form of the quartic in \textcite{Leismann2005}, whose full
+text could not be accessed. (ii) The content of \textcite{Komissarov2003} beyond its title,
+taken from the abstract of the author's preprint on the same subject. (iii) The derivation of
+the Lichnerowicz adiabat, which was only checked numerically. (iv) The page ranges of
+\textcite{Thorne1973} and \textcite{RyuJones1995}, for which only the first page is given.
+(v) Claims attributed to \textcite{Komissarov1997} are quoted from the summaries in
+\textcite{MignoneBodo2006} and \textcite{MignoneUglianoBodo2009}; the paper itself was not
+accessed.
+
+%%NEXT-CHAPTER%%
+
+\backmatter
+\bibliographystyle{plainnat}
+\bibliography{refs}
+
+\end{document}

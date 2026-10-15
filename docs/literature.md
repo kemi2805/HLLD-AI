@@ -18,7 +18,7 @@ Re-check before claiming priority in a paper ("Before a paper", below).
 
 | Our result | Closest prior work | Verdict |
 |---|---|---|
-| An exact seven-wave RMHD Riemann solver as the production flux of 2D CT runs (rotor, Orszag–Tang, four-quadrant), millions of verified solves per run | Pons, Martí & Müller 2000: exact relativistic **hydro** flux at every interface of a 2D code. Quirk 1994: exact Euler flux in 2D, HLLE near shocks. In RMHD only approximate solvers with an iterative closure: HLLD, Kim–Balsara HLLC, Antón et al.'s full-wave Roe | **New for RMHD.** The literature calls it infeasible in multi-D (§1) |
+| An exact seven-wave RMHD Riemann solver as the production flux of 2D CT runs (rotor, Orszag–Tang, four-quadrant), millions of verified solves per run | Pons, Martí & Müller (1999 proceedings): exact relativistic **hydro** flux at every interface of a 2D code. Quirk 1994: exact Euler flux in 2D, HLLE near shocks. In RMHD only approximate solvers with an iterative closure: HLLD, Kim–Balsara HLLC, Antón et al.'s full-wave Roe | **New for RMHD.** The literature calls it infeasible in multi-D (§1) |
 | A per-face, located census of where and why the exact solve fails | HLLD's fallback "usually less than 0.1%" of zones, no locations (Mignone, Ugliano & Bodo 2009); Musolino 2025, "occasional failures" | **The census is new.** The failure *classes* are known from theory (§2) |
 | Rescue stages: planar five-wave, four-unknown, continuation | Takahashi & Yamada 2014 (strength parametrisation, frozen rotation angles); homotopy continuation after an ML seed in power flow (Okhuegbe et al. 2024) | **Modest.** The ingredients are known; their use as fallback stages for an RMHD solver, and the measured gain (94% → 97–99%), are ours |
 | The weak-jump gate with a linearised flux below it | Toro 1991: a linearised solver over >99% of the flow, exact only for strong jumps. Wen, Panaitescu & Laguna 1997 | **Not new as a design.** Our measurement (25–120× closer than HLLD) is |
@@ -54,8 +54,9 @@ Re-check before claiming priority in a paper ("Before a paper", below).
 - **Hydro is different.** Exact or iterative solvers have been production
   fluxes for decades:
   - Martí & Müller's relativistic PPM, in 1D;
-  - Pons, Martí & Müller 2000 (JFM 422, 125), at every interface of a 2D
-    Godunov code;
+  - Pons, Martí & Müller, at every interface of a 2D Godunov code (a
+    diagonal shock tube on 100 × 100, in their 1999 Oxford proceedings; the
+    solver itself is JFM 422, 125, 2000);
   - the two-shock solver of Mignone, Plewa & Bodo 2005 (ApJS 160, 199), in
     1D–3D;
   - Musolino 2025, in 1D.
@@ -362,7 +363,8 @@ The share below the gate grows with resolution: 73% of the faces at 64²,
 - Musolino 2025, [arXiv:2505.18914](https://arxiv.org/abs/2505.18914)
 - Okhuegbe, Ademola & Liu 2024, IEEE Trans. Ind. Appl. 61, [OSTI 3030312](https://www.osti.gov/pages/biblio/3030312)
 - Pakmor, Bauer & Springel 2011, MNRAS, [arXiv:1108.1792](https://arxiv.org/abs/1108.1792)
-- Pons, Martí & Müller 2000, JFM 422, 125, [astro-ph/9910462](https://arxiv.org/abs/astro-ph/9910462)
+- Pons, Martí & Müller 2000, JFM 422, 125, [astro-ph/0005038](https://arxiv.org/abs/astro-ph/0005038) (the exact solver with tangential velocities)
+- Pons, Martí & Müller 1999, proceedings of “Godunov methods: theory and applications”, Oxford, [astro-ph/9910462](https://arxiv.org/abs/astro-ph/9910462) (the solver at every interface of a 2D Godunov code: a diagonal shock tube on 100 × 100)
 - Porth et al. 2017 (BHAC), [arXiv:1611.09720](https://arxiv.org/abs/1611.09720)
 - Puny et al. 2022, ICLR, [arXiv:2110.03336](https://arxiv.org/abs/2110.03336)
 - Quirk 1994, IJNMF 18, 555, [NTRS](https://ntrs.nasa.gov/api/citations/19930015894/downloads/19930015894.pdf)
