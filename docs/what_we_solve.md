@@ -1098,6 +1098,74 @@ solver. Choosing deliberately means adding physical resistivity and
 viscosity with a stated ratio and resolving those scales -- which is no
 longer ideal MHD.
 
+### Balsara 1 re-examined (2026-10-16): what our solver returns, checked independently
+
+**What production returns.** Balsara 1 as one face through today's chain is
+answered by the planar rung, with Giacomazzo & Rezzolla's stored answer to all
+nine stored digits: a fast rarefaction, a slow-family shock at xi = 0.03108
+that REVERSES B_y (+0.66 -> -0.43), the contact (0.2555), a slow shock
+(0.3806) and a weak fast rarefaction (head 0.9545); both Alfven waves carry
+nothing. The reversing wave is a **2->3 intermediate shock**: ahead of it the
+left Alfven characteristic runs at 0.03313, faster than the shock, and behind
+it at 0.02805 with the slow one at 0.03805 -- the gas crosses the Alfven speed
+through it. Production can return it only because the slow-shock search window
+reaches `slow_shock_b.MARGIN = 0.03` past the Alfven speed (the scalar code's
+choice). So our family is the regular waves **plus intermediate shocks within
+0.03 of the Alfven speed**, and no diagnostic says when an answer used one.
+The paper must state this.
+
+**Checked independently** (`scripts/balsara1_study.py checks`):
+
+- the jump conditions across the three discontinuities, recomputed with
+  HLLD's flux formulas (no code shared with the exact solver): 8.5e-16
+  (the reversing shock), 1.2e-13 (contact), 1.6e-16 (slow shock);
+- the entropy p / rho^Gamma rises across both shocks (1.000 -> 1.026 and
+  6.40 -> 7.10) and is constant through the fans;
+- the finite-volume runs converge to it, overall and away from the
+  discontinuities:
+
+  | L1 against our answer | 1024 cells | 2048 | 4096 |
+  |---|---|---|---|
+  | HLLD/MC, rho | 2.41e-3 | 1.40e-3 | 8.82e-4 |
+  | HLLD/MC, rho, > 8 cells from every discontinuity | 1.03e-3 | 6.89e-4 | 4.60e-4 |
+  | HLLE/MC, rho | 2.89e-3 | 1.55e-3 | 8.88e-4 |
+  | HLLE/MC, rho, > 8 cells from every discontinuity | 9.41e-4 | 5.27e-4 | 3.09e-4 |
+
+- it is the only root the planar solver reaches from a 224-start grid (calea
+  42571, `balsara1_study.py roots`): 192 starts converge, all to it; with a
+  pi-rotation at either or both Alfven waves -- the regular alternative that
+  evolutionarity would prefer -- not one start converges.
+
+**The compound alternative, on its own** (second figure). Its attached fan is
+computed correctly -- every sampled state moves at its own ray's slow speed to
+8.5e-15, the fan starts sonic behind its shock and ends on the contact state
+to 2e-14 -- and looks straight only because it is 0.0030 wide (12 cells at
+4096). The runs do not follow it. In xi 0.033-0.037, where the fan would put
+the density about 15% of the jump above the plateau, the mean deviation is:
+
+| | 512 | 1024 | 2048 | 4096 |
+|---|---|---|---|---|
+| HLLE/MC | | +52% (spike) | +27% (spike) | **+0.1%** |
+| HLLD/MC | | -8% | -4% | -10% |
+| HLLD/WENO5-Z | +14% | +12% | +15% | |
+
+HLLE lands on our plateau; HLLD/MC keeps a dip of a few per cent -- the noise
+behind a slowly moving shock (this one moves at 0.031) that the standing-shock
+test of section 7 shows; WENO5-Z sits on the compound side at these
+resolutions, which the runs at 4096-32768 cells (below) are to settle.
+The spike in rho and p just behind the shock in every run (up to ~0.77) is the
+scheme's overshoot inside its shock layer: about two cells wide at every
+resolution, so it narrows with the grid, where the compound fan keeps its
+width.
+
+**What remains a definition, not a bug:** for coplanar data ideal MHD admits
+more than one solution, evolutionarity prefers a regular one we cannot find,
+and the published exact solver and every scheme we ran give this one.
+
+![Balsara 1: our answer and the runs](figs/balsara1.png)
+
+![The left slow wave: our intermediate shock against the compound alternative](figs/balsara1_fan.png)
+
 ---
 
 ## 5a. Toward 100%: the failure ledger (2026-09-29)
@@ -3000,6 +3068,7 @@ the tubes (Balsara 5 the dearest).
 | secant vs Newton for the HLLD p* (7) | `scripts/pstar_methods.py results/rotor_128_hlld_mc --times 0.1,0.25,0.4` |
 | the rotor's state and solver map (7) | `scripts/plot_rotor_output.py <run> --out figs/rotor_output` |
 | which solution a scheme picks (5) | `scripts/compound_wave.py --balsara1 --flux hlle --limiter mp5 --ncells 1024 2048 4096` |
+| Balsara 1 re-examined (5) | the runs as the row above (on calea WITHOUT `kernels.env`: the script patches the numpy slow-shock path); then `scripts/balsara1_study.py checks --run hlld:<npz> --run hlle:<npz>`, on the laptop `scripts/balsara1_study.py figures --run ... --full hlld:mc:512 --zoom hlld:mc:1024 hlld:mc:2048 hlld:mc:4096 hlle:mc:4096 --out docs/figs/balsara1`, and the root search `scripts/balsara1_study.py roots 00 10 01 11` (calea, with `kernels.env`) |
 | the weak-jump gate replayed, and the linearised flux against it (4c) | `scripts/weak_gate_study.py <rec> pfd pfe --tau 1e-3 0 --out <dir>`, then `--linear --from-saved` |
 | 1D tubes, weak regime (4c) | `scripts/shocktube_compare.py configs/mignone/st1.yaml --solvers hlld,linear,exact --shrink 0.03` |
 | 1D: order, flux, standing slow shock (7) | `EXPERIMENT=all NPAR=60 RMHD_CONTINUATION=1 RMHD_ML_CKPT=data/ml_guess_gamma53_v5.pt sbatch scripts/calea_tube_study.sh` (from `ssh itp`; writes `results/tube_study`), then `scripts/tube_study.py analyse results/tube_study` and, on the laptop (calea's venv has no matplotlib), `scripts/plot_tube_study.py results/tube_study --out docs/figs` |
