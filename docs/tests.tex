@@ -22,9 +22,14 @@ $\xi = (x - x_0)/t$, so its exact solution at the output time is available at
 every cell from the same solver, with no resolution study and no
 discretisation error of its own. The comparisons below are therefore
 measured against the truth rather than against a finer grid. Each problem is
-run on 400 cells to $t = 0.4$ with the interface at $x_0 = 0.5$, the PLM/MC
-reconstruction of Sect.~\ref{sec:setup:evolution}, and either the HLLD flux
-or the exact flux with HLLD as its fallback. On a shock tube the weak-jump
+run on 400 cells to $t = 0.4$ with the interface at $x_0 = 0.5$, first-order
+(piecewise-constant) reconstruction, SSP-RK2 and $\Delta t = 0.4\,\Delta x$,
+and either the HLLD flux or the exact flux with HLLD as its fallback. First
+order is the one-dimensional driver's default, which neither configuration
+overrides; an earlier version of this section said PLM/MC, the reconstruction
+of the two-dimensional runs (Sect.~\ref{sec:setup:evolution}). The same tubes
+at second order, over a range of resolutions and with HLLE and HLLC as well,
+are in Sect.~\ref{sec:tests:order}. On a shock tube the weak-jump
 gate of Sect.~\ref{sec:setup:exact} hands most interfaces to HLLD, because
 the two reconstructed states are identical across all of them but the few
 that sit inside a fan; measured over the runs below the exact solver supplies
@@ -167,9 +172,10 @@ the same post-shock values. HLLD carries no slow wave, yet it reproduces the
 slow-shock state correctly, because the state behind a shock is fixed by the
 jump conditions and those are enforced by conservation whatever waves the
 flux function models. What the flux controls is the dissipation inside the
-transition, and there the error is set by the PLM/MC reconstruction across a
-structure with three discontinuities packed into fourteen cells, not by
-which Riemann problem the face solved.
+transition. At first order, where these runs were made, that dissipation is
+the whole numerical error and the flux has the most to say --- and still it
+buys almost nothing here. Section~\ref{sec:tests:order} finds the same at
+every resolution from 100 to 1600 cells, and at second order.
 
 An earlier version of this problem makes the point sharper. Built with
 $B_n = 1$ and $|B_t| = 2$, it had a \emph{stronger} slow shock
@@ -258,6 +264,104 @@ $L_1$ they agree to four digits on every variable, and both remain slightly
 $7.4$ in cost to raise exact coverage from $28.9\%$ to $78.1\%$ changes the
 answer by one part in a thousand. The gate is not concealing a result, and
 the flux is not where the error lives.
+
+\subsubsection{First and second order, resolution, and a standing slow shock}
+\label{sec:tests:order}
+
+The three tubes --- Balsara test 5, the constructed slow-shock tube of
+Sect.~\ref{sec:tests:slowshock} and its earlier, narrow-band variant ($B_n =
+1$, $|B_t| = 2$, the left Alfv\'en and slow waves $2.5$ cells apart at 400
+cells) --- were rerun with four fluxes (HLLE, HLLC, HLLD and the exact flux),
+first order (piecewise constant) and second order (PLM with the MC limiter),
+on 100 to 1600 cells, each against its exact self-similar solution. The
+exact arm is today's solver chain with two changes that raise its coverage on
+these problems: the warm-start network trained on shock-tube data seeds the
+seven-wave Newton, and the continuation rung is on. It then solves $94$ to
+$99.9\%$ of the attempted faces, against $69$ to $87\%$ with the settings of
+the two-dimensional runs; at 400 cells, where both were run, the coverage
+moves the exact-to-HLLD error ratio by at most one per cent.
+
+\begin{figure}
+\centering
+\includegraphics[width=\textwidth]{figs/tube_convergence.pdf}
+\caption{Top: $L_1(\rho)$ against the exact solution at $t = 0.4$ for the
+three tubes, four fluxes, first order (dashed, open symbols) and second order
+(solid, filled), against the number of cells. Bottom: each flux's error over
+HLLD's, the geometric mean of the ratio over the seven variables
+($\rho, p, \mathbf{v}, \mathbf{B}_t$). The exact Balsara 5 stops at 400
+cells.}
+\label{fig:tubeconv}
+\end{figure}
+
+Figure~\ref{fig:tubeconv} shows the result. The reconstruction order
+dominates: at 400 cells second order cuts HLLD's $L_1(\rho)$ by $3.9$, $3.4$
+and $3.1$ on the three tubes, while the choice among HLLC, HLLD and the
+exact flux moves it by at most $6\%$. HLLE is the outlier, $9$ to $44\%$
+worse than HLLD at first order and $4$ to $15\%$ at second. At first order
+the exact flux is better than HLLD on every tube and at every resolution in
+the mean over the variables --- by $0.7\%$ on the slow-shock tube, $2\%$ on
+Balsara 5, and on the narrow-band tube by $8\%$ at 100 cells falling to $1\%$
+at 1600, the gain sitting at the Alfv\'en--slow pair the coarse grids do not
+resolve. At second order the ratio wanders between $0.94$ and $1.06$ in
+density with no trend in resolution, and the variables disagree in sign.
+
+The one configuration in which the exact flux is decisively better is a
+discontinuity that stands still on the grid. We took the slow shock of each
+constructed tube, transformed it into its own rest frame by a Lorentz boost
+along $x$ (the jump conditions then hold to $10^{-15}$), and placed it on a
+cell face; the same shock was also run moving slowly, at $s = 0.01$ and
+$0.05$, on 200 cells to $t = 2$. Every approximate flux misses the flux of
+that face by $O(1)$ --- by $7.5$ for HLLE, HLLC and HLLD alike on the stronger
+shock --- while the exact solver returns $F(U_L) = F(U_R)$ to $10^{-10}$. With
+$\phi = (\rho - \rho_{\rm up})/(\rho_{\rm dn} - \rho_{\rm up})$, the error in
+cell widths of the full jump at $t = 2$, $\sum_i |\phi_i - \phi_i^{\rm exact}|$,
+is, for the two shocks:
+
+\begin{center}
+\begin{tabular}{llcccc}
+\toprule
+$s$ & order & HLLE & HLLC & HLLD & exact \\
+\midrule
+$0$    & 1st & $17.2$ / $3.5$ & $8.1$ / $2.3$ & $2.2$ / $1.5$ & $\mathbf{0}$ / $\mathbf{0}$ \\
+$0$    & 2nd & $2.3$ / $1.8$  & $1.7$ / $1.5$ & $1.6$ / $1.6$ & $\mathbf{0}$ / $\mathbf{0}$ \\
+$0.01$ & 1st & $17.2$ / $3.4$ & $8.2$ / $2.3$ & $1.4$ / $1.4$ & $0.6$ / $0.5$ \\
+$0.01$ & 2nd & $2.3$ / $2.0$  & $2.0$ / $1.6$ & $2.6$ / $1.5$ & $1.9$ / $2.1$ \\
+$0.05$ & 1st & $16.9$ / $2.9$ & $8.6$ / $1.9$ & $1.8$ / $1.1$ & $1.6$ / $0.3$ \\
+$0.05$ & 2nd & $2.2$ / $1.3$  & $1.8$ / $1.3$ & $1.6$ / $1.1$ & $1.0$ / $0.9$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{figure}
+\centering
+\includegraphics[width=\textwidth]{figs/standing_profiles_slowA.pdf}
+\caption{The stronger slow shock (from the narrow-band tube) at $t = 2$ on
+200 cells, stationary (top) and moving at $s = 0.01$ and $0.05$, first order
+(left) and second order (right): $\phi$ against the distance in cells from
+the exact shock position.}
+\label{fig:standing}
+\end{figure}
+
+The stationary shock stays exact with the exact flux at both orders ---
+$3\times10^{-11}$ after a thousand steps; beside a step the limited slopes
+vanish, so the face sees the two states --- while every approximate flux
+smears it (Fig.~\ref{fig:standing}). At first order HLLE does not hold a slow
+shock at all: it spreads it like a contact, sixty cells wide at $t = 2$ and
+still growing, where HLLC levels off near twenty-five cells and HLLD at four
+or five. Moving slowly, at first order, the exact flux keeps the shock one to
+two cells wide, with an error two to four times smaller than HLLD's in three
+of the four cases. At second order the limiter takes over: every flux holds
+the shock to one or two cells, and behind a moving shock all four show the
+post-shock oscillations familiar from slowly moving shocks, density waves of
+two to ten per cent with a smooth tangential velocity. The exact flux does not
+remove them; its total error is below HLLD's in three of the four moving
+cases and above it in one.
+
+Taken together, the exact flux is decisive only where a discontinuity sits
+still on the grid. Everywhere else its advantage is confined to structures
+the grid does not resolve, shrinks with resolution at first order, and at
+second order --- the order production schemes use --- is a few per cent
+of either sign.
 
 \subsection{The magnetic rotor}
 \label{sec:tests:rotor}

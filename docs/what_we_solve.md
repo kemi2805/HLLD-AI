@@ -2865,6 +2865,122 @@ points by t = 0.375 -- the chaos of a 64² vortex amplifying a change in
 between (the c2p continuation of 2026-10-06 is the likely one, not
 checked). The table compares runs of the same code.
 
+### One dimension: the order, the flux, and a standing slow shock (2026-10-15)
+
+**Correction first: every 1D tube number before this date is first order.**
+The 1D driver's reconstruction defaults to `pcm` (piecewise constant), and
+neither `configs/Giacomazzo/Balsara5.yaml` nor `configs/slow_shock_tube.yaml`
+nor `balsara5_slowwave.py` / `shocktube_compare.py` sets a limiter, so the
+September tubes (`docs/tests.tex`, and section 4c's) ran first order with
+SSP-RK2 and dt = 0.4 dx. `docs/tests.tex` said PLM/MC; corrected. Checked by
+rerunning HLLD on Balsara 5 at 400 cells, first order: the September profile
+to 1e-14 and its L1 (3.962e-2) exactly. (Section 7's 2D correction of
+2026-09-09 is the mirror image: the 2D driver defaults to MC.)
+
+**The study** (`scripts/tube_study.py`, `scripts/calea_tube_study.sh`,
+`scripts/plot_tube_study.py`; calea pilots 42539, 42540, the runs 42541 --
+170 single-core runs side by side on one node, 6 h): HLLE, HLLC, HLLD and the
+exact flux, first order (pcm) and second order (mc), each against the exact
+self-similar solution, on three tubes -- Balsara 5, the constructed slow-shock
+tube (`sst`, `configs/slow_shock_tube.yaml`, B_n = 1.5) and its earlier
+variant (`sst0`, `make_slow_shock_tube.py`'s defaults: B_n = 1, |B_t| = 2,
+the left Alfven and slow waves 2.5 cells apart at 400 cells) -- at 100 to 1600
+cells (exact Balsara 5 to 400: its continuation rung makes 800 a matter of
+days).
+
+**The exact arm is not production's.** With the 2D production settings
+(rotor networks, no continuation) the chain solves only 69-87% of attempted
+faces on these tubes at 400 cells; with the tube network as the first seed
+(`RMHD_ML_CKPT=data/ml_guess_gamma53_v5.pt`) and the continuation rung
+(`RMHD_CONTINUATION=1`) it solves 94-99.9% (Balsara 5 94-95.5%, `sst` 95-99.5%,
+`sst0` 96-99.9%). The production settings are kept as `_prod` runs at 400
+cells: the coverage moves exact/HLLD by at most 1% (Balsara 5 first order
+0.978 vs 0.973, `sst` second order 0.995 vs 0.985, `sst0` second order 1.057
+vs 1.059). The fallback is not why the exact flux does not win.
+
+**The reconstruction order dominates, the flux does not.** At 400 cells
+second order cuts HLLD's L1(rho) by 3.9x (Balsara 5), 3.4x (`sst`) and 3.1x
+(`sst0`), and the other variables by 3-4.6x (the z-components of v and B by
+1.3-3.2x). At 400 cells, choosing among HLLC, HLLD and the exact flux moves
+L1(rho) by at most 6%. HLLE is the outlier at first order -- 9-44%
+worse than HLLD in rho, and on Balsara 5 the gap grows with resolution (1.09 at
+100 cells, 1.22 at 1600) -- and 4-15% worse at second order.
+
+Exact over HLLD, L1(rho), and in brackets the geometric mean of the ratio over
+the seven variables (rho, p, v, B_t):
+
+| tube | order | 100 | 200 | 400 | 800 | 1600 |
+|---|---|---|---|---|---|---|
+| Balsara 5 | 1st | 0.970 (0.978) | 0.972 (0.979) | 0.973 (0.982) | | |
+| Balsara 5 | 2nd | 0.983 (0.988) | 0.996 (0.999) | 0.998 (1.000) | | |
+| `sst` | 1st | 1.016 (0.993) | 1.009 (0.992) | 1.006 (0.994) | 1.004 (0.993) | 1.003 (0.993) |
+| `sst` | 2nd | 1.011 (0.985) | 1.010 (1.027) | 0.985 (1.015) | 0.957 (1.004) | 0.944 (1.006) |
+| `sst0` | 1st | 0.926 (0.921) | 0.957 (0.959) | 0.979 (0.977) | 0.989 (0.985) | 0.993 (0.990) |
+| `sst0` | 2nd | 0.983 (0.985) | 0.988 (0.998) | 1.059 (1.048) | 0.992 (1.020) | 0.952 (0.991) |
+
+At first order the exact flux is better on every tube and every resolution
+in the mean over the variables, by 0.7% (`sst`), 2% (Balsara 5) and 8% falling
+to 1% (`sst0`) -- though not in `sst`'s density, 0.3-1.6% worse; splitting the
+difference by the nearest wave of the exact solution puts `sst0`'s gain at the
+unresolved Alfven-slow pair (-5.0 of its -7.8% at 100 cells), `sst`'s at the
+left slow shock (at 1600 cells) and Balsara 5's at its two fast waves. At
+second order the ratio wanders between 0.94 and 1.06 with no trend, and the
+variables disagree in sign (`sst` at 1600: rho 0.944, p 1.024, B_y 1.025):
+`sst0`'s 1.059 at 400 cells sits in the 2-4 cells of the unresolved
+Alfven-slow pair (+3.2 and +1.9% of the error at the slow shock and the
+Alfven wave), where both fluxes undershoot the post-shock plateau and the
+difference changes sign with the resolution. So the September result stands
+in substance -- the exact flux buys a few per cent at most -- but its stated
+cause did not apply to those runs: they were first order, where the flux
+matters most, and it still bought only that.
+
+**A standing slow shock is where the exact flux is unbeatable.** The slow
+shock of each constructed tube (`slowA` from `sst0`, `slowB` from `sst`),
+Lorentz-boosted into its own rest frame (jump conditions to 1e-15) and placed
+on a cell face, then also moving at s = 0.01 and 0.05; 200 cells, to t = 2.
+Every approximate flux misses that face's flux by O(1) -- 7.5 in absolute
+terms for HLLE, HLLC and HLLD on `slowA` (HLLD falls back to HLLE there), 0.92 /
+0.40 / 0.31 on `slowB` -- while the chain returns F(U_L) = F(U_R) to 1e-10
+(one face per sweep, solved every time: by the seven-wave Newton, on `slowB`
+6-9% of the time by the continuation rung). On the moving shocks the chain
+solves 92-100% of attempted faces. Misplaced jump at t = 2, sum over
+cells of |phi - phi_exact| with phi = (rho - rho_up) / (rho_dn - rho_up), i.e.
+the error in cell widths of the full jump, `slowA` / `slowB`:
+
+| s | order | HLLE | HLLC | HLLD | exact |
+|---|---|---|---|---|---|
+| 0 | 1st | 17.2 / 3.5 | 8.1 / 2.3 | 2.2 / 1.5 | **0 / 0** |
+| 0 | 2nd | 2.3 / 1.8 | 1.7 / 1.5 | 1.6 / 1.6 | **0 / 0** |
+| 0.01 | 1st | 17.2 / 3.4 | 8.2 / 2.3 | 1.4 / 1.4 | **0.6 / 0.5** |
+| 0.01 | 2nd | 2.3 / 2.0 | 2.0 / 1.6 | 2.6 / 1.5 | 1.9 / 2.1 |
+| 0.05 | 1st | 16.9 / 2.9 | 8.6 / 1.9 | 1.8 / 1.1 | 1.6 / 0.3 |
+| 0.05 | 2nd | 2.2 / 1.3 | 1.8 / 1.3 | 1.6 / 1.1 | 1.0 / 0.9 |
+
+1. The stationary shock stays exact with the exact flux at both orders (3e-11
+   after 1000 steps; the MC limiter's slopes vanish beside a step, so the
+   face sees the two states). Every approximate flux smears it.
+2. First-order HLLE cannot hold a slow shock: it spreads it like a contact,
+   60 cells wide at t = 2 and still growing; HLLC levels off near 25 cells,
+   HLLD at 4-5, the exact flux at 0-1.
+3. Moving slowly, at first order, the exact flux keeps the shock 1-2 cells
+   wide and its error is 2-4x smaller than HLLD's in three of four cases
+   (10% smaller for `slowA` at s = 0.05).
+4. At second order the limiter takes over: every flux holds the shock to 1-2
+   cells, and behind a moving shock all four show the post-shock oscillations
+   of slowly moving shocks -- 2-10% density (entropy) waves, the tangential
+   velocity smooth. The exact flux does not remove them (on `slowB` it is about
+   twice as noisy as HLLD); its misplaced jump is 23-37% below HLLD's in three
+   of four moving cases and 44% above in one (`slowB`, s = 0.01).
+
+**Cost.** Exact over HLLD wall: 13-109x first order, 6-33x second order on
+the tubes (Balsara 5 the dearest).
+
+![Error against resolution, four fluxes, both orders](figs/tube_convergence.png)
+
+![The standing and slowly moving slow shock at t = 2](figs/standing_profiles_slowA.png)
+
+![The shock's width and the noise behind it, over time](figs/standing_history_slowA.png)
+
 ---
 
 ## Reproducing the numbers
@@ -2886,6 +3002,7 @@ checked). The table compares runs of the same code.
 | which solution a scheme picks (5) | `scripts/compound_wave.py --balsara1 --flux hlle --limiter mp5 --ncells 1024 2048 4096` |
 | the weak-jump gate replayed, and the linearised flux against it (4c) | `scripts/weak_gate_study.py <rec> pfd pfe --tau 1e-3 0 --out <dir>`, then `--linear --from-saved` |
 | 1D tubes, weak regime (4c) | `scripts/shocktube_compare.py configs/mignone/st1.yaml --solvers hlld,linear,exact --shrink 0.03` |
+| 1D: order, flux, standing slow shock (7) | `EXPERIMENT=all NPAR=60 RMHD_CONTINUATION=1 RMHD_ML_CKPT=data/ml_guess_gamma53_v5.pt sbatch scripts/calea_tube_study.sh` (from `ssh itp`; writes `results/tube_study`), then `scripts/tube_study.py analyse results/tube_study` and, on the laptop (calea's venv has no matplotlib), `scripts/plot_tube_study.py results/tube_study --out docs/figs` |
 | the failure ledger (5a) | `sbatch scripts/calea_failure_ledger.sh` (from `ssh itp`; writes `ledger.txt`, `cards.txt`, `cards.csv`) |
 | a switch, paired against the ledger's recordings (5a) | `RMHD_FAST_EDGE_SCAN=1 scripts/failure_ledger.py collect <rec> pfa pfb pfc --paired --out <npz>` |
 | which wave fails, the fast-shock root pairs, the slow family's tangent (5a) | `scripts/ledger_subwaves.py results/failure_ledger_64 --pairs --slow-family` |
