@@ -45,7 +45,7 @@ import numpy as np
 ARCHIVED_HIDDEN = (256, 256, 256, 256, 128, 64)
 COMPONENTS = ("indep", "indep_planar", "jump", "jump_planar")
 RES_KEYS = ("p_nn", "failed", "wave_bad", "resid_nn", "p_ws", "ws_conv",
-            "ws_iter", "flux_err")
+            "ws_iter", "flux_err", "nonfinite")
 
 
 def parse_model(s):
@@ -88,7 +88,8 @@ def _task(args):
     out = dict(p_nn=np.zeros(n), failed=np.zeros(n, bool),
                wave_bad=np.zeros(n, bool), resid_nn=np.zeros(n),
                p_ws=np.zeros(n), ws_conv=np.zeros(n, bool),
-               ws_iter=np.zeros(n, np.int16), flux_err=np.zeros(n))
+               ws_iter=np.zeros(n, np.int16), flux_err=np.zeros(n),
+               nonfinite=np.zeros(n, bool))
     for g in np.unique(gam):
         eos = make_eos(float(g))
         for d in np.unique(idir):
@@ -116,6 +117,7 @@ def _task(args):
                 out["ws_conv"][r] = (rw["err"] == 0).numpy()
                 out["ws_iter"][r] = rw["n_iter"].numpy()
                 out["flux_err"][r] = ((FA - FH).abs().max(1).values / scale).numpy()
+                out["nonfinite"][r] = (~torch.isfinite(FA).all(1)).numpy()
     return lo, out
 
 
@@ -165,6 +167,7 @@ def summarise(lab, res, sel):
         flux_err_max=float(res["flux_err"][v].max()),
         resid_nn_median=float(np.median(res["resid_nn"][v])),
     )
+    out["ai_flux_nonfinite_all_rows"] = int(res["nonfinite"][sel].sum())
     return out
 
 
