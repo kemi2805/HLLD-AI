@@ -73,6 +73,51 @@ def main():
     print(f"{a.states}: {n} faces, {v.sum()} valid ({v.mean():.4f}), "
           f"axis 0/1 = {(z['axis'] == 0).sum()}/{(z['axis'] == 1).sum()}, "
           f"reasons {reasons}, {time.time()-t0:.0f}s -> {a.out}", flush=True)
+    envelope_report(z["states_L"], z["states_R"], z["axis"], gamma, v)
+
+
+def envelope_report(SL, SR, axis, gamma, valid, cfg_path=None):
+    """The measured envelope per sweep axis, and how much of it the training
+    box + caps (configs/pstar-union.yaml) contain."""
+    import yaml
+    from src.data.sampling import merged_cfg
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    cfg = merged_cfg(yaml.safe_load(open(cfg_path or os.path.join(
+        root, "configs", "pstar-union.yaml")))["sampling"])
+    box, caps = cfg["box"], cfg["caps"]
+    n = SL.shape[0]
+    rows = np.arange(n)
+    inside = np.ones(n, bool)
+    cols = {}
+    for tag, S in (("L", SL), ("R", SR)):
+        rho, vx, vy, vz, p = S[:, 0], S[:, 1], S[:, 2], S[:, 3], S[:, 4]
+        B = S[:, 6:9]
+        v = np.stack([vx, vy, vz], 1)
+        v2 = (v ** 2).sum(1)
+        W = 1.0 / np.sqrt(np.clip(1.0 - v2, 1e-300, None))
+        bn = np.abs(B[rows, axis])
+        bt = np.sqrt(np.clip((B ** 2).sum(1) - bn ** 2, 0.0, None))
+        b2 = (B ** 2).sum(1) * (1 - v2) + (v * B).sum(1) ** 2
+        sig = b2 / (rho + gamma / (gamma - 1) * p)
+        lT = np.log10(p / rho)
+        cols.update({f"lrho_{tag}": np.log10(rho), f"lp_{tag}": np.log10(p),
+                     f"W_{tag}": W, f"Bt_{tag}": bt, f"sigma_{tag}": sig,
+                     f"lT_{tag}": lT})
+        cols["Bn"] = bn
+        inside &= ((np.log10(rho) >= box["lrho"][0]) & (np.log10(rho) <= box["lrho"][1])
+                   & (np.log10(p) >= box["lpress"][0]) & (np.log10(p) <= box["lpress"][1])
+                   & (W <= 1 + 10 ** box["wm1_log"][1]) & (bn <= box["Bn"][1])
+                   & (bt <= box["Bt"][1]) & (sig <= caps["sigma_max"])
+                   & (lT >= caps["log_T"][0]) & (lT <= caps["log_T"][1]))
+    print(f"  inside the training box and caps (both states): "
+          f"{inside.mean():.4f} of all faces, {inside[valid].mean():.4f} of "
+          f"the HLLD-valid ones")
+    for ax in np.unique(axis):
+        m = axis == ax
+        print(f"  axis {int(ax)} ({m.sum()} faces):  min / 0.1% / median / 99.9% / max")
+        for k, c in cols.items():
+            q = np.quantile(c[m], [0, 0.001, 0.5, 0.999, 1])
+            print(f"    {k:9s} " + " ".join(f"{x:10.4g}" for x in q))
 
 
 if __name__ == "__main__":
