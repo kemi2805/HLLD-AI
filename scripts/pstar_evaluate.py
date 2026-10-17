@@ -74,6 +74,12 @@ def load_model(m):
     return net, stats
 
 
+# the current test set's arrays, loaded ONCE in the parent: the fork-started
+# workers inherit them (an .npz cannot be memory-mapped, and re-reading a
+# million-row file per task would move ~100 GB through CephFS)
+_DATA: dict = {}
+
+
 def _task(args):
     m, path, lo, hi, batch = args
     import torch
@@ -81,7 +87,7 @@ def _task(args):
     from src.data.labelling import PRIM_KEYS, make_eos
     from src.physics.hlld import hlld_ai_flux, hlld_flux
     net, stats = load_model(m)
-    z = np.load(path)
+    z = _DATA if _DATA.get("_path") == path else np.load(path)
     sl, sr = z["prim_L"][lo:hi], z["prim_R"][lo:hi]
     gam, idir = z["gamma"][lo:hi], z["idir"][lo:hi].astype(int)
     n = hi - lo
@@ -188,9 +194,13 @@ def main():
     tsets = [dict(zip(("name", "path"), s.split("=", 1))) for s in a.testset]
     report = dict(models=models, testsets=tsets, results={})
     import multiprocessing as mp
-    pool = mp.get_context("fork").Pool(a.workers) if a.workers > 1 else None
     for ts in tsets:
         z = np.load(ts["path"])
+        _DATA.clear()
+        _DATA.update({k: z[k] for k in ("prim_L", "prim_R", "gamma", "idir")})
+        _DATA["_path"] = ts["path"]
+        # forked AFTER the load, so every worker shares _DATA
+        pool = mp.get_context("fork").Pool(a.workers) if a.workers > 1 else None
         n = z["valid"].size if a.max_rows is None else min(a.max_rows, z["valid"].size)
         lab = {k: z[k][:n] for k in ("p_star", "valid", "bn_zero", "n_iter",
                                       "gamma", "idir", "comp") if k in z.files}
@@ -222,8 +232,9 @@ def main():
                   f"valid {r.get('valid_frac_on_hlld_valid', np.nan):.4f}  "
                   f"same-root {r.get('ws_same_root', np.nan):.4f}  "
                   f"[{time.time()-t0:.0f}s]", flush=True)
-    if pool:
-        pool.close()
+        if pool:
+            pool.close()
+            pool.join()
     report["wall_s"] = round(time.time() - t0, 1)
     json.dump(report, open(a.out, "w"), indent=1)
     print(f"== {a.out}  ({report['wall_s']}s)")
