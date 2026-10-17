@@ -17,9 +17,11 @@ envelope recordings, docs/rotor_envelope.md, docs/ot_envelope.md):
   sides; 100% of the recorded OT faces have cos(v_t, B_t) = +-1).
   Uniform directions never produce that, so half the rows put every
   transverse vector on one random line, with random signs (``*_planar``);
-* small |B_n| is common (OT: 29% of faces below 0.1, 3.4% below 0.01) and
-  so is a vanishing transverse field (rotor: 73% of faces |B_t| < 1e-6):
-  log-uniform tails for both;
+* small |B_n| is common (OT: 29% of faces below 0.1, 3.4% below 0.01), so
+  is a vanishing transverse field (rotor: 73% of faces |B_t| < 1e-6), and
+  so is rest (rotor: 71% of faces have W = 1 exactly, the static ambient):
+  log-uniform tails for all three, the velocity one as W - 1 = 10^u with
+  u down to -12 (|v| ~ 1e-6) where the box stops at -4 (|v| ~ 0.014);
 * the box's corners are far outside the measured JOINT envelope:
   sigma = b^2/(rho h) <= 7.85 measured (rotor), log10(p/rho) in
   [-2.0, 1.05] measured (both), while independent ranges reach sigma ~1e4
@@ -44,8 +46,9 @@ import numpy as np
 DEFAULT_CFG = dict(
     box=dict(lrho=[-2.0, 1.5], lpress=[-3.0, 2.0], wm1_log=[-4.0, 1.0],
              Bn=[0.0, 7.5], Bt=[0.0, 6.0]),
-    small_Bn=dict(frac=0.25, log10=[-6.0, 0.0]),
-    small_Bt=dict(frac=0.15, log10=[-6.0, -1.0]),
+    small_Bn=dict(frac=0.25, log10=[-10.0, 0.0]),
+    small_Bt=dict(frac=0.15, log10=[-10.0, -1.0]),
+    small_v=dict(frac=0.10, wm1_log=[-12.0, -4.0]),
     caps=dict(sigma_max=16.0, log_T=[-2.5, 1.55]),
     components=dict(indep=0.25, indep_planar=0.25, jump=0.25, jump_planar=0.25),
     jump_log10=[-5.0, 0.0],
@@ -80,14 +83,18 @@ def _mixture_mag(rng, n, uniform_range, small):
     return mag
 
 
-def _side(rng, n, box, small_Bt, planar, et):
+def _side(rng, n, box, small_Bt, planar, et, small_v=None):
     """One side's (rho, p, v, B_t): v as (v_n, v_t1, v_t2), B_t as (t1, t2).
 
     ``planar`` rows put v_t and B_t on the line ``et`` (unit 2-vectors,
     shared by both sides of a row), each with a random sign."""
     rho = 10.0 ** _u(rng, box["lrho"], n)
     p = 10.0 ** _u(rng, box["lpress"], n)
-    W = 1.0 + 10.0 ** _u(rng, box["wm1_log"], n)
+    u = _u(rng, box["wm1_log"], n)
+    if small_v:
+        slow = rng.random(n) < small_v["frac"]
+        u[slow] = _u(rng, small_v["wm1_log"], int(slow.sum()))
+    W = 1.0 + 10.0 ** u
     vmag = np.sqrt(1.0 - 1.0 / W ** 2)
 
     # 3D: isotropic direction; planar: an angle in the (n, et) plane
@@ -167,11 +174,11 @@ def _draw(rng, n, cfg, c):
     et = np.stack([np.cos(phi0), np.sin(phi0)])
     Bn = (_mixture_mag(rng, n, box["Bn"], cfg["small_Bn"])
           * np.where(rng.random(n) < 0.5, -1.0, 1.0))
-    L = _side(rng, n, box, cfg["small_Bt"], planar, et)
+    L = _side(rng, n, box, cfg["small_Bt"], planar, et, cfg["small_v"])
     if name.startswith("jump"):
         R = _perturb(rng, n, L, Bn, planar, et, cfg["jump_log10"])
     else:
-        R = _side(rng, n, box, cfg["small_Bt"], planar, et)
+        R = _side(rng, n, box, cfg["small_Bt"], planar, et, cfg["small_v"])
     return L, R, Bn
 
 
