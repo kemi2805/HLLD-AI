@@ -13,7 +13,7 @@
 #          gamma by chunk parity) -> $DATA/shards/shard_*.npz, every row kept
 #          with its flags.  Resumable: an existing shard is skipped.
 #   build  valid rows -> $DATA/splits (train/val/test per feature version,
-#          asinh-standardised, feature_version stamped; test_rows.npz,
+#          scale-free + asinh-standardised, feature_version stamped; test_rows.npz,
 #          invalid_rows.npz, summary.json)
 #   real   the recorded rotor / OT faces (calea_pstar_record.sh) -> labelled
 #          $DATA/real/{rotor_256,ot_128}_rows.npz, all faces kept, flagged
@@ -23,7 +23,8 @@
 #   STAGES=real sbatch --time=1:00:00 scripts/calea_pstar_generate.sh
 #
 # Knobs: STAGES ("gen build real"), DATA (/mnt/rafast/miler/pstar/union),
-# CHUNKS (0-63), WORKERS (60), TRANSFORM (asinh), REC (results/pstar_rec),
+# CHUNKS (0-63), WORKERS (60), TRANSFORM (asinh), REF (ptot_avg: scale-free
+# features, target log10(p*/p_ref); the pilot's choice), REC (results/pstar_rec),
 # PY, HLLD_DIR.  DRYRUN=1: preflight only.
 set -u -o pipefail
 BASE=/mnt/rafast/miler/codes/rotor2d
@@ -34,6 +35,7 @@ STAGES=${STAGES:-"gen build real"}
 CHUNKS=${CHUNKS:-0-63}
 WORKERS=${WORKERS:-60}
 TRANSFORM=${TRANSFORM:-asinh}
+REF=${REF:-ptot_avg}
 REC=${REC:-results/pstar_rec}
 cd "$HLLD_DIR" || { echo "PREFLIGHT FAILED: no $HLLD_DIR"; exit 2; }
 export PYTHONPATH=$HLLD_DIR
@@ -66,7 +68,7 @@ fi
 if has build; then
     echo "== build  $(date +%T)"
     OMP_NUM_THREADS=16 "$PY" -u scripts/pstar_build_splits.py --shards "$DATA/shards" \
-        --out "$DATA/splits" --transform "$TRANSFORM" || rc=1
+        --out "$DATA/splits" --transform "$TRANSFORM" --ref "$REF" || rc=1
 fi
 if has real; then
     echo "== real  $(date +%T)"
