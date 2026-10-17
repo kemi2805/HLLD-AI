@@ -150,6 +150,14 @@ def main():
                     help="record every Nth sweep")
     ap.add_argument("--envelope-samples", type=int, default=4000,
                     help="interfaces subsampled per recorded sweep")
+    ap.add_argument("--envelope-states", action="store_true",
+                    help="also keep the full L/R primitive states of every "
+                         "recorded face in the envelope .npz (states_L, "
+                         "states_R, axis, call), e.g. for a real-state p* "
+                         "test set; the summary rows are unchanged.  NOTE: "
+                         "--envelope-every must be ODD to see both sweep "
+                         "axes and all RK stages (6 calls per SSP-RK3 step; "
+                         "an even value records x-sweeps only)")
     a = ap.parse_args()
 
     P = PROBLEMS[a.problem]
@@ -287,7 +295,8 @@ def main():
                   "n_exact_x,n_verified_x\n")
 
     rec = (EnvelopeRecorder(n_per_call=a.envelope_samples,
-                            every=a.envelope_every)
+                            every=a.envelope_every,
+                            keep_states=a.envelope_states)
            if a.envelope else None)
 
     flux_fn = SOLVERS[a.solver]

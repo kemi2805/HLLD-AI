@@ -70,3 +70,32 @@ def test_every_subsamples_calls_and_save_round_trips(tmp_path):
     assert list(z["fields"]) == list(FIELDS) and str(z["run"]) == "test"
     assert summ == summarize(z["samples"])
     assert summ["W_L"]["median"] == pytest.approx(1.25)
+
+
+def test_keep_states_records_the_same_faces_and_round_trips(tmp_path):
+    """keep_states adds the full primitives of the SAME sampled faces: it
+    draws nothing from the RNG, so the summary rows are identical, and each
+    kept state reproduces its summary row."""
+    torch.manual_seed(3)
+    n = 50
+    L = _state(n)
+    R = _state(n, rho=1.0, p=0.1)
+    for d in (L, R):
+        for k in ("vx", "vy", "By"):
+            d[k] = d[k] * torch.rand(n, dtype=torch.float64)
+    plain = EnvelopeRecorder(n_per_call=7, every=1, seed=5)
+    full = EnvelopeRecorder(n_per_call=7, every=1, seed=5, keep_states=True)
+    for ax in (0, 1, 0):
+        plain.record(L, R, axis=ax, eos=None)
+        full.record(L, R, axis=ax, eos=None)
+    assert all(np.array_equal(a, b) for a, b in zip(plain.rows, full.rows))
+    full.save(str(tmp_path / "env.npz"))
+    z = np.load(tmp_path / "env.npz")
+    keys = list(z["state_keys"])
+    assert z["states_L"].shape == (21, len(keys)) == z["states_R"].shape
+    assert list(z["axis"]) == [0] * 7 + [1] * 7 + [0] * 7
+    assert list(z["call"]) == [1] * 7 + [2] * 7 + [3] * 7
+    sL, s = z["states_L"], z["samples"]
+    assert np.allclose(np.log10(sL[:, keys.index("rho")]), s[:, COL["lrho_L"]])
+    bn = np.where(z["axis"] == 0, sL[:, keys.index("Bx")], sL[:, keys.index("By")])
+    assert np.allclose(np.abs(bn), s[:, COL["Bn"]])

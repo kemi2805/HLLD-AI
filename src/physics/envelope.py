@@ -44,16 +44,33 @@ FIELDS = ("lrho_L", "lp_L", "W_L", "Bt_L",
           "lrho_R", "lp_R", "W_R", "Bt_R",
           "Bn", "cos_vB", "sigma")
 
+# the primitives kept per side when EnvelopeRecorder(keep_states=True)
+STATE_KEYS = ("rho", "vx", "vy", "vz", "p", "eps", "Bx", "By", "Bz")
+
 
 class EnvelopeRecorder:
     """Accumulates a subsample of interface states over a run."""
 
-    def __init__(self, n_per_call: int = 2000, every: int = 5, seed: int = 0):
+    def __init__(self, n_per_call: int = 2000, every: int = 5, seed: int = 0,
+                 keep_states: bool = False):
         self.n_per_call = n_per_call
         self.every = every
         self.rng = np.random.default_rng(seed)
         self.rows: list[np.ndarray] = []
         self._calls = 0
+        # Opt-in: also keep the FULL primitive states of every sampled face
+        # (both sides, all nine primitives, plus the sweep axis and the call
+        # number), so the recorded faces can be re-solved later -- e.g. as a
+        # real-state test set for the p* network.  The summary rows above
+        # cannot: they hold magnitudes only (no v_n/v_t split, no transverse
+        # directions, no sign of B_n).  Off by default; it draws nothing from
+        # the RNG, so the sampled faces and the summary rows are the same
+        # either way.
+        self.keep_states = keep_states
+        self.states_L: list[np.ndarray] = []
+        self.states_R: list[np.ndarray] = []
+        self.axes: list[np.ndarray] = []
+        self.call_ids: list[np.ndarray] = []
 
     def record(self, L: dict, R: dict, axis: int, eos) -> None:
         """Record one sweep's interface states (flat or 2D dicts both fine)."""
@@ -118,12 +135,31 @@ class EnvelopeRecorder:
         self.rows.append(
             np.stack([out[f].numpy() for f in FIELDS], axis=1))
 
+        if self.keep_states:
+            for d, dst in ((flat, self.states_L), (flatR, self.states_R)):
+                dst.append(np.stack([take(d, key).numpy()
+                                     for key in STATE_KEYS], axis=1))
+            self.axes.append(np.full(k, axis, dtype=np.int8))
+            self.call_ids.append(np.full(k, self._calls, dtype=np.int32))
+
     def save(self, path: str, **meta) -> dict:
         """Write the samples and return a summary of the measured envelope."""
         data = (np.concatenate(self.rows, axis=0) if self.rows
                 else np.zeros((0, len(FIELDS))))
+        extra = {}
+        if self.keep_states:
+            ns = len(STATE_KEYS)
+            cat = lambda xs, shape, dt: (np.concatenate(xs, axis=0) if xs
+                                         else np.zeros(shape, dtype=dt))
+            extra = dict(states_L=cat(self.states_L, (0, ns), np.float64),
+                         states_R=cat(self.states_R, (0, ns), np.float64),
+                         state_keys=np.array(STATE_KEYS),
+                         axis=cat(self.axes, (0,), np.int8),
+                         call=cat(self.call_ids, (0,), np.int32),
+                         every=np.array(self.every),
+                         n_per_call=np.array(self.n_per_call))
         np.savez_compressed(path, samples=data, fields=np.array(FIELDS),
-                            **meta)
+                            **extra, **meta)
         return summarize(data)
 
 
