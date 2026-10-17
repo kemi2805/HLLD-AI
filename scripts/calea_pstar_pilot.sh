@@ -22,6 +22,8 @@
 #            production seed), split twice: asinh and plain standardisation
 #   train    four short CPU trainings: v2/v3 features x none/asinh
 #   eval     those four and the archived checkpoint on the pilot test rows
+#   ref      the pressure reference (--ref ptot_avg): two more trainings,
+#            two CPU-throughput probes, and an evaluation against the above
 #
 #   ssh itp; cd /mnt/rafast/miler/codes/rotor2d/HLLD-pstar
 #   sbatch scripts/calea_pstar_pilot.sh
@@ -146,6 +148,39 @@ if has eval; then
         --model archived=$ARCHIVED/default-mignone.pt,$ARCHIVED/norm_stats.npz \
         --testset pilot_test=$OUT/splits_asinh/test_rows.npz \
         --out "$OUT/eval_pilot.json" --workers 48 --chunk 5000 || rc=1
+fi
+
+# Second round (2026-10-17): the pressure reference.  Same pilot shards, same
+# split seed (so the same test rows), asinh with --ref ptot_avg; the v2/v3
+# asinh runs above are the comparison.  Two extra trainings probe the CPU
+# throughput for the production job: v3 with ref at batch 16384, and at
+# batch 4096 with 16 threads.
+if has ref; then
+    echo "== ref  $(date +%T)"
+    OMP_NUM_THREADS=8 "$PY" scripts/pstar_build_splits.py --shards "$OUT/shards" \
+        --out "$OUT/splits_asinh_ref" --transform asinh --ref ptot_avg \
+        > "$OUT/build_asinh_ref.log" 2>&1 || rc=1
+    P=""
+    for spec in "v2ref:v2-idir-abs-bn:4096:14" "v3ref:v3-hlld-r-invariants:4096:14" \
+                "v3ref_b16k:v3-hlld-r-invariants:16384:14" "v3ref_t16:v3-hlld-r-invariants:4096:16"; do
+        IFS=: read -r name ver batch thr <<< "$spec"
+        "$PY" -u scripts/pstar_train.py --split "$OUT/splits_asinh_ref/$ver" \
+            --out "$OUT/ck/$name.pt" --device cpu --threads "$thr" --epochs "$EPOCHS" \
+            --batch "$batch" > "$OUT/train_$name.log" 2>&1 & P="$P $!"
+    done
+    waitall $P || rc=1
+    for n in v2ref v3ref v3ref_b16k v3ref_t16; do
+        echo "  $n: $(tail -n 1 "$OUT/train_$n.log")"
+        grep "^epoch  *40 " "$OUT/train_$n.log" | sed 's/^/      /'
+    done
+    M=""
+    for n in v2asinh v3asinh v2ref v3ref v3ref_b16k; do
+        M="$M --model $n=$OUT/ck/$n.pt,$OUT/ck/${n}_norm_stats.npz"
+    done
+    "$PY" scripts/pstar_evaluate.py $M \
+        --model archived=$ARCHIVED/default-mignone.pt,$ARCHIVED/norm_stats.npz \
+        --testset pilot_test=$OUT/splits_asinh_ref/test_rows.npz \
+        --out "$OUT/eval_pilot_ref.json" --workers 48 --chunk 5000 || rc=1
 fi
 echo "== $(date)  rc=$rc"
 exit $rc

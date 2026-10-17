@@ -1,7 +1,7 @@
 """Labelled shards -> train/val/test files for the p* network.
 
     python scripts/pstar_build_splits.py --shards DIR --out SPLITS \
-        [--transform asinh] [--frac 0.9 0.05 0.05] [--seed 0]
+        [--transform asinh] [--ref ptot_avg] [--frac 0.9 0.05 0.05] [--seed 0]
 
 Keeps the VALID rows only (labelling.py: converged, wave order holds,
 B_n != 0, finite, p* > 0) and reports the invalid ones by reason.  One
@@ -49,12 +49,32 @@ LABEL_KEYS = ("p_star", "p_root", "resid", "p_hll", "n_iter", "converged",
 ROW_KEYS = ("prim_L", "prim_R", "gamma", "idir", "comp") + LABEL_KEYS
 
 
+def p_ref_rows(rows, chunk=2_000_000):
+    """ai_features.p_ref_from_prims for every row (the call hlld_ai_flux
+    makes), grouped by the row's EOS."""
+    from src.data.labelling import PRIM_KEYS, make_eos
+    out = np.empty(rows["gamma"].size)
+    for g in np.unique(rows["gamma"]):
+        idx = np.flatnonzero(rows["gamma"] == g)
+        eos = make_eos(float(g))
+        for i0 in range(0, idx.size, chunk):
+            m = idx[i0:i0 + chunk]
+            mk = lambda P: {k: torch.from_numpy(np.ascontiguousarray(P[m, i]))
+                            for i, k in enumerate(PRIM_KEYS)}
+            out[m] = ai.p_ref_from_prims(mk(rows["prim_L"]), mk(rows["prim_R"]),
+                                         eos).numpy()
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--shards", required=True)
     ap.add_argument("--out", required=True)
     ap.add_argument("--versions", default=",".join(ai.FEATURE_SETS))
     ap.add_argument("--transform", default="asinh", choices=("asinh", "none"))
+    ap.add_argument("--ref", default="none", choices=("none", "ptot_avg"),
+                    help="ptot_avg: scale-free features and target "
+                         "log10(p*/p_ref) (ai_features.X_REF_POWER)")
     ap.add_argument("--frac", type=float, nargs=3, default=(0.9, 0.05, 0.05))
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--keep-invalid", type=int, default=1_000_000)
@@ -119,7 +139,8 @@ def main():
     np.savez(os.path.join(a.out, "invalid_rows.npz"),
              **{k: np.concatenate(v) for k, v in inv.items()})
 
-    y_log = np.log10(rows["p_star"])
+    p_ref = p_ref_rows(rows) if a.ref == "ptot_avg" else None
+    y_log = np.log10(rows["p_star"] if p_ref is None else rows["p_star"] / p_ref)
     tr = split["train"]
     y_mu, y_sigma = float(y_log[tr].mean()), float(y_log[tr].std() + 1e-12)
     summary = dict(
@@ -130,7 +151,7 @@ def main():
                         for g in np.unique(rows["gamma"])},
         log10_pstar=dict(min=float(y_log.min()), max=float(y_log.max()),
                          mean=y_mu, std=y_sigma),
-        transform=a.transform, seed=a.seed, versions=versions,
+        transform=a.transform, ref=a.ref, seed=a.seed, versions=versions,
         shard_meta=metas[:3] + (["..."] if len(metas) > 3 else []),
     )
 
@@ -140,11 +161,13 @@ def main():
         sub = os.path.join(a.out, v)
         os.makedirs(sub, exist_ok=True)
         Xt = torch.from_numpy(Xv[tr])
+        if p_ref is not None:
+            Xt = ai.scale_by_ref(Xt, v, torch.from_numpy(p_ref[tr]))
         stats = dict(feature_version=np.array(v),
-                     x_transform=np.array(a.transform),
+                     x_transform=np.array(a.transform), ref=np.array(a.ref),
                      y_mu=np.array(y_mu), y_sigma=np.array(y_sigma))
         if a.transform == "asinh":
-            scale = np.median(np.abs(Xv[tr]), axis=0)
+            scale = np.median(np.abs(Xt.numpy()), axis=0)
             scale = np.where(scale > 0, scale, 1.0)
             stats["x_scale"] = scale
             Xt = torch.asinh(Xt / torch.as_tensor(scale))
@@ -158,7 +181,9 @@ def main():
         np.savez(os.path.join(sub, "norm_stats.npz"), **stats)
         for s, ix in split.items():
             # the same function hlld_ai_flux calls on the raw features
-            Xs = ai.normalise(torch.from_numpy(Xv[ix]), stats).numpy()
+            Xs = ai.normalise(torch.from_numpy(Xv[ix]), stats,
+                              None if p_ref is None else
+                              torch.from_numpy(p_ref[ix])).numpy()
             ys = ((y_log[ix] - y_mu) / y_sigma).astype(np.float32)
             np.save(os.path.join(sub, f"X_{s}.npy"), Xs)
             np.save(os.path.join(sub, f"y_{s}.npy"), ys)

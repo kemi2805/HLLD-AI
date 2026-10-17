@@ -229,17 +229,71 @@ def stats_feature_version(norm_stats: dict):
     return stats_str(norm_stats, "feature_version")
 
 
-def normalise(X_raw: torch.Tensor, norm_stats: dict) -> torch.Tensor:
+# ── The pressure scale: an exact symmetry, used by the "ptot_avg" reference ──
+#
+# SRMHD is invariant under rho, p, B^2 -> lambda * (rho, p, B^2) at fixed
+# velocities: every wave speed is unchanged, U, F and HLLD's jump vectors R
+# scale by lambda (B and R_B by sqrt(lambda)), and so does p*.  HLLD's
+# residual is homogeneous in the same way, so p*/p_ref is a function of
+# scale-free inputs for any p_ref that scales like a pressure.  With
+#
+#     p_ref = (p_L + b2_L/2 + p_R + b2_R/2) / 2      (comoving b^2)
+#
+# -- the quantity hlld_ai_flux already computes for its HLLE fallback -- the
+# reference also carries the answer for small jumps: L = R gives
+# p* = p_ref exactly.  Norm stats with ``ref = "ptot_avg"`` divide each
+# feature by p_ref ** X_REF_POWER (1 for pressure-like R components, 1/2 for
+# field-like ones, 0 for speeds and cosines) and train on log10(p*/p_ref).
+X_REF_POWER = {
+    FEATURE_VERSION: (1, 1, 1, 0.5, 0, 0, 1, 1, 1, 0.5, 0, 0, 0.5, 0, 0),
+    FEATURE_VERSION_V3: (1, 1, 1, 0.5, 1, 1, 1, 0.5, 0.5, 0, 0,
+                         0, 0, 0, 0, 0, 0),
+}
+
+
+def p_ref_from_prims(sL, sR, eos):
+    """(p + b^2/2) averaged over the two states, as hlld_ai_flux's fallback."""
+    from .hlld import compute_b2, lorentz
+    pL, _ = eos.press_and_cs2(sL["eps"], sL["rho"])
+    pR, _ = eos.press_and_cs2(sR["eps"], sR["rho"])
+    WL, _ = lorentz(sL)
+    WR, _ = lorentz(sR)
+    b2L = compute_b2((sL["vx"], sL["vy"], sL["vz"]), (sL["Bx"], sL["By"], sL["Bz"]), WL)
+    b2R = compute_b2((sR["vx"], sR["vy"], sR["vz"]), (sR["Bx"], sR["By"], sR["Bz"]), WR)
+    return torch.clamp(0.5 * (pL + 0.5 * b2L + pR + 0.5 * b2R), min=1e-30)
+
+
+def stats_ref(norm_stats: dict) -> str:
+    """"none" (the archived stats) or "ptot_avg"."""
+    return stats_str(norm_stats, "ref", "none")
+
+
+def scale_by_ref(X_raw: torch.Tensor, version: str, p_ref: torch.Tensor):
+    """Raw features made scale-free: column j divided by p_ref**X_REF_POWER[j]."""
+    pw = torch.as_tensor(X_REF_POWER[version], dtype=X_raw.dtype,
+                         device=X_raw.device)
+    return X_raw / p_ref.to(X_raw.dtype)[:, None] ** pw
+
+
+def normalise(X_raw: torch.Tensor, norm_stats: dict,
+              p_ref: torch.Tensor = None) -> torch.Tensor:
     """Raw features -> the network's float32 input, as at training time.
 
-    ``x_transform`` (absent in the archived stats = "none") may be "asinh":
-    x -> asinh(x / x_scale) per feature before standardising, which turns
-    the scale symmetry of the problem (rho, p, B^2 -> lambda*) into a shift
-    for the large features instead of squeezing six decades into a few
-    standard deviations.  The build step (src/data/splits.py) calls this
-    same function on the training rows.
+    ``ref`` (absent in the archived stats = "none") may be "ptot_avg": the
+    features are first made scale-free with ``p_ref`` (see X_REF_POWER).
+    ``x_transform`` (absent = "none") may be "asinh": x -> asinh(x/x_scale)
+    per feature before standardising.  The split builder
+    (scripts/pstar_build_splits.py) calls this same function on the
+    training rows, so training and inference cannot drift apart.
     """
     X = X_raw
+    if stats_ref(norm_stats) == "ptot_avg":
+        if p_ref is None:
+            raise ValueError("these norm stats need p_ref (ref = ptot_avg)")
+        version = stats_feature_version(norm_stats) or FEATURE_VERSION
+        X = scale_by_ref(X, version, p_ref)
+    elif stats_ref(norm_stats) != "none":
+        raise ValueError(f"unknown ref {stats_ref(norm_stats)!r}")
     tr = stats_str(norm_stats, "x_transform", "none")
     as_t = lambda k: torch.as_tensor(norm_stats[k], dtype=X.dtype,
                                      device=X.device)
@@ -250,8 +304,13 @@ def normalise(X_raw: torch.Tensor, norm_stats: dict) -> torch.Tensor:
     return ((X - as_t("mu")) / as_t("sigma")).float()
 
 
-def denormalise_target(y_pred: torch.Tensor, norm_stats: dict) -> torch.Tensor:
-    """Network output -> p* (the target is standardised log10 p*)."""
+def denormalise_target(y_pred: torch.Tensor, norm_stats: dict,
+                       p_ref: torch.Tensor = None) -> torch.Tensor:
+    """Network output -> p*.  The target is standardised log10 p*, or
+    log10(p*/p_ref) when the stats say ref = "ptot_avg"."""
     y_mu = float(norm_stats["y_mu"])
     y_sigma = float(norm_stats["y_sigma"])
-    return torch.clamp(10.0 ** (y_pred.double() * y_sigma + y_mu), min=1e-30)
+    p = 10.0 ** (y_pred.double() * y_sigma + y_mu)
+    if stats_ref(norm_stats) == "ptot_avg":
+        p = p * p_ref.double()
+    return torch.clamp(p, min=1e-30)

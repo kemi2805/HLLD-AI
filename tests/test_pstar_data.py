@@ -146,23 +146,28 @@ def test_labeller_matches_hlld_flux_and_batches_do_not_matter():
         assert np.array_equal(lab[k], lab_b[k]), k
 
 
+@pytest.mark.parametrize("ref", ["none", "ptot_avg"])
 @pytest.mark.parametrize("transform", ["none", "asinh"])
-def test_hlld_ai_flux_sees_exactly_the_normalised_training_features(transform):
+def test_hlld_ai_flux_sees_exactly_the_normalised_training_features(transform, ref):
     """Inference normalises with the same function as the split builder, and
-    picks the feature set from the stamped version."""
+    picks the feature set, transform and pressure reference from the stats."""
     _, eos, sL, sR = _pairs(500, seed=2)
     v = ai.FEATURE_VERSION_V3
     lab = label(sL, sR, eos, versions=(v,))
     X = torch.from_numpy(lab["X_" + v])
     stats = dict(feature_version=np.array(v), x_transform=np.array(transform),
-                 y_mu=np.array(0.3), y_sigma=np.array(0.7))
+                 ref=np.array(ref), y_mu=np.array(0.3), y_sigma=np.array(0.7))
+    p_ref = ai.p_ref_from_prims(sL, sR, eos)
+    Xs = ai.scale_by_ref(X, v, p_ref) if ref == "ptot_avg" else X
     if transform == "asinh":
-        stats["x_scale"] = np.median(np.abs(X.numpy()), axis=0) + 1e-3
-        Xt = torch.asinh(X / torch.as_tensor(stats["x_scale"]))
+        stats["x_scale"] = np.median(np.abs(Xs.numpy()), axis=0) + 1e-3
+        Xt = torch.asinh(Xs / torch.as_tensor(stats["x_scale"]))
     else:
-        Xt = X
+        Xt = Xs
     stats["mu"], stats["sigma"] = Xt.mean(0).numpy(), Xt.std(0).numpy() + 1e-12
-    Xn = ai.normalise(X, stats)
+    Xn = ai.normalise(X, stats, p_ref)
+    assert torch.equal(Xn, ((Xt - torch.as_tensor(stats["mu"]))
+                            / torch.as_tensor(stats["sigma"])).float())
     seen = {}
 
     class _Net(torch.nn.Module):
@@ -174,5 +179,30 @@ def test_hlld_ai_flux_sees_exactly_the_normalised_training_features(transform):
     H.hlld_ai_flux(sL, sR, eos, _Net(), stats, row_diag=rd)
     assert torch.equal(seen["x"], Xn)
     assert rd["feature_version"] == v
-    # y = 0 -> p = 10^y_mu
-    assert torch.allclose(rd["p_nn"], torch.full((500,), 10 ** 0.3, dtype=torch.float64))
+    # y = 0 -> p = 10^y_mu (times p_ref with the reference)
+    want = torch.full((500,), 10 ** 0.3, dtype=torch.float64)
+    if ref == "ptot_avg":
+        want = want * p_ref
+    assert torch.allclose(rd["p_nn"], want, rtol=1e-12, atol=0)
+
+
+def test_scale_reference_makes_features_scale_free():
+    """rho, p, B^2 -> lambda * leaves the scaled features and p*/p_ref alone
+    (the exact symmetry ai_features.X_REF_POWER relies on)."""
+    _, eos, sL, sR = _pairs(1500, seed=4)
+    lam = 37.0
+    sc = lambda s: {**s, "rho": lam * s["rho"], "p": lam * s["p"],
+                    "eps": s["eps"], **{k: lam ** 0.5 * s[k] for k in ("Bx", "By", "Bz")}}
+    for v in (ai.FEATURE_VERSION, ai.FEATURE_VERSION_V3):
+        a = label(sL, sR, eos, versions=(v,))
+        b = label(sc(sL), sc(sR), eos, versions=(v,))
+        pa = ai.p_ref_from_prims(sL, sR, eos)
+        pb = ai.p_ref_from_prims(sc(sL), sc(sR), eos)
+        assert torch.allclose(pb, lam * pa, rtol=1e-13, atol=0)
+        Xa = ai.scale_by_ref(torch.from_numpy(a["X_" + v]), v, pa)
+        Xb = ai.scale_by_ref(torch.from_numpy(b["X_" + v]), v, pb)
+        assert float(((Xa - Xb).abs() / Xa.abs().clamp(min=1e-3)).max()) < 1e-10
+        ok = a["valid"] & b["valid"]
+        ra = a["p_star"][ok] / pa.numpy()[ok]
+        rb = b["p_star"][ok] / pb.numpy()[ok]
+        assert np.median(np.abs(ra / rb - 1)) < 1e-9

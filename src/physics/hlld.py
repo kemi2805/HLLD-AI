@@ -1863,13 +1863,15 @@ def hlld_ai_flux(
                                U_init_R, F_init_R, cmin, cmax, idir)
 
     # ── Normalize and run model ───────────────────────────────────────────────
-    X_norm = _ai.normalise(X_raw, norm_stats)
+    p_ref = (_ai.p_ref_from_prims(sL, sR, eos)
+             if _ai.stats_ref(norm_stats) != "none" else None)
+    X_norm = _ai.normalise(X_raw, norm_stats, p_ref)
     params = list(model.parameters())
     dev = params[0].device if params else X_norm.device
     with torch.no_grad():
         y_pred = model(X_norm.to(dev)).squeeze(-1).to(X_raw.device)  # (N,)
     # in float64 (the archived code exponentiated the float32 output)
-    p_nn = _ai.denormalise_target(y_pred, norm_stats)
+    p_nn = _ai.denormalise_target(y_pred, norm_stats, p_ref)
 
     calc_pre = HLLDComputation(
         F_init_L, F_init_R, U_init_L, U_init_R, sL, sR, cmin, cmax, idir
