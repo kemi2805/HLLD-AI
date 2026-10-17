@@ -1,0 +1,53 @@
+# ============================================================
+#  HLLD p* network, 2026-10 retrain: the UNION of the measured
+#  rotor and Orszag-Tang interface envelopes.
+#
+#  Data: scripts/pstar_make_dataset.py (sampler src/data/sampling.py,
+#  labels from today's hlld_flux via src/data/labelling.py)
+#  Splits: scripts/pstar_build_splits.py     Training: scripts/pstar_train.py
+#
+#  The box is the union of the two documented boxes:
+#    rotor  docs/rotor_envelope.md "Recommended sampling ranges"
+#           lrho [-1, 1.5], lpress [-3, 1.4], W = 1+10^[-4,1],
+#           Bn [0, 7.5], Bt [0, 6]          (measured, ~50% margin)
+#    OT     rmhd_final scripts/envelopes.sh `ot`
+#           rho [0.01, 31.6], pgas [0.001, 100], Bt [0.001, 5], Bx <= 7.5
+#  The joint caps (sigma, p/rho), the jump and coplanar components and the
+#  small-|Bn| / small-|Bt| tails are explained in src/data/sampling.py.
+# ============================================================
+
+sampling:
+  box:
+    lrho:    [-2.0, 1.5]    # rotor [-0.54, 1.18], OT [-1.80, 1.24] measured
+    lpress:  [-3.0, 2.0]    # rotor [-2.28, 0.92], OT [-2.41, 1.79] measured
+    wm1_log: [-4.0, 1.0]    # W = 1 + 10^u in [1.0001, 11]; measured max 8.36
+    Bn:      [0.0, 7.5]     # |B_n|; measured max 5.09 / 5.10
+    Bt:      [0.0, 6.0]     # |B_t|; measured max 3.98 / 3.53 (x-sweeps)
+  small_Bn: {frac: 0.25, log10: [-6.0, 0.0]}
+  small_Bt: {frac: 0.15, log10: [-6.0, -1.0]}
+  caps:
+    sigma_max: 16.0         # measured max 7.85 (rotor), 1.63 (OT)
+    log_T: [-2.5, 1.55]     # log10(p/rho); measured [-2.00, 1.05]
+  components: {indep: 0.25, indep_planar: 0.25, jump: 0.25, jump_planar: 0.25}
+  jump_log10: [-5.0, 0.0]   # relative size of R - L in the jump components
+
+generation:
+  gammas: [1.6666666666666667, 1.3333333333333333]   # rotor 5/3, OT 4/3; by chunk parity
+  rows_per_chunk: 500000
+  seed: 20261017
+
+# Same network as the archived checkpoints/default-mignone.pt
+model:
+  hidden: [256, 256, 256, 256, 128, 64]
+  activation: silu
+  dropout: 0.0
+
+training:            # the archived run's optimiser settings, larger batch
+  epochs: 300
+  batch_size: 32768
+  lr: 3.0e-3
+  weight_decay: 1.0e-4
+  lr_patience: 10
+  lr_factor: 0.5
+  lr_floor: 1.0e-5
+  grad_clip: 1.0

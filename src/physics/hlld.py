@@ -1206,6 +1206,8 @@ def hlld_flux(
     idir: int = 0,
     lo_fac: float = 0.1,
     hi_fac: float = 10,
+    *,
+    row_diag: dict = None,
 ) -> Tuple[Cons, Cons, torch.Tensor]:
     """
     HLLD numerical flux for SR-MHD in Minkowski spacetime.
@@ -1221,6 +1223,14 @@ def hlld_flux(
     lo_fac, hi_fac : float
         Bracket factors around the HLL pressure estimate for the
         secant/bisection root-finder.
+    row_diag : dict, optional (keyword only)
+        If given, filled with PER-ROW diagnostics for the p* data generator
+        (``src/data/labelling.py``): ``p_root`` (the root-finder's p* before
+        the HLLE fallback overwrites failed rows), ``err``, ``n_iter``,
+        ``wave_order_bad``, ``bn_zero``, ``failed``, ``p_hll`` and ``resid``
+        (the residual at ``p_root``).  Only read, never written back: the
+        returned flux, state and p* are identical with or without it, and
+        the default (None) does no extra work at all.
 
     Returns
     -------
@@ -1527,11 +1537,19 @@ def hlld_flux(
         pstar_cost=cost,
         max_iters=int(n_iter.max()),
     )
+    if row_diag is not None:
+        row_diag.update(p_root=p_star, err=err, n_iter=n_iter,
+                        wave_order_bad=wave_order_bad, bn_zero=bn_zero,
+                        failed=failed, p_hll=p_hll)
     if torch.any(failed):
         p_star = torch.where(failed, -torch.abs(p_hll) - 1e-10, p_star)
         for k in keys:
             fD[k] = torch.where(failed, fH[k], fD[k])
             uD[k] = torch.where(failed, uH[k], uD[k])
+    if row_diag is not None:
+        # last use of `calc`: evaluating the residual re-runs its algebra,
+        # which nothing above reads any more
+        row_diag["resid"] = _t(calc(row_diag["p_root"]))
 
     # ── Final safety: replace any residual NaN / Inf with HLLE ───────────────
     # for k in keys:
@@ -1778,6 +1796,8 @@ def hlld_ai_flux(
     mode: str = "oneshot",
     warmstart_tol: float = _PSTAR_TOL,
     warmstart_max_iter: int = 30,
+    *,
+    row_diag: dict = None,
 ) -> Tuple[Cons, Cons, torch.Tensor]:
     """HLLD flux with the star pressure supplied by a neural network.
 
@@ -1800,6 +1820,16 @@ def hlld_ai_flux(
 
     The per-element iteration count is recorded in ``LAST_DIAG`` so the two
     arms can be compared on cost as well as accuracy.
+
+    The feature definition is chosen by the ``feature_version`` stamped in
+    ``norm_stats`` (absent = v2, the archived checkpoint's), and the input
+    transform by its ``x_transform``; both go through
+    ``ai_features.pstar_features`` / ``normalise``, the same calls the data
+    labeller and the split builder make.  ``row_diag`` (keyword only), if
+    given, is filled with per-row ``p_nn``, ``p_used`` (the p* the flux was
+    built from, before failed rows are overwritten: p_nn one-shot, the
+    secant's iterate warm-started), ``resid_nn``, ``err``, ``n_iter``,
+    ``wave_order_bad``, ``bn_zero`` and ``failed``.
     """
     if mode not in ("oneshot", "warmstart"):
         raise ValueError(f"unknown AI mode {mode!r}")
@@ -1828,20 +1858,18 @@ def hlld_ai_flux(
     b2R = compute_b2((sR["vx"], sR["vy"], sR["vz"]),
                      (sR["Bx"], sR["By"], sR["Bz"]), lfacR)
 
-    RL, RR = _ai.r_vectors(U_init_L, F_init_L, U_init_R, F_init_R, cmin, cmax)
-    X_raw = _ai.build_pstar_features(sL, sR, uL, uR, RL, RR, cmin, cmax, idir)
+    version = _ai.stats_feature_version(norm_stats) or _ai.FEATURE_VERSION
+    X_raw = _ai.pstar_features(version, sL, sR, uL, uR, U_init_L, F_init_L,
+                               U_init_R, F_init_R, cmin, cmax, idir)
 
     # ── Normalize and run model ───────────────────────────────────────────────
-    mu = torch.tensor(norm_stats["mu"], dtype=X_raw.dtype, device=X_raw.device)
-    sigma = torch.tensor(norm_stats["sigma"], dtype=X_raw.dtype, device=X_raw.device)
-    X_norm = ((X_raw - mu) / sigma).float()
-
+    X_norm = _ai.normalise(X_raw, norm_stats)
+    params = list(model.parameters())
+    dev = params[0].device if params else X_norm.device
     with torch.no_grad():
-        y_pred = model(X_norm).squeeze(-1)  # (N,)
-
-    y_mu = float(norm_stats["y_mu"])
-    y_sigma = float(norm_stats["y_sigma"])
-    p_nn = torch.clamp(10.0 ** (y_pred * y_sigma + y_mu), min=1e-30)
+        y_pred = model(X_norm.to(dev)).squeeze(-1).to(X_raw.device)  # (N,)
+    # in float64 (the archived code exponentiated the float32 output)
+    p_nn = _ai.denormalise_target(y_pred, norm_stats)
 
     calc_pre = HLLDComputation(
         F_init_L, F_init_R, U_init_L, U_init_R, sL, sR, cmin, cmax, idir
@@ -1982,6 +2010,11 @@ def hlld_ai_flux(
     bn_zero = (BnL.abs() < 1e-14) & (BnR.abs() < 1e-14)
 
     failed = wave_order_bad | bn_zero | (err_ws > 0)
+    if row_diag is not None:
+        row_diag.update(p_nn=p_nn, p_used=p_star, resid_nn=resid_nn,
+                        err=err_ws, n_iter=n_iter,
+                        wave_order_bad=wave_order_bad, bn_zero=bn_zero,
+                        failed=failed, feature_version=version)
     n = failed.numel()
     conv = err_ws == 0
     LAST_DIAG.update(

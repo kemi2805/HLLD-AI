@@ -284,43 +284,45 @@ def _load_ai_solver(cfg: dict, device: str):
         "norm_stats", "data/processed/default-mignone/norm_stats.npz"
     )
 
-    from src.physics.ai_features import FEATURE_VERSION, N_FEATURES
+    from src.physics.ai_features import (FEATURE_SETS, FEATURE_VERSION,
+                                         n_features, stats_feature_version)
+
+    norm_stats = dict(np.load(stats_path))
+
+    # Refuse a checkpoint whose features were built by a definition this
+    # code does not have.  A mismatch is invisible at run time -- the
+    # network happily consumes any vector of the right length and returns a
+    # plausible-looking p* -- so it has to be caught here rather than
+    # debugged later from bad physics.  The stamp also SELECTS the feature
+    # set: hlld_ai_flux builds whichever version the stats name.
+    stamped = stats_feature_version(norm_stats)
+    if stamped is None:
+        print(f"  WARNING: {stats_path} predates feature versioning; assuming "
+              f"it matches {FEATURE_VERSION!r}. Regenerate to remove this "
+              f"warning.")
+        stamped = FEATURE_VERSION
+    elif stamped not in FEATURE_SETS:
+        raise ValueError(
+            f"feature-version mismatch: checkpoint stats {stats_path} were "
+            f"built with {stamped!r} but this code produces "
+            f"{sorted(FEATURE_SETS)}. Retrain, or check out the matching "
+            f"commit."
+        )
+    n_feat = n_features(stamped)
+    n_in = int(norm_stats["mu"].shape[0]) if "mu" in norm_stats else n_feat
+    if n_in != n_feat:
+        raise ValueError(
+            f"{stats_path} has {n_in} features but ai_features defines "
+            f"{n_feat} for {stamped!r}"
+        )
 
     model = PressureNet(
-        n_input=ml_cfg.get("n_input", N_FEATURES),
+        n_input=ml_cfg.get("n_input", n_feat),
         hidden=ml_cfg.get("hidden", [256, 256, 256, 128, 64]),
         activation=ml_cfg.get("activation", "tanh"),
     ).to(device)
     model.load_state_dict(torch.load(ckpt_path, map_location=device))
     model.eval()
-
-    norm_stats = dict(np.load(stats_path))
-
-    # Refuse a checkpoint whose features were built by a different
-    # definition.  A mismatch is invisible at run time -- the network happily
-    # consumes any 15 numbers and returns a plausible-looking p* -- so it has
-    # to be caught here rather than debugged later from bad physics.
-    stamped = norm_stats.get("feature_version")
-    stamped = (str(stamped) if stamped is not None
-               and not hasattr(stamped, "size") else
-               (str(stamped.item()) if stamped is not None else None))
-    if stamped is None:
-        print(f"  WARNING: {stats_path} predates feature versioning; assuming "
-              f"it matches {FEATURE_VERSION!r}. Regenerate to remove this "
-              f"warning.")
-    elif stamped != FEATURE_VERSION:
-        raise ValueError(
-            f"feature-version mismatch: checkpoint stats {stats_path} were "
-            f"built with {stamped!r} but this code produces "
-            f"{FEATURE_VERSION!r}. Retrain, or check out the matching commit."
-        )
-
-    n_in = int(norm_stats["mu"].shape[0]) if "mu" in norm_stats else N_FEATURES
-    if n_in != N_FEATURES:
-        raise ValueError(
-            f"{stats_path} has {n_in} features but ai_features defines "
-            f"{N_FEATURES}"
-        )
     return model, norm_stats
 
 
