@@ -24,7 +24,7 @@ from src.physics.linearised import linearised_flux
 # and importing exact_flux drags in the rmhd_final solver, which should not
 # happen for an ordinary HLLD run.
 SOLVERS = {"hlld": hlld_flux, "hlle": hlle_flux, "hllc": hllc_flux,
-           "linear": linearised_flux, "exact": None}
+           "linear": linearised_flux, "exact": None, "hlld_ai": None}
 
 # problem -> (domain, gamma, default t_end, bc_x, bc_y, has pi-rotation symmetry)
 PROBLEMS = {
@@ -118,6 +118,26 @@ def main():
     ap.add_argument("--exact-retries", type=int, default=0,
                     help="retry ladder rounds per unconverged interface")
     ap.add_argument("--exact-max-iter", type=int, default=40)
+    # --- p*-network options (ignored unless --solver hlld_ai; branch pstar-ml) ---
+    ap.add_argument("--ai-checkpoint", default=None,
+                    help="hlld_ai: the PressureNet state_dict (.pt)")
+    ap.add_argument("--ai-norm-stats", default=None,
+                    help="hlld_ai: the norm_stats.npz it was trained with; "
+                         "its feature_version / ref / x_transform select "
+                         "the features (driver._load_ai_solver checks them)")
+    ap.add_argument("--ai-hidden", default="256,256,256,256,128,64",
+                    help="hlld_ai: the network's hidden layers")
+    ap.add_argument("--ai-activation", default="silu")
+    ap.add_argument("--ai-mode", default="oneshot",
+                    choices=["oneshot", "warmstart"],
+                    help="hlld_ai: use the network's p* directly (oneshot), "
+                         "or seed HLLD's own secant with it (warmstart)")
+    ap.add_argument("--face-stats", action="store_true",
+                    help="hlld / hlld_ai: tally per sweep what the solver "
+                         "did with every face (its own flux, or HLLE for "
+                         "B_n = 0 / wave order / other) into "
+                         "<out>/face_stats.{csv,json}.  Reads the solver's "
+                         "own masks; no flux changes")
     ap.add_argument("--harvest", type=str, default=None,
                     help="directory to record solved-after-retry and "
                          "unsolved Riemann problems into")
@@ -322,6 +342,50 @@ def main():
               f"retries={a.exact_retries}  max_iter={a.exact_max_iter}"
               + (f"  harvest -> {a.harvest}" if a.harvest else ""))
 
+    if a.solver == "hlld_ai":
+        # the network is loaded ONCE; every sweep, x and y, calls the same
+        # partial.  hlld_ai_flux carries HLLD's fallback mask: wave order and
+        # B_n = 0 (the rotor's y-sweeps start with B_y = 0 everywhere) go to
+        # HLLE, and in warmstart mode so does a secant that did not converge
+        import functools
+        import hashlib
+        from src.physics import ai_features as _ai
+        from src.physics.driver import _load_ai_solver
+        from src.physics.hlld import hlld_ai_flux
+        for f, opt in ((a.ai_checkpoint, "--ai-checkpoint"),
+                       (a.ai_norm_stats, "--ai-norm-stats")):
+            if not f or not os.path.isfile(f):
+                sys.exit(f"--solver hlld_ai needs {opt} (got {f!r})")
+        hidden = [int(h) for h in a.ai_hidden.split(",") if h]
+        model, norm_stats = _load_ai_solver(dict(ml=dict(
+            checkpoint=a.ai_checkpoint, norm_stats=a.ai_norm_stats,
+            hidden=hidden, activation=a.ai_activation)), "cpu")
+        flux_fn = functools.partial(hlld_ai_flux, model=model,
+                                    norm_stats=norm_stats, mode=a.ai_mode)
+        md5 = hashlib.md5(open(a.ai_checkpoint, "rb").read()).hexdigest()
+        meta.update(ai=dict(
+            checkpoint=os.path.abspath(a.ai_checkpoint), md5=md5,
+            norm_stats=os.path.abspath(a.ai_norm_stats),
+            feature_version=(_ai.stats_feature_version(norm_stats)
+                             or _ai.FEATURE_VERSION),
+            ref=_ai.stats_ref(norm_stats),
+            x_transform=_ai.stats_str(norm_stats, "x_transform", "none"),
+            mode=a.ai_mode, hidden=hidden, activation=a.ai_activation))
+        _write_meta(out, meta)
+        print(f"  hlld_ai: {a.ai_mode}  {a.ai_checkpoint} (md5 {md5[:12]})  "
+              f"features {meta['ai']['feature_version']}  ref "
+              f"{meta['ai']['ref']}  transform {meta['ai']['x_transform']}",
+              flush=True)
+    tally = None
+    if a.face_stats:
+        if a.solver not in ("hlld", "hlld_ai"):
+            sys.exit(f"--face-stats reads hlld/hlld_ai's per-face masks; it "
+                     f"does not apply to --solver {a.solver}")
+        from src.physics.face_stats import FaceTally
+        tally = FaceTally(flux_fn, os.path.join(out, "face_stats.csv"),
+                          append=bool(a.restart))
+        flux_fn = tally
+
     t, step, t0 = 0.0, 0, time.time()
     next_snap = 1
     if a.restart:
@@ -357,6 +421,8 @@ def main():
                 "written and the exit status is non-zero."
                 % (step, t, dt, float(st.prims["rho"].max()),
                    float(st.prims["p"].min())))
+        if tally is not None:
+            tally.step = step + 1
         st, diag = rk_step_ct(st, g, eos, dt, scheme="rk3",
                               bc_x=bc_x, bc_y=bc_y,
                               flux_fn=flux_fn,
@@ -401,6 +467,8 @@ def main():
                       f"{dx_.get('mean_iters', float('nan')):.2f},{c2p_bad},"
                       f"{dx_.get('n_exact', -1)},{dx_.get('n_verified', -1)}\n")
             log.flush()
+            if tally is not None:
+                tally.flush()
             extra = f"sym={sym:.2e} " if P["sym"] else ""
             print(f"  step {step:5d} t={t:.4f} dt={dt:.2e} "
                   f"divB={float(d.abs().max()):.2e} {extra}"
@@ -421,6 +489,9 @@ def main():
             # the stamp has to be finished here too: a pilot run exists
             # precisely to be asked what a step costs
             wall = time.time() - t0
+            if tally is not None:
+                meta.update(face_stats=tally.close(
+                    os.path.join(out, "face_stats.json")))
             meta.update(steps=step, steps_here=steps_here,
                         wall_s=round(wall, 1),
                         s_per_step=round(wall / max(steps_here, 1), 3),
@@ -437,6 +508,11 @@ def main():
 
     save("fin", t)
     log.close()
+    if tally is not None:
+        # this segment's totals (a resumed run: since the restart; the
+        # .csv has every sweep of the whole run)
+        meta.update(face_stats=tally.close(os.path.join(out, "face_stats.json"),
+                                           solver=a.solver, n=a.n))
     if harvester is not None:
         # the final partial buffers were never written before this call
         hs = harvester.close()
