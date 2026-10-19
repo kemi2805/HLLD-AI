@@ -69,9 +69,8 @@ def main():
     d = za["rho"] - zh["rho"]
     lim = float(np.abs(d).max()) or 1.0
 
-    fig = plt.figure(figsize=(15.5, 4.2))
-    gs = fig.add_gridspec(1, 4, width_ratios=[1, 1, 1, 1.25], wspace=0.32)
-    axs = [fig.add_subplot(gs[0, i]) for i in range(4)]
+    fig, axs = plt.subplots(1, 4, figsize=(18.5, 5.0), layout="constrained",
+                            gridspec_kw=dict(width_ratios=[1, 1, 1, 1.15]))
     for ax, f, title in ((axs[0], lh, f"log10 rho - hlld, {a.n}^2, t = {t_h:.3f}"),
                          (axs[1], la, f"log10 rho - hlld_ai one-shot ({a.ckpt_label}), "
                                       f"{a.n}^2, t = {t_a:.3f}")):
@@ -79,7 +78,7 @@ def main():
                        interpolation="nearest")
         ax.set_title(title, fontsize=9, color=INK)
         ax.set_xlabel("x"); ax.set_ylabel("y")
-        cb = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.03)
+        cb = fig.colorbar(im, ax=ax, shrink=0.82, pad=0.02)
         cb.ax.tick_params(labelsize=8, colors=INK2)
     im = axs[2].imshow(d.T, origin="lower", extent=ext, cmap=div,
                        norm=TwoSlopeNorm(vmin=-lim, vcenter=0.0, vmax=lim),
@@ -87,7 +86,7 @@ def main():
     axs[2].set_title(f"rho(hlld_ai) - rho(hlld), {a.n}^2, t = {t_a:.3f}",
                      fontsize=9, color=INK)
     axs[2].set_xlabel("x"); axs[2].set_ylabel("y")
-    cb = fig.colorbar(im, ax=axs[2], fraction=0.046, pad=0.03)
+    cb = fig.colorbar(im, ax=axs[2], shrink=0.82, pad=0.02)
     cb.ax.tick_params(labelsize=8, colors=INK2)
 
     ax = axs[3]
@@ -101,16 +100,16 @@ def main():
                 continue
             ax.semilogy(t, s, ls, color=RUN_COLOR[m], lw=1.6,
                         label=f"{RUN_LABEL[m]}, {n}^2")
-            ax.annotate(f"{RUN_LABEL[m]} {n}^2", (t[-1], s[-1]),
-                        xytext=(4, 0), textcoords="offset points",
-                        fontsize=7, color=INK2, va="center")
     ax.set_title("pi-rotation symmetry error (diag.csv)", fontsize=9, color=INK)
     ax.set_xlabel("t"); ax.set_ylabel("symmetry error")
     ax.grid(True, which="major", color=GRID, lw=0.6)
-    ax.legend(fontsize=7, frameon=False, loc="lower right")
-    ax.set_xlim(0, max(t_h, t_a) * 1.28)
+    ax.legend(fontsize=7.5, frameon=False, loc="upper center",
+              bbox_to_anchor=(0.5, -0.16), ncol=2)
+    ax.set_xlim(0, max(t_h, t_a))
+    for k in (0, 1, 2):
+        axs[k].set_aspect("equal")
     os.makedirs(os.path.dirname(os.path.abspath(a.out)), exist_ok=True)
-    fig.savefig(a.out, dpi=150, bbox_inches="tight")
+    fig.savefig(a.out, dpi=150)
     print(f"{a.out}: max |rho diff| {lim:.3e}, mean |rho diff| {np.abs(d).mean():.3e}")
 
 
