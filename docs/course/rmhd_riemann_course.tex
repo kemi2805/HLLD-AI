@@ -2482,8 +2482,8 @@ returns a regular answer if one exists. Two further consequences matter in pract
 
 The reference implementation keeps a ledger of every interface its exact solver loses.
 Three classes were documented (solver record, \S5--5a and the four-quadrant section of
-\S7). The closed-form Alfvén retry of \cref{sec:rotational} has since removed much of the
-first and the third, so each is given with what is known now:
+\S7). The closed-form Alfvén retry of \cref{sec:rotational} has since answered many of the
+faces in the first and the third, so each is given with what is known now:
 
 \begin{enumerate}
 \item \textbf{Compound waves.} Running each lost interface as a one-dimensional shock tube
@@ -2499,9 +2499,10 @@ first and the third, so each is given with what is known now:
   is the regime near $B_t=0$ where the slow, Alfvén and fast speeds approach one another.
   \emph{Revised:} at the resolution of these tube tests a $180^\circ$ rotation riding on a
   slow shock looks the same, and the searches that found no such root built their rotations
-  from the rigid seed of \cref{sec:rotational}. With the closed-form retry most of the faces
-  the runs had lost are answered by regular solutions with a $180^\circ$ rotation: 72\% of
-  the 573 rotor faces gained, 90--93\% on Orszag--Tang (solver record \S5e).
+  from the rigid seed of \cref{sec:rotational}. With the closed-form retry about half of the
+  faces the runs had lost are answered, most of them by regular solutions with a
+  $180^\circ$ rotation: 72\% of the 573 rotor faces gained, 90--93\% on Orszag--Tang
+  (solver record \S5e).
 \item \textbf{Field nearly normal to the face.} About half of what production lost on the
   rotor (695 of 1371 failing interfaces in the ledger) is elementary according to the
   shock-tube test. These interfaces have $|B_n|/|B_t|$ with median 4.4 (0.85 on solved
@@ -2516,8 +2517,8 @@ first and the third, so each is given with what is known now:
   in flow with $W\approx6.4$ and magnetisation $0.045$, where the slow waves move with their
   Alfvén waves (gap $\sim2\times10^{-4}$) and the whole inner fan is about $0.01$ wide.
   Nothing in the solver chain closed 95\% of them, and the record concluded that a
-  formulation for a slow wave travelling with its Alfvén wave was needed. \emph{Revised:} it
-  was mostly the Alfvén solve. With the closed-form retry the run solves 96.0\% of the
+  formulation for a slow wave travelling with its Alfvén wave was needed. \emph{Revised:} a
+  large part of it was the Alfvén solve. With the closed-form retry the run solves 96.0\% of the
   attempted faces, and of 4000 faces it had lost, 1506 are solved and none lost: 643 by
   regular solutions with a $180^\circ$ rotation and 849 by intermediate shocks, almost all
   from the planar solver (solver record \S5e).

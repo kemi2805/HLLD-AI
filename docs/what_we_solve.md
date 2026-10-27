@@ -862,10 +862,10 @@ enumerates every rotation including pi, found none. PDF for the paper:
 > **Retracted in part 2026-10-26 (section 5e).** "Either way no admissible
 > elementary root exists" rested on brute force, whose pi-rotations went
 > through the Alfvén solve's rigid seed, and that seed cannot build a strongly
-> relativistic 180-degree rotation. With the closed-form rotation most of the
-> faces the runs had lost are answered by regular solutions with a 180-degree
-> rotation -- exactly the structure this test cannot tell from a reversal
-> fused to a jump. The census below predates that.
+> relativistic 180-degree rotation. With the closed-form rotation about half
+> of the faces the runs had lost are answered, most of them by regular
+> solutions with a 180-degree rotation -- exactly the structure this test
+> cannot tell from a reversal fused to a jump. The census below predates that.
 
 ### Where the stubborn population stands (2026-09-21)
 
@@ -2016,7 +2016,7 @@ conditions fail, which only `slow_shock_b.MARGIN` admits):
 | four-quadrant 64² (1506) | 0.9% | 0.0% | 42.7% | **56.4%** |
 | four-quadrant, tilted (58) | 0.0% | **84.5%** | 0.0% | 15.5% |
 
-Most of what the runs had lost has a regular solution with a 180-degree
+Most of the recovered faces have a regular solution with a 180-degree
 rotation: the Balsara 1 type, and the structure the tube test of section 5
 cannot tell from a reversal fused to a jump. The seven-wave Newton's gains
 are almost all of that kind; the planar rescue's are mostly intermediate
@@ -2089,7 +2089,8 @@ re-answered on both hosts; both suites pass (calea jobs 52238 and 54609).
 and its census predate the closed form: their "no elementary root" and
 "unsolvable" verdicts on reversing faces do not stand. The four-quadrant
 ledger of section 7 concluded that slow waves travelling with their Alfvén
-waves needed a new formulation; it was mostly this sub-solver.
+waves needed a new formulation; a large part of it was this sub-solver (the
+run's losses fall from 6.94% to 4.00% of the attempted faces).
 
 **Open (the user's decisions).** Which root to return when a regular and an
 intermediate-shock answer are both reachable: the chain keeps the first it
@@ -2787,7 +2788,7 @@ rmhd checkout), raises method a's starts from 3 to 7 per face and recovers
 slow wave travelling with its Alfvén wave in fast tangential flow; neither
 seeds nor the existing branches provide it.
 
-> **Superseded 2026-10-26/27 (section 5e): it was mostly the Alfvén solve.**
+> **Superseded 2026-10-26/27 (section 5e): a large part of it was the Alfvén solve.**
 > With the closed-form rotation the full run solves 96.00% of its attempted
 > faces (93.06% without it; calea jobs 50351-50356), and of 4,000 faces this
 > run's harvest had lost, 1,506 are gained and none lost (job 50319): 643 by
