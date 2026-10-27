@@ -621,7 +621,11 @@ centre sits e^1.26 ~ 3.5x above sqrt(2 P_bar). Re-run with half-widths 1.5
 7.5 points.)
 
 **These two rates are UNGATED and the rotation column is wrong — see the
-2026-09-12 correction below before citing either.** What survives: the
+2026-09-12 correction below before citing either.** *(And since 2026-10-26,
+section 5e: every rotation in this search, free or pi, was built by the Alfvén
+solve from its rigid seed, which cannot build strongly relativistic
+rotations, so the stubborn group's stall is not evidence that no root
+exists.)* What survives: the
 instrument drives known roots to machine precision (3.4e-14) while the
 stubborn set stalls twelve orders of magnitude higher, and three confounds
 are closed:
@@ -855,6 +859,14 @@ Either way no admissible elementary root exists: brute force, which
 enumerates every rotation including pi, found none. PDF for the paper:
 `figs/compound_wave_pair.pdf`.*
 
+> **Retracted in part 2026-10-26 (section 5e).** "Either way no admissible
+> elementary root exists" rested on brute force, whose pi-rotations went
+> through the Alfvén solve's rigid seed, and that seed cannot build a strongly
+> relativistic 180-degree rotation. With the closed-form rotation most of the
+> faces the runs had lost are answered by regular solutions with a 180-degree
+> rotation -- exactly the structure this test cannot tell from a reversal
+> fused to a jump. The census below predates that.
+
 ### Where the stubborn population stands (2026-09-21)
 
 Of the 1280 interfaces that were stubborn in the pre-fix 64^2 harvest:
@@ -877,6 +889,10 @@ are measurement tools; none runs in production, and turning any of them into
 a production rescue would need its own paired rotor replay.
 
 ### Where compound waves appear, and what predicts them (2026-09-22)
+
+*("Unsolvable" in this section means unsolved by the solvers of 2026-09-22,
+before the closed-form Alfvén rotation of section 5e; "compound" is the tube
+test's label, which a 180-degree rotation riding on a slow wave also earns.)*
 
 The screens above worked on harvest rows, which carry no grid position. To
 put compound waves on the rotor, the census rebuilds every interface from
@@ -1060,6 +1076,13 @@ first-call compilation alone -- so 8% is the optimistic reading.
 
 ### Which of the two solutions does a finite-volume run pick? (2026-09-24)
 
+> **Superseded 2026-10-16/17: read "Balsara 1 at 16384-32768 cells" below
+> before citing this section.** Plateau distances cannot separate answers
+> this close. Measured where the answers differ, and up to 32768 cells,
+> WENO5-Z goes to the compound answer with both fluxes, MC does not settle on
+> the intermediate shock, and Balsara 1 has a one-parameter family of exact
+> solutions, not two.
+
 Balsara 1 carries the non-uniqueness in its cleanest form: a compound wave
 and a single intermediate shock, both exact, 7.7e-4 apart in the star state.
 Which one a scheme converges to is a property of ITS dissipation, not of the
@@ -1114,6 +1137,12 @@ choice). So our family is the regular waves **plus intermediate shocks within
 0.03 of the Alfven speed**, and no diagnostic says when an answer used one.
 The paper must state this.
 
+> **Since 2026-10-27 production returns the REGULAR solution instead**
+> (section 5e): with the closed-form Alfvén rotation the seven-wave Newton
+> answers Balsara 1 with a 180-degree rotation at 0.03448 and a Lax slow shock
+> at 0.04889. The intermediate shock above is what production returned until
+> then, and what it returns with `RMHD_ALFVEN_EXACT=0`.
+
 **Checked independently** (`scripts/balsara1_study.py checks`):
 
 - the jump conditions across the three discontinuities, recomputed with
@@ -1134,7 +1163,11 @@ The paper must state this.
 - it is the only root the planar solver reaches from a 224-start grid (calea
   42571, `balsara1_study.py roots`): 192 starts converge, all to it; with a
   pi-rotation at either or both Alfven waves -- the regular alternative that
-  evolutionarity would prefer -- not one start converges.
+  evolutionarity would prefer -- not one start converges. **Retracted
+  2026-10-26:** the pi branches failed because the Alfvén solve could not
+  build a strongly relativistic 180-degree rotation from its rigid seed
+  (section 5e). With the closed form the left pi branch converges, to the
+  regular solution.
 
 **The compound alternative, on its own** (second figure). Its attached fan is
 computed correctly -- every sampled state moves at its own ray's slow speed to
@@ -1152,19 +1185,101 @@ the density about 15% of the jump above the plateau, the mean deviation is:
 HLLE lands on our plateau; HLLD/MC keeps a dip of a few per cent -- the noise
 behind a slowly moving shock (this one moves at 0.031) that the standing-shock
 test of section 7 shows; WENO5-Z sits on the compound side at these
-resolutions, which the runs at 4096-32768 cells (below) are to settle.
+resolutions, and the runs at 4096-32768 cells (next section) show that it
+goes there.
 The spike in rho and p just behind the shock in every run (up to ~0.77) is the
 scheme's overshoot inside its shock layer: about two cells wide at every
 resolution, so it narrows with the grid, where the compound fan keeps its
 width.
 
 **What remains a definition, not a bug:** for coplanar data ideal MHD admits
-more than one solution, evolutionarity prefers a regular one we cannot find,
-and the published exact solver and every scheme we ran give this one.
+more than one solution. (Written on 2026-10-16 as "evolutionarity prefers a
+regular one we cannot find, and the published exact solver and every scheme
+we ran give this one". All three parts have changed since: the regular
+solution is found, it has been production's answer since 2026-10-27, and the
+schemes do not agree -- next section.)
 
 ![Balsara 1: our answer and the runs](figs/balsara1.png)
 
 ![The left slow wave: our intermediate shock against the compound alternative](figs/balsara1_fan.png)
+
+### Balsara 1 at 16384-32768 cells, and a one-parameter family of exact solutions (2026-10-17; re-derived 2026-10-26)
+
+**The runs.** HLLD and HLLE with MC and WENO5-Z up to 16384 cells, and HLLE
+with MC to 32768 (calea jobs 42574 and 42589, `results/compound_selection_2026-10`;
+the runs of the previous sections are in `results/compound_selection_2026-09`;
+HLLD with MC at 32768 hit the 24 h limit). They are measured where the two
+answers differ rather than on the plateau alone: the mean |B_y - answer| over
+xi 0.026-0.050, which holds the left slow wave and the compound fan (the two
+answers are 0.033 apart there), and the star plateau's median density
+(`scripts/balsara1_selection.py measure`):
+
+| mean \|B_y - answer\|, xi 0.026-0.050: to ours / to the compound | 4096 | 8192 | 16384 | 32768 |
+|---|---|---|---|---|
+| HLLD + MC | 0.027 / 0.040 | **0.020** / 0.050 | 0.025 / 0.053 | |
+| HLLE + MC | 0.053 / 0.049 | 0.029 / 0.038 | **0.019** / 0.037 | 0.022 / 0.047 |
+| HLLD + WENO5-Z | 0.064 / 0.030 | 0.051 / 0.017 | 0.043 / **0.014** | |
+| HLLE + WENO5-Z | 0.074 / 0.043 | 0.055 / 0.022 | 0.044 / **0.015** | |
+
+| star plateau density, relative to ours (1e-3) | 4096 | 8192 | 16384 | 32768 |
+|---|---|---|---|---|
+| HLLD + MC | +0.52 | +0.61 | +0.85 | |
+| HLLE + MC | +0.01 | +0.27 | +0.42 | +0.67 |
+| HLLD + WENO5-Z | -1.42 | -1.28 | **-1.10** | |
+| HLLE + WENO5-Z | -1.62 | -1.39 | -1.27 | |
+| (the compound answer) | -1.09 | | | |
+
+- **WENO5-Z goes to the compound answer, with both fluxes.** Its distance to
+  the compound falls to 0.014-0.015 at 16384 cells (halving per doubling up to
+  8192, slower after), while its distance to ours stays above the 0.033 that
+  separates the two answers; HLLD + WENO5-Z's plateau at 16384 cells is the
+  compound's (-1.10e-3 against -1.09e-3). The reconstruction selects, not the
+  flux.
+- **MC does not settle on ours.** Its distance to ours bottoms out (HLLD
+  0.020 at 8192 cells, HLLE 0.019 at 16384) and grows again, and its plateau
+  passes ours and keeps rising -- away from the compound answer too. A dip
+  (rho and p low, B_y overshooting to -0.46..-0.485) fills the wedge between
+  the intermediate shock (xi 0.031) and the slow characteristic behind it
+  (0.038) and deepens with the grid: a compression steepening toward a slow
+  shock.
+
+**The family.** The intermediate shock is not evolutionary, so the jump
+conditions do not fix the state behind it. One parameter, b = B_y behind the
+left field reversal, labels a family of exact solutions: an intermediate shock
+A -> X(b), then a slow wave from X to the contact's field
+(`scripts/balsara1_family.py build`, 27 members):
+
+| b | the left slow structure | star plateau rho, rel. to ours (1e-3) |
+|---|---|---|
+| -0.310 | the intermediate shock is sonic behind and its rarefaction attaches: **the compound wave** | -1.09 |
+| -0.4285 < b < -0.310 | intermediate shock + a detached slow rarefaction | -1.09 .. 0 |
+| **-0.4285** | the intermediate shock alone: **ours, = GR06** | 0 |
+| -0.6414 < b < -0.4285 | intermediate shock + a Lax slow shock (0.038-0.049) | 0 .. +11.0 |
+| **-0.641406** | no density or pressure jump, the Alfvén speed on both sides (0.034484): **a 180-degree rotational discontinuity + a Lax slow shock at 0.04889, the regular solution** | **+11.04** |
+| beyond | the shock is no longer intermediate and the entropy falls: inadmissible | |
+
+Every member is certified (`balsara1_family.py check`): the contact to
+1e-13, both shocks' jump conditions to 1e-16 with `jump.rh_resid` and with
+HLLD's own flux formulas (b = -0.37, -0.47, -0.55), the entropy rising across
+every shock -- and falling monotonically along the family toward the regular
+end. The regular end is the answer the planar solver's left pi branch now
+reaches directly (`balsara1_family.py regular`, which needs the closed-form
+rotation of section 5e): p_LF 0.695892, B_t* -0.428531, p_RF 0.696694, equal
+to the digits printed.
+
+**The runs on the family.** An MC run's b behind its shock drifts with the
+grid: HLLE -0.448 / -0.458 / -0.472 at 8192 / 16384 / 32768 cells, HLLD
+-0.468 / -0.485 at 8192 / 16384. The plateau gas shocked most recently
+matches the member of the run's current b, the gas shocked early the members
+nearer ours: the intermediate shock strengthens slowly through a run, and MC
+heads toward the regular end. WENO5-Z sits at the compound end. Where in the
+family a scheme lands is set by its dissipation, reconstruction included.
+GR06's stored answer is one member, the compound wave another, and the
+regular solution -- the one evolutionarity prefers -- the far end.
+
+![Balsara 1 at high resolution](figs/balsara1_hires.png)
+
+![The family of exact solutions, and the MC runs on it](figs/balsara1_family.png)
 
 ---
 
@@ -1473,6 +1588,11 @@ measure on a population. The pressure-steered retry is in the solver
 
 ### Every face of one run, and what is still lost (2026-10-02, completed 2026-10-03)
 
+> *The state before the closed-form Alfvén rotation. With it (2026-10-27,
+> section 5e) the same 64² rotor is answered 92.3% by the seven-wave Newton,
+> 3.4% by the planar rescue, 1.8% by the four-unknown solver and 1.1% by the
+> degenerate class; 1.46% fall back to HLLD, and 98.54% are solved.*
+
 From the coverage maps of the 64² run with the production defaults
 (`results/rotor_64_exact_defaults`, calea job 33761, all 284 steps, 1,704
 sweeps, 8.0 M face-evaluations) and of production on the same steps
@@ -1661,7 +1781,12 @@ rather than in the convergence.)
 
 1. **Uniqueness is supported** on the measured population — no evidence of a
    second admissible elementary-wave solution anywhere in 7620 compared
-   lanes.
+   lanes. *(2026-10-27: this holds for the regular waves. Counting the
+   intermediate shocks that the slow-shock window admits (`MARGIN`), answers
+   are not unique: when the closed-form Alfvén rotation went in, 35 of 35,000
+   paired faces changed root -- 7 between a regular and an intermediate-shock
+   answer, 28 from a four-unknown answer (structure not recorded) to an
+   intermediate one -- and Balsara 1 has both -- section 5e.)*
 2. **"Verified at 1e-8" is a statement about the residual, not the state**,
    and the conversion factor is the parameterisation's condition number. In
    the planar form a 1e-8 residual pins the state to ~1e-7; in the seven-wave
@@ -1825,6 +1950,152 @@ and every coverage number in this document go through
 `exact_flux_batched`, and the Balsara 5 figure
 (`scripts/balsara5_slowwave.py`) builds its exact solution from the batched
 six-unknown solver. The 13-case demonstration is the only consumer.
+
+## 5e. The Alfvén solve could not build relativistic rotations: a closed form, on by default (2026-10-26/27)
+
+**The defect.** `alfven_checked` (rmhd_final `rmhd/batched/fullcontact_b.py`)
+seeds its pinned Newton with `seed_rot`, a RIGID rotation of B_t and v_t at
+fixed W. A strongly relativistic rotation is far from that: across Balsara 1's
+regular solution the field turns by 180 degrees while |v_y| goes from 0.036
+to 0.765 and W from 1.08 to 1.69. From the rigid seed the Newton lands on a
+non-solution (residual 0.88) and the angle continuation fails at its first
+step, so neither the planar pi branch nor the seven-wave residual could build
+the wave. The same failure inside the seven-wave Newton's iterations lost
+faces wherever an iterate asked for such a rotation.
+
+**The closed form.** Across a relativistic rotational discontinuity rho, p,
+b^2 and E = rho h + b^2 are continuous, and so is q = b + s sqrt(E) u (the
+relativistic Walén relation; s picks the family whose speed q^x / q^0 is the
+wave's, which also handles B_n < 0). The lab field B^i = q^i u^0 - q^0 u^i is
+linear in u, so u.q = -s sqrt(E), the continuity of B_n and "B_t along psi"
+are three linear conditions: a line in u, which meets u.u = -1 in two points,
+and the physical one (u^0 >= 1, |v| < 1, B_t along +psi) is the rotation.
+`exact_rotation()` equals the ladder's answer to 2e-11 on 400 random lanes
+(residual <= 1.5e-14) and reaches what the ladder cannot. `alfven_checked`
+retries every lane its ladder fails from it, at the same angle, accepted on
+the ladder's own gate. Lanes the ladder answers keep their bits; a trivial
+rotation the ladder refuses is now solved to the angle asked, so the
+no-rotation fallback answers only what the retry cannot. Switch
+`RMHD_ALFVEN_EXACT`, on by default since 2026-10-27 (0 turns it off); tests
+in rmhd_final `tests/batched/test_alfven_exact.py`.
+
+**The faces the runs had lost** (calea job 50319; rmhd_final
+`scripts/alfven_exact/`, results in `results/alfven_exact_2026-10`). Up to
+4,000 lost faces and 1,000 solved controls per harvest, replayed through
+production's path with the switch off and on, and paired lane by lane:
+
+| harvest | lost faces solved, off -> on | gained / lost | gains answered by seven-wave / planar |
+|---|---|---|---|
+| rotor 64² | 2151 -> 2722 of 4000 | +573 / -2 | 510 / 63 |
+| Orszag–Tang 64² | 560 -> 2697 | +2138 / -1 | 2001 / 137 |
+| Orszag–Tang 128² | 918 -> 2926 | +2011 / -3 | 1861 / 150 |
+| Orszag–Tang 256² | 653 -> 3047 | +2394 / 0 | 2144 / 250 |
+| Beckwith & Stone's Orszag–Tang 192² | 1242 -> 2792 | +1550 / 0 | 1301 / 249 |
+| four-quadrant 64² | 356 -> 1862 | +1506 / 0 | 663 / 843 |
+| four-quadrant, field tilted 60° | 1438 -> 1495 | +58 / -1 | 58 / 0 |
+| **all** | **7318 -> 17541 of 28000** | **+10230 / -7** | |
+
+(The "off" column counts what today's path solves of them with the switch
+off.) On the 7,000 controls: +1 / -1. Not bitwise: the star pressure moved on
+about 40% of the controls, by 1e-8 to 8e-5 -- the outer Newton's path changes
+where an iterate's rotation used to fail -- and by more than 1e-3, i.e. to
+another root, on 33 faces of the lost samples (22 rotor, 11 four-quadrant)
+and 2 controls.
+
+**What the answers are** (job 50361, `alfven_classify.py`; a slow shock
+counts as intermediate when B_t passes through zero across it or its Lax
+conditions fail, which only `slow_shock_b.MARGIN` admits):
+
+| harvest (faces gained) | regular | + rotation | + 180° rotation | intermediate shock |
+|---|---|---|---|---|
+| rotor 64² (573) | 3.1% | 2.8% | **71.6%** | 22.5% |
+| Orszag–Tang 64² (2138) | 0.2% | 2.2% | **89.9%** | 7.7% |
+| Orszag–Tang 128² (2011) | 0.0% | 2.0% | **90.2%** | 7.8% |
+| Orszag–Tang 256² (2394) | 0.4% | 0.4% | **93.1%** | 6.1% |
+| Beckwith & Stone 192² (1550) | 0.0% | 4.1% | **80.9%** | 15.0% |
+| four-quadrant 64² (1506) | 0.9% | 0.0% | 42.7% | **56.4%** |
+| four-quadrant, tilted (58) | 0.0% | **84.5%** | 0.0% | 15.5% |
+
+Most of what the runs had lost has a regular solution with a 180-degree
+rotation: the Balsara 1 type, and the structure the tube test of section 5
+cannot tell from a reversal fused to a jump. The seven-wave Newton's gains
+are almost all of that kind; the planar rescue's are mostly intermediate
+shocks, which is why the four-quadrant problem, where the rescue does most of
+the work, is at 56%.
+
+The 35 faces whose answer changed root: 4 rotor faces went from an
+intermediate shock to a regular solution with a 180-degree rotation; 1 rotor
+face and 2 four-quadrant controls went the other way, to an intermediate
+shock the seven-wave Newton now reaches before the regular root further down
+the chain; 28 (17 rotor, 11 four-quadrant) went from a four-unknown answer,
+whose structure the harvest does not keep, to an intermediate shock from the
+planar rescue. Of the 8 faces lost (7 + 1 control), 5 had intermediate-shock
+answers before, 2 were regular answers on the tilted problem, and 1 is
+solved again on replay (borderline).
+
+**Full 64² runs, off and on side by side** (calea jobs 50351-50356; summary
+job 52234, `scripts/alfven_exact/calea_alfven_runs_summary.sh`):
+
+| 64² run, off -> on | rotor | Orszag–Tang | four-quadrant |
+|---|---|---|---|
+| **solved, of the attempted** | 97.62 -> **98.54%** | 97.67 -> **99.11%** | 93.06 -> **96.00%** |
+| seven-wave Newton (first seed alone) | 55.5 (50.1) -> 92.3 (89.1)% | 68.4 (64.6) -> 96.7 (95.7)% | 56.7 (51.1) -> 85.4 (80.8)% |
+| planar rescue | 38.9 -> 3.4% | 28.4 -> 1.6% | 35.7 -> 10.1% |
+| four-unknown solver | 2.11 -> 1.83% | 0.39 -> 0.34% | 0.64 -> 0.37% |
+| degenerate class | 1.08 -> 1.07% | 0.53 -> 0.52% | 0.09 -> 0.08% |
+| HLLD fallback | 2.38 -> 1.46% | 2.33 -> 0.89% | 6.94 -> 4.00% |
+| wall per step | 154.9 -> 165.3 s | 98.3 -> 79.8 s | 92.5 -> 66.6 s |
+| L1(rho) against 512² HLLD | 0.2874 -> 0.2874 (t = 0.4) | 0.2638 -> 0.2657 (t = 1) | 0.1018 -> 0.1023 (t = 0.4) |
+| L1(rho), on against off | 1.0e-3 | 4.3e-2 | 2.9e-3 |
+
+The planar rescue's large share was mostly this sub-solver failing inside
+the seven-wave Newton, not coplanarity as such: with the closed form the
+seven-wave Newton answers 85-97% of the attempted faces, and two of the three
+runs are cheaper. Against the reference the solutions move little (the
+rotor's symmetry error falls from 3.1e-3 to 8.4e-4); Orszag–Tang moves most,
+4.3% between the two runs at t = 1. Density off, on and the difference:
+
+![64² runs with the closed-form rotation off and on](figs/alfven_2d_diff.png)
+
+Every answer the runs harvested (job 52244; the four-unknown and degenerate
+answers, at most 3.2% of the attempted, are not harvested), by kind:
+
+| 64² run, off / on | regular | + rotation | + 180° rotation | intermediate shock |
+|---|---|---|---|---|
+| rotor | 96.4 / 94.5% | 0.1 / 0.7% | 0.2 / 1.2% | 3.3 / 3.6% |
+| Orszag–Tang | 95.3 / 93.1% | 1.2 / 1.6% | 0.9 / 3.0% | 2.6 / 2.3% |
+| four-quadrant | 97.1 / 93.8% | 0.0 / 0.0% | 0.1 / 2.3% | 2.9 / 3.9% |
+
+Intermediate-shock answers were always there, at 2-4%. Between a third
+(rotor) and nine tenths (four-quadrant) of them take the tangential field
+through zero; the rest miss a Lax condition by more than 1e-9, which may
+include near-sonic weak shocks, so their share is an upper bound.
+
+**Balsara 1.** Production now returns its regular solution, from the
+seven-wave Newton: a 180-degree rotation at 0.034484 (|B_t| 0.658 -> 0.641)
+and a Lax slow shock at 0.048886, with p_LF 0.695892, B_t* -0.428531 and
+p_RF 0.696694 -- the far end of the family of section 5, with a plateau
+density 1.10% above GR06's answer (the one face replayed through production's
+path with `alfven_classify.py replay`, on the laptop, 2026-10-27). With the
+switch off the planar rescue returns GR06's intermediate shock, as before.
+
+**Default since 2026-10-27** (rmhd_final a6d52b1 and c97d335; HLLD b452986,
+whose suite pins the switch off like every default-on switch). The bitwise
+baseline failed by gains only -- calea 149 -> 163 exact faces, the laptop
+150 -> 164, none lost, solved faces moved by up to 3.6e-6 -- and was
+re-answered on both hosts; both suites pass (calea jobs 52238 and 54609).
+
+**What this changes elsewhere in this document.** The tube test of section 5
+and its census predate the closed form: their "no elementary root" and
+"unsolvable" verdicts on reversing faces do not stand. The four-quadrant
+ledger of section 7 concluded that slow waves travelling with their Alfvén
+waves needed a new formulation; it was mostly this sub-solver.
+
+**Open (the user's decisions).** Which root to return when a regular and an
+intermediate-shock answer are both reachable: the chain keeps the first it
+certifies, and 3 of the 35 root changes went from regular to intermediate.
+The remaining losses, 1.46%, 0.89% and 4.00% of the attempted faces, are not
+classified yet.
 
 ## 6. Are the waves resolved properly?
 
@@ -2516,6 +2787,13 @@ rmhd checkout), raises method a's starts from 3 to 7 per face and recovers
 slow wave travelling with its Alfvén wave in fast tangential flow; neither
 seeds nor the existing branches provide it.
 
+> **Superseded 2026-10-26/27 (section 5e): it was mostly the Alfvén solve.**
+> With the closed-form rotation the full run solves 96.00% of its attempted
+> faces (93.06% without it; calea jobs 50351-50356), and of 4,000 faces this
+> run's harvest had lost, 1,506 are gained and none lost (job 50319): 643 by
+> regular solutions with a 180-degree rotation, from the seven-wave Newton,
+> and 849 by intermediate shocks, 842 of them from the planar rescue.
+
 27 of the ledger's 64 workers died silently during the expensive search on
 2026-10-08 (no traceback, no memory pressure; the storage outage of that
 evening is the likely cause). All 27 passed that stage on rerun (job
@@ -2533,6 +2811,9 @@ global):
 | 0.20 | 0.0931 | 0.0921 | 2.8% |
 | 0.30 | 0.1019 | 0.1055 | 3.1% |
 | 0.40 | **0.1019** | **0.1100** | 3.1% |
+
+(With the closed-form Alfvén rotation, which solves three points more of the
+attempted faces, the exact run's L1 at t = 0.4 is 0.1023; section 5e.)
 
 The first problem where the exact flux moves the solution toward the
 reference by a visible amount: 7% of the gap at t = 0.4 (25% at t = 0.05,
@@ -3092,6 +3373,11 @@ the tubes (Balsara 5 the dearest).
 | one planar Newton, iteration by iteration (5a) | `scripts/newton_trace.py results/failure_ledger_64 --lanes 719,1394` |
 | 128^2 census (5) | `RUN=results/rotor_128_exact TAG=128 sbatch scripts/calea_snapshot_census.sh` |
 | tube-resolution check (5) | `NSHARDS=1280 TAG=64_res512 EXTRA="--ncells 512" sbatch scripts/calea_snapshot_census.sh` |
+| Balsara 1 at high resolution, and the family (5) | the runs as for "which solution a scheme picks", to `--ncells 16384` (32768 for HLLE + MC), calea, without `kernels.env`; then `scripts/balsara1_selection.py measure --data <dir>` and, on the laptop, `figure` and `family-figure`; the family `scripts/balsara1_family.py build --answers <balsara1_compound.npz> --out family.npz`, `check --b -0.37 -0.47 -0.55`, and `regular` (the closed-form rotation on) |
+| the closed-form Alfvén rotation (5e): the lost faces, paired | rmhd_final `scripts/alfven_exact/calea_alfven_measure.sh` (sbatch from `ssh itp`; writes `results/alfven_exact_2026-10`; the table by `alfven_paired.py`) |
+| its answers by kind (5e) | rmhd_final `scripts/alfven_exact/calea_alfven_classify.sh`; every harvested answer of the six runs `calea_alfven_classify_runs.sh` |
+| the six 64² runs, off and on (5e) | `bash scripts/alfven_exact/submit_alfven_runs.sh` (rmhd_final, from `ssh itp`; one node per run), then `calea_alfven_runs_summary.sh`; the density figure `scripts/alfven_exact/plot_2d_diff.py <results> <png>` |
+| what production returns on Balsara 1 (5e) | the one face in the solver frame, (rho, P_tot, v_x, v_y, v_z, B_y, B_z, B_n) = (1, 1.625, 0, 0, 0, 1, 0, 0.5) and (0.125, 0.725, 0, 0, 0, -1, 0, 0.5), through `alfven_classify.py replay <npz> --out <dir> --gamma 2` in production's env (`kernels.env`, the ML checkpoints, `RMHD_PLANAR5_FALLBACK=1`), then `alfven_classify.py classify <dir>` |
 
 The census, hierarchy, rotation and rarefaction measurements were run from
 session scripts on 2026-09-09; the numbers and their method are stated above
