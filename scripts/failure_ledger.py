@@ -113,6 +113,16 @@ def sub(state, i):
     return [c[i] for c in state]
 
 
+def use_gamma(pop):
+    """Solve with the population's gamma.  Every stage reads the module's GAMMA
+    (and the tube test tube_features.GAMMA), the rotor's 5/3; a population
+    collected from a run's harvest carries that run's gamma (Orszag-Tang 4/3)."""
+    global GAMMA
+    if "gamma" in pop.files:
+        import tube_features as TF
+        GAMMA = TF.GAMMA = float(pop["gamma"])
+
+
 # ── production's acceptance, for an answer given as zones and speeds ──────
 
 def accept(P, L, R, Bn, zones6, VsLv, VsRv, nrm, order=True):
@@ -639,7 +649,7 @@ def collect_harvest(a):
             min(c0 + CH, len(X)), len(X), sel.size, ex.sum()), flush=True)
     out = {k: np.concatenate(v) for k, v in rows.items()}
     out.update(tags=np.array([os.path.basename(f) for f in files]),
-               n_attempted=n_att, n_exact=n_ex, n_mismatch=flips[1])
+               n_attempted=n_att, n_exact=n_ex, n_mismatch=flips[1], gamma=gam)
     np.savez_compressed(a.out, **out)
     print("\ncollected from the harvest: replayed %d (%d below the weak gate "
           "now), attempted %d, exact %d, failing %d, controls %d"
@@ -661,6 +671,7 @@ def run(a):
     log = lambda s: print("[shard %d/%d] %6.0fs  %s"
                           % (a.shard, a.nshards, time.time() - t0, s), flush=True)
     Z = np.load(a.pop)
+    use_gamma(Z)
     sel = np.arange(Z["group"].size)[a.shard::a.nshards]
     if a.limit:
         sel = sel[:a.limit]
@@ -784,6 +795,7 @@ def verdict(pop, col):
 
 def summarise(d):
     pop, col = load_all(d)
+    use_gamma(pop)
     n = pop["group"].size
     have = sorted({k.split("_")[0] for k in col if k.endswith("_ok")})
     fail, ctrl = pop["group"] == 1, pop["group"] == 0
@@ -1090,6 +1102,7 @@ def card(j, pop, col, ph, R, ok, tags):
 
 def report(a):
     pop, col = load_all(a.report)
+    use_gamma(pop)
     tags = [str(t) for t in pop["tags"]]
     ph = physics(pop["UL"], pop["UR"])
     R, ok = verdict(pop, col)

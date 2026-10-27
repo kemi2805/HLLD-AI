@@ -18,9 +18,10 @@
 #   CHECK=1 sbatch --time=1:00:00 -c 8 --exclusive=no scripts/calea_failure_ledger.sh
 #
 # Knobs (env): HARVEST (an exact run's harvest dir: skip the recording and
-# take that run's own lost/solved faces, NFAIL/NCTRL of each), PROBLEM (rotor; orszag_tang, riemann2d -- the recorder's
-# problem, gamma 5/3 for the ledger's own stages, so not orszag_tang unless
-# those are made gamma-aware), B0 (riemann2d's field), N (64), NSTEP (2), WINDOWS ("pfa:0.10 pfb:0.25 pfc:0.40"; the
+# take that run's own lost/solved faces, NFAIL/NCTRL of each; the population
+# carries the run's gamma and every stage solves with it), PROBLEM (rotor; orszag_tang, riemann2d -- the recorder's
+# problem; recorded windows are solved with gamma 5/3 by the ledger's own
+# stages, so not orszag_tang that way), B0 (riemann2d's field), N (64), NSTEP (2), WINDOWS ("pfa:0.10 pfb:0.25 pfc:0.40"; the
 # held-out set is recorded by a second submission with
 # WINDOWS="pfd:0.175 pfe:0.325" OUT=...), OUT, NW (workers, 64), HLLD_DIR, PY.
 # CHECK=1: a 32^2, one-step, few-lane pass through every stage -- the path
