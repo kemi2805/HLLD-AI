@@ -97,6 +97,40 @@ ok("T^0x - D v_x = tau flux (code)", (T[0, 1] - D * vx) - (w * W**2 * vx - b[0] 
 mx = S_code[0]
 ok("T^xx = m_x v_x - B_x b^x/W + p_tot  (MB06 eq. 13)", T[1, 1] - (mx * vx - Bx * b[1] / W + Ptot))
 
+# ------------------------------- 2b. the remaining identities of Appendix A (app:bmu)
+B2s = (B.T * B)[0]
+ok("b^0 = v.b", b[0] - sum(v[i] * b[i + 1] for i in range(3)))
+ok("W^2 b^2 - (b^0)^2 = B^2", W**2 * b2 - b[0]**2 - B2s)
+for i in range(3):
+    ok(f"B^{i+1} = u^0 b^{i+1} - u^{i+1} b^0", B[i] - (u[0] * b[i + 1] - u[i + 1] * b[0]))
+    ok(f"B^{i+1} = W (b^{i+1} - b^0 v^{i+1})", B[i] - W * (b[i + 1] - b[0] * v[i]))
+ExB = E.cross(B)
+E2s = (E.T * E)[0]
+ok("|E|^2 = v^2 B^2 - (v.B)^2", E2s - (v2 * B2s - vB**2))
+ok("T^00 = rho h W^2 + B^2 - p - b^2/2", T[0, 0] - (rho * h * W**2 + B2s - p - b2 / 2))
+ok("T^00 = rho h W^2 - p + (|E|^2 + B^2)/2", T[0, 0] - (rho * h * W**2 - p + (E2s + B2s) / 2))
+for i in range(3):
+    ok(f"T^0{i+1} = rho h W^2 v^{i+1} + (E x B)^{i+1}", T[0, i + 1] - (rho * h * W**2 * v[i] + ExB[i]))
+for i in range(3):
+    for j in range(3):
+        dij = 1 if i == j else 0
+        ok(f"T^{i+1}{j+1} = (rho h W^2 + B^2) v^i v^j - (v.B)(B^i v^j + B^j v^i) - B^i B^j/W^2 + p_tot delta",
+           T[i + 1, j + 1] - ((rho * h * W**2 + B2s) * v[i] * v[j] - vB * (B[i] * v[j] + B[j] * v[i])
+                              - B[i] * B[j] / W**2 + Ptot * dij))
+        ok(f"T^{i+1}{j+1} = S^j v^i + p_tot delta - B^i b^j/W",
+           T[i + 1, j + 1] - (S_code[j] * v[i] + Ptot * dij - B[i] * b[j + 1] / W))
+rest = {vx: 0, vy: 0, vz: 0}
+ok("rest frame: b^0 = 0", b[0].subs(rest))
+for i in range(3):
+    ok(f"rest frame: b^{i+1} = B^{i+1}", (b[i + 1] - B[i]).subs(rest))
+    ok(f"rest frame: T^0{i+1} = 0", T[0, i + 1].subs(rest))
+ok("rest frame: T^00 = e + b^2/2 with e = rho (1 + eps)", (T[0, 0] - (rho * (1 + eps) + b2 / 2)).subs(rest))
+for i in range(3):
+    for j in range(3):
+        ok(f"rest frame: T^{i+1}{j+1} = (p + b^2/2) delta - b^i b^j",
+           (T[i + 1, j + 1] - ((p + b2 / 2) * (1 if i == j else 0) - b[i + 1] * b[j + 1])).subs(rest))
+ok("sigma = b^2/(rho h) = c_a^2/(1 - c_a^2) with c_a^2 = b^2/w", b2 / (rho * h) - (b2 / w) / (1 - b2 / w))
+
 # --------------------------------------------------------- 3. Newtonian limit
 d = sp.symbols('delta', positive=True)
 sc = {vx: d * vx, vy: d * vy, vz: d * vz, Bx: d * Bx, By: d * By, Bz: d * Bz,
@@ -148,6 +182,9 @@ for sgn in (+1, -1):
     # it is a root of A = w a^2 - calB^2 (Anton et al. 2010, eq. 34)
     ok(f"Alfven speed solves w a^2 = B^2, sign {sgn:+d}",
        (wt * a_**2 - calB**2).subs(lam, lamA))
+    # sign-resolved label: the (+/-) of (3.14) is calB +/- sqrt(w) W (v_x - lambda) = 0
+    ok(f"Alfven label: calB + sgn sqrt(w) W(v_x - lam) = 0, sign {sgn:+d}",
+       (calB - sgn * sw * a_).subs(lam, lamA))
 
 # rest frame, v = 0:  lambda^4 - Q lambda^2 + cs2 ca2 cos^2 = 0
 th = sp.symbols('theta', real=True)
@@ -278,7 +315,10 @@ for k in range(3):
     assert abs(lamk - (v_n + sgn * cs_n) / (1 + sgn * v_n * cs_n)) < 1e-30
     dvdp = ER_[1, k] / ER_[2, k]
     assert abs(dvdp - sgn / (W2_n * rh_n * cs_n)) < 1e-30
-print("OK  1D hydro: eigenvalues v, (v -/+ c_s)/(1 -/+ v c_s); along the -/+ family dv/dp = -/+ 1/(W^2 rho h c_s)")
+    dpdrho = ER_[2, k] / ER_[0, k]                      # dp = h c_s^2 drho
+    assert abs(dpdrho - (rh_n / mp.mpf(sp.N(r_.subs(numer), 40))) * cs_n**2) < 1e-30
+print("OK  1D hydro: eigenvalues v, (v -/+ c_s)/(1 -/+ v c_s); along the -/+ family dv/dp = -/+ 1/(W^2 rho h c_s) "
+      "and dp = h c_s^2 drho")
 
 # ------ tangential velocity (Pons et al. 2000): rarefaction ODE in the normal velocity
 Wt = 1 / sp.sqrt(1 - vv_**2 - vt_**2)
@@ -618,14 +658,16 @@ cs2_c = Gm * pg_c / rh_c
 E_c = rh_c + b2_c
 
 
-def charmat(lam_):
+def charmat(lam_, bb_sign=-1, with_calB=True):
+    """The contracted matrix; bb_sign and with_calB select the (wrong) printed variants."""
     phl = [-lam_, 1, 0, 0]
     phu = [lam_, 1, 0, 0]
     a_c = sum(u_c[i] * phl[i] for i in range(4))
     cB = sum(b_c[i] * phl[i] for i in range(4))
     G_c = sum(phu[i] * phl[i] for i in range(4))
     bl = [gdiag[i] * b_c[i] for i in range(4)]
-    l_c = [phu[m] + (rh_c - b2_c / cs2_c) * a_c * u_c[m] / rh_c + cB * b_c[m] / rh_c for m in range(4)]
+    l_c = [phu[m] + (rh_c - b2_c / cs2_c) * a_c * u_c[m] / rh_c
+           + (cB * b_c[m] / rh_c if with_calB else 0) for m in range(4)]
     f_c = [(a_c * b_c[m] / cs2_c - cB * u_c[m]) / rh_c for m in range(4)]
     M = mp.zeros(10, 10)
     for m in range(4):
@@ -634,7 +676,7 @@ def charmat(lam_):
             M[m, n] = E_c * a_c * dl
             M[m, 4 + n] = (phu[m] + 2 * a_c * u_c[m]) * bl[n] - cB * dl
             M[4 + m, n] = cB * dl
-            M[4 + m, 4 + n] = -a_c * dl
+            M[4 + m, 4 + n] = bb_sign * a_c * dl
         M[m, 8] = l_c[m]
         M[4 + m, 8] = f_c[m]
         M[8, m] = rh_c * phl[m]
@@ -669,4 +711,29 @@ for guess_l in (-0.9, -0.3, 0.4, 0.9):
                   + [a_c**2 * A_c, 0])
     assert mp.norm(M * r) / mp.norm(r) < mp.mpf('1e-35')
 print("OK  magnetosonic eigenvectors (eqs. 48-50) are null vectors at all four roots of N_4")
+
+
+def ms_vector(lam_m, M_ok):
+    """The eq. (48)-(50) eigenvector at a root of N_4 (independent of the matrix variant)."""
+    _, a_c, cB, G_c, A_c, N4, phu, phl, f_c = M_ok
+    d_c = [((cs2_c - 1) / cs2_c) * ((a_c**4 / G_c) * (phu[m] + a_c * u_c[m]) - (a_c**2 * cB / rh_c) * b_c[m])
+           for m in range(4)]
+    return mp.matrix([a_c * x for x in d_c] + [cB * d_c[m] + a_c * A_c * f_c[m] for m in range(4)]
+                     + [a_c**2 * A_c, 0])
+
+
+# the two printed variants must FAIL both tests: +a delta in the (b,b) block (Anton et al. eq. 32),
+# and -a delta without the calB b^mu/(rho h) term in l^mu (their eq. 26)
+for label, kw in (("+a delta^mu_nu in the (b,b) block", dict(bb_sign=+1)),
+                  ("l^mu without calB b^mu/(rho h)", dict(with_calB=False))):
+    for lam_t in (mp.mpf('0.13'), mp.mpf('-0.4'), mp.mpf('0.77')):
+        M, a_c, cB, G_c, A_c, N4, *_ = charmat(lam_t, **kw)
+        assert abs(mp.det(M) / (E_c * a_c**2 * A_c**2 * N4) - 1) > mp.mpf('1e-6'), label
+    for guess_l in (-0.9, -0.3, 0.4, 0.9):
+        lam_m = mp.findroot(lambda x_: charmat(x_)[5], mp.mpf(guess_l))
+        r = ms_vector(lam_m, charmat(lam_m))
+        M_bad = charmat(lam_m, **kw)[0]
+        assert mp.norm(M_bad * r) / mp.norm(r) > mp.mpf('1e-6'), label
+    print(f"OK  with {label}: the determinant identity fails at three lambdas and the "
+          f"magnetosonic eigenvectors are not null vectors (negative test)")
 print("all checks passed")

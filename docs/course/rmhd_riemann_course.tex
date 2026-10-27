@@ -140,7 +140,8 @@ w\equiv\rho h+b^2,\qquad
 $w$ is the \emph{total} enthalpy density, $\Ptot$ the \emph{total} pressure and
 $\sigma$ the magnetisation. Two warnings about other people's notation: the exact solver
 of \textcite{GiacomazzoRezzolla2006} writes $h$ for the \emph{total} specific enthalpy
-$h_g+b^2/\rho$ and $h_g$ for ours, and \textcite{Anton2010} write $\mathcal{E}$ for our
+$h_g+b^2/\rho$ and $p$ for the total pressure $p_g+b^2/2$ (our $\Ptot$), with $h_g,p_g$ for
+our $h,p$, and \textcite{Anton2010} write $\mathcal{E}$ for our
 $w$. Where we quote their equations we translate them.
 
 \paragraph{Speeds.} $c_s$ is the sound speed, $c_a^2=b^2/w$ the square of the Alfvén speed
@@ -239,8 +240,9 @@ the solution \emph{at} $x_{i+1/2}$ is the constant $\UU^\ast_{i+1/2}=
 \hat\FF_{i+1/2}=\FF\bigl(\UU_{\mathrm{RP}}(0;\UU_i^n,\UU_{i+1}^n)\bigr).
 \end{equation}
 (The stricter bound $1/2$ guarantees that waves from neighbouring interfaces do not
-interact inside a cell; it is needed for the reconstruct--evolve--average interpretation
-but not for \eqref{eq:godunovflux}, which only uses the value on the interface.)
+interact inside a cell; it is needed if the new averages are computed by integrating the
+juxtaposed Riemann solutions over each cell, but not for \eqref{eq:godunovflux}, which only
+uses the value on the interface.)
 
 \begin{figure}[t]
 \centering
@@ -489,7 +491,7 @@ $\partial_tB^j+\partial_i(u^ib^j-u^jb^i)=0$, and
 $u^ib^j-u^jb^i=Wv^i(B^j/W+b^0v^j)-Wv^j(B^i/W+b^0v^i)=v^iB^j-v^jB^i$. The $\nu=0$
 component is the constraint $\partial_iB^i=0$.
 
-\begin{keybox}{Conserved variables and $x$-fluxes}
+\begin{keybox}[Conserved variables and $x$-fluxes]
 \begin{equation}\label{eq:UF}
 \UU=\begin{pmatrix} D\\ S_j\\ \tau\\ B^k\end{pmatrix}
 =\begin{pmatrix}\rho W\\ (\rho hW^2+B^2)v_j-(\vv\cdot\BB)B_j\\
@@ -500,7 +502,7 @@ component is the constraint $\partial_iB^i=0$.
 v_xB^k-v^kB^x\end{pmatrix}.
 \end{equation}
 Equivalent forms: $\SSS=\rho hW^2\vv+\EE\times\BB$,
-$\tau=\rho hW^2-p-D+\frac12(E^2+B^2)$ with $E^2=|\vv\times\BB|^2=v^2B^2-\vB^2$, and
+$\tau=\rho hW^2-p-D+\frac12(|\EE|^2+B^2)$ with $|\EE|^2=|\vv\times\BB|^2=v^2B^2-\vB^2$, and
 $T^{xj}=S_jv_x+\Ptot\delta_{xj}-B^xb_j/W$.
 \end{keybox}
 
@@ -548,7 +550,8 @@ $\Gamma\le2$.
 (\Gamma_{\rm th}-1)\rho(\epsilon-\epsilon_{\rm cold})$, with
 $c_s^2=(\Gamma p_{\rm cold}+\Gamma_{\rm th}p_{\rm th})/(\rho h)$. All production runs and
 scripts construct it with $K=0$ and $\Gamma_{\rm th}=\Gamma$, which is the ideal gas
-above. The exact solver forms $p=\Ptot-b^2/2$ inside every routine and uses
+above (three legacy 1D configs, \file{configs/blastwave.yaml} and
+\file{configs/static_with*_Bx.yaml}, use a cold polytrope with $K=1$). The exact solver forms $p=\Ptot-b^2/2$ inside every routine and uses
 $h=1+\Gamma p/[(\Gamma-1)\rho]$ and $c_s^2=\Gamma p/(\rho h)$
 (\file{rmhd/batched/wave_speeds_b.py}).
 \end{codebox}
@@ -576,16 +579,17 @@ where $W=W(Z)$ through \eqref{eq:c2p-v2} and $E=\tau+D$. The identities
 \eqref{eq:c2p-v2}--\eqref{eq:c2p-f} were checked in \cref{app:verification}.
 \textcite{Noble2006} compared one- and two-variable schemes of this kind for general
 relativistic MHD; \textcite{Kastaun2021} reformulated the inversion as a root-finding
-problem in $\mu=1/(\rho hW)$ with a bracketing interval that is guaranteed to contain
+problem in $\mu=1/(hW)$ (in the rescaled variables $\bm r=\SSS/D$, $\bm b=\BB/\sqrt D$) with a bracketing interval that is guaranteed to contain
 the unique solution, which makes it robust across the physical parameter space.
 
 \begin{codebox}[: primitive recovery]
 \file{HLLD/src/physics/c2p.py} implements the scheme of \textcite{Kastaun2021},
-vectorised over cells: a bracketed root-find for $\mu=1/(\rho hW)$. According to the
+vectorised over cells: a bracketed root-find for $\mu=1/(hW)$. According to the
 guide (Part~2.6) the bracketed secant was found to stall on hot, fast gas
 (e.g.\ $(\rho,p,v)=(0.1,1,0.99)$ left a relative error $\sim10^{-6}$), so cells that it
 leaves unconverged are re-solved by bisection; cells where recovery still fails are
-counted (\code{c2p_bad}) and floored.
+counted (\code{c2p_bad}); only cells whose recovered density falls below the atmosphere
+value are floored.
 \end{codebox}
 
 \section{Newtonian limit}\label{sec:newtonian}
@@ -602,7 +606,7 @@ and the energy flux $S_x-Dv_x=\bigl(\tfrac12\rho v^2+\rho\epsilon+p+B^2\bigr)v_x
 +O(\delta^5)$. These are the conserved variables and fluxes of Newtonian ideal MHD in
 Heaviside--Lorentz units; the induction equation is unchanged. The relativistic
 corrections enter through $W$, through the enthalpy $\rho h$ as inertia, and through the
-electric-field terms $\EE\times\BB$ and $E^2/2$ (displacement current), which make the
+electric-field terms $\EE\times\BB$ and $|\EE|^2/2$ (displacement current), which make the
 momentum of the field $\vv B^2-\BB\vB$ part of $\SSS$.
 
 \section*{Exercises}
@@ -617,7 +621,7 @@ $b^2W^2-(b^0)^2=(B^2/W^2+\vB^2)W^2-W^2\vB^2=B^2$.
 \end{solution}
 
 \begin{exercise}
-Show that $\SSS=\rho hW^2\vv+\EE\times\BB$ and $\tau=\rho hW^2-p-D+\frac12(E^2+B^2)$, and
+Show that $\SSS=\rho hW^2\vv+\EE\times\BB$ and $\tau=\rho hW^2-p-D+\frac12(|\EE|^2+B^2)$, and
 interpret each term.
 \end{exercise}
 
@@ -723,8 +727,9 @@ constraint gives $\delta b_x=0$. The linearised equations are (after dividing by
 &-V\delta\bm b=b\cos\theta\,\delta\vv-\bm b\,\delta v_x, \label{eq:lin-ind}\\
 &\delta p=hc_s^2\,\delta\rho . \label{eq:lin-ent}
 \end{align}
-The term $(\bm b\cdot\delta\vv)\bm b$ in \eqref{eq:lin-mom} is the relativistic one: it
-comes from $b^0b^i$ in the momentum density, i.e.\ from the displacement current.
+The terms $b^2\delta\vv$ (inside $w\,\delta\vv$) and $-(\bm b\cdot\delta\vv)\bm b$ (from
+$b^0b^i$) in \eqref{eq:lin-mom} together are the linearised electromagnetic momentum
+$\EE\times\BB$, i.e.\ the displacement current; Newtonian MHD drops both.
 
 \paragraph{Alfvén waves.} The $z$-components decouple: $-Vw\,\delta v_z-b\cos\theta\,
 \delta b_z=0$ and $-V\delta b_z=b\cos\theta\,\delta v_z$ give
@@ -749,8 +754,9 @@ c_s^2b^2\cos^2\theta\,]$ (checked symbolically), so with $c_a^2=b^2/w$:
 \begin{equation}\label{eq:ms-rest}
 \boxed{\;V^4-\bigl(c_a^2+c_s^2-c_s^2c_a^2\sin^2\theta\bigr)V^2+c_s^2c_a^2\cos^2\theta=0\;}
 \end{equation}
-The Newtonian relation has $c_a^2+c_s^2$ in the middle coefficient; the relativistic
-correction $-c_s^2c_a^2\sin^2\theta$ comes from the displacement-current term. Together
+Without the electromagnetic momentum the relation is the Newtonian one, with
+$v_A^2=b^2/(\rho h)$ and $v_A^2+c_s^2$ in the middle coefficient; keeping it and writing
+$c_a^2=b^2/w$ produces the correction $-c_s^2c_a^2\sin^2\theta$. Together
 with the entropy mode ($V=0$, $\delta p=\delta\vv=\delta\bm b=0$, $\delta\rho\ne0$),
 \eqref{eq:alfven-rest} and \eqref{eq:ms-rest} account for all seven modes.
 
@@ -765,7 +771,7 @@ $G+a^2$ turns them into polynomials in $\lambda$:
 \end{equation}
 
 \paragraph{Alfvén waves.} $V^2=c_a^2\cos^2\theta$ becomes $w\,a^2=\calB^2$, i.e.
-$\sqrt{w}\,W(v_x-\lambda)=\pm(b^x-\lambda b^0)$. Solving for $\lambda$,
+$\calB\pm\sqrt{w}\,a=0$, or $(b^x-\lambda b^0)\pm\sqrt{w}\,W(v_x-\lambda)=0$. Solving for $\lambda$,
 \begin{equation}\label{eq:lamA}
 \boxed{\;\lambda_A^{(\pm)}=\frac{b^x\pm\sqrt{w}\,u^x}{b^0\pm\sqrt{w}\,u^0}
 =v_x+\frac{B^x(1-v^2)}{\vB\pm\sqrt{w}}\;}
@@ -788,9 +794,10 @@ The labels $(\pm)$ in \eqref{eq:lamA} refer to the sign in front of $\sqrt w$, n
 direction of propagation; \textcite{Anton2010} make the same remark about their
 eq.~(38). In the exact solver every helper that returned the pair as
 \code{(la, ra)} (left, right) had used the $(-)$ root as ``left''. For $B_n<0$ this
-built rotations of the wrong family. The code now orders the pair by value (e.g.\
+built rotations of the wrong family. The callers now order the pair by value (e.g.\
 \file{rmhd/shock_speed.py}: \code{if not (la <= ra): la, ra = ra, la}, commented
-``labelled by the sign of sqrt(rho h+b\^{}2): swapped for B\_n < 0'').
+``labelled by the sign of sqrt(rho h+b\^{}2): swapped for B\_n < 0''); the low-level
+helpers \code{xi} and \code{quartic_coeffs} still return it labelled by sign.
 \end{codebox}
 
 \paragraph{Magnetosonic waves.} Inserting \eqref{eq:Vrest} into \eqref{eq:ms-rest},
@@ -815,8 +822,10 @@ be accessed for this check, so the comparison with it was not made.}
 In the covariant variables $(u^\mu,b^\mu,p,s)$ of \textcite{Anile1989} the system has ten
 unknowns, and the characteristic determinant factorises as
 $\det(\mathcal A^\alpha\phi_\alpha)=w\,a^2\calA^2\calN_4$ with $\calA=wa^2-\calB^2$
-\parencite[eq.~33]{Anton2010}. The squares reflect duplicate, unphysical roots introduced
-by the constraints $u_\mu u^\mu=-1$ and $u_\mu b^\mu=0$; the physical speeds are the seven
+\parencite[eq.~33]{Anton2010}. The squares reflect three unphysical roots of the enlarged
+system: the extra root $a=0$ carries $\delta b^\mu\propto\phi^\mu$, i.e.\ $\delta B^x\neq0$, and
+is excluded by $\nabla\cdot\BB=0$; the extra pair $\calA=0$ violates the linearised
+constraints $u_\mu\delta u^\mu=0$ and $u_\mu\delta b^\mu+b_\mu\delta u^\mu=0$; the physical speeds are the seven
 roots of $a\,\calA\,\calN_4=0$ found above. \Cref{app:eigen} gives the matrix and the
 eigenvectors.
 \end{remark}
@@ -827,7 +836,7 @@ Write $X=V^2$ and $P(X)=X^2-QX+c_s^2c_a^2\cos^2\theta$ with
 $Q=c_a^2+c_s^2-c_s^2c_a^2\sin^2\theta$. Let $X_s\le X_f$ be the roots (slow and fast).
 
 \begin{proposition}[Ordering and bounds]\label{prop:ordering}
-For $0<c_s<1$ and $0\le c_a<1$,
+For $0<c_s<1$ and $0<c_a<1$,
 \begin{equation}
 0\le X_s\le c_a^2\cos^2\theta\le X_f\le\zeta^2<1,\qquad \zeta^2\le 2X_f .
 \end{equation}
@@ -1086,6 +1095,8 @@ field,
 J\equiv-\rho u^\mu n_\mu=\rho WW_s(V_s-v_x),\qquad
 B_n\equiv b^\mu n_\mu=\frac{W_s}{W}B^x-\frac{\vB J}{\rho}.
 \end{equation}
+(Not to be confused with the lab normal field $B^x$, which the code and the later chapters
+call $B_n$; the two coincide in general only when $J=0$ and $v_t=0$.)
 These are eqs.~(4.5) and (4.28) of \textcite{GiacomazzoRezzolla2006}. The first condition
 of \eqref{eq:RHcov} says $\jump{J}=0$. It also gives a useful identity: for any $Q$,
 \begin{equation}\label{eq:jumpidentity}
@@ -1234,20 +1245,36 @@ the front, while $\rho$, $p$ and $b^2$ are unchanged.
 \end{example}
 
 \paragraph{Coplanar data.} If the tangential fields and velocities of the two states lie in
-one plane containing the normal (as in every face of a two-dimensional flow), the only
-rotational discontinuities that keep the solution in that plane are the trivial one and
-a reversal of the tangential field. In the solver record (\S2) this is the reason the
+one plane containing the normal (as on every face of a two-dimensional flow with
+$B_z=v_z=0$), the only rotational discontinuities that keep the solution in that plane are
+the trivial one and a reversal of the direction of the tangential field, in general with a
+change of $|B_t|$. In the solver record (\S2) this is the reason the
 Alfvén unknowns degenerate on 2D runs: a continuous angle collapses to a binary choice.
 
 \begin{codebox}[: Alfvén discontinuities]
-\file{rmhd/alfven_solver.py} and the batched \file{rmhd/batched/alfven_b.py} hold $\rho$
-and $\Ptot$ fixed and solve eqs.~(4.15)--(4.17), (4.19)--(4.20) of
-\textcite{GiacomazzoRezzolla2006} for $(v_x,v_y,v_z,B_y,B_z)$ behind, at
-$V_s=\lambda_A$, by Newton's method. The system has more than one root, and roots that
-satisfy the reduced equations but violate conservation exist; candidate roots are
-therefore ranked by the worst normalised residual of the seven RH conditions
-(\file{rmhd/batched/jump.py}, scaled by the flux magnitudes, not by the jump, so that
-weak discontinuities are not penalised).
+Production uses \code{solve_alfven_pinned} (\file{rmhd/alfven_solver.py}) and its batched
+form \code{solve_pinned} (\file{rmhd/batched/alfven_b.py}). These hold $\rho$, $\Ptot$ and
+the direction $\psi=\operatorname{atan2}(B_z,B_y)$ of $B_t$ fixed, take $|B_t|$ from the
+continuity of $b^2$, and solve for $(v_x,v_y,v_z)$ behind, at $V_s=\lambda_A$, by a damped
+least-squares Newton iteration on the seven normalised RH residuals of
+\file{rmhd/batched/jump.py} (scaled by the flux magnitudes, not by the jump, so that weak
+discontinuities are not penalised). The iteration starts from a rigid rotation of $B_t$ and
+$\bm v_t$ at fixed $W$, which is far from a strongly relativistic rotation: across the
+$180^\circ$ rotation of Balsara's test~1 (\cref{ch:nonunique}) $|v_y|$ grows from $0.036$ to
+$0.765$ and $W$ from $1.08$ to $1.69$, and from the rigid start the Newton does not
+converge. Lanes on which it fails are therefore retried from the rotation built as in the
+example above (\code{exact_rotation} in \file{rmhd/batched/fullcontact_b.py}, switch
+\code{RMHD_ALFVEN_EXACT}, on by default). Because $B^i=\sigma^iu^0-\sigma^0u^i$ with
+$\sigma^\mu$ continuous, the conditions $u_\mu\sigma^\mu=-s\sqrt w$, $\jump{B^x}=0$ and
+``$B_t$ along $\psi$'' are linear in the $u^\mu$ behind: they define a line, which meets
+$u_\mu u^\mu=-1$ in two points, and the physical one is the rotation. In two-dimensional runs
+this retry raised the fraction of attempted faces solved exactly from 97.6\% to 98.5\% on
+the rotor, from 97.7\% to 99.1\% on Orszag--Tang and from 93.1\% to 96.0\% on the
+four-quadrant problem (solver record \S5e). The five-equation Newton on eqs.~(4.15)--(4.17),
+(4.19)--(4.20) of \textcite{GiacomazzoRezzolla2006} (\code{solve_alfven}) is only a
+fallback, for $B_t\approx0$ and in the scalar code's branch search; roots of those reduced
+equations can violate conservation, so its results are gated by the same full RH
+residual.
 \end{codebox}
 
 \section{Shocks}\label{sec:shocks}
@@ -1402,7 +1429,9 @@ intermediate shocks seen in planar MHD simulations, and suggested modifications 
 schemes to avoid them in symmetric problems. \textcite{InoueInutsuka2007} found that in
 dissipative MHD all shock types, including intermediate shocks, are evolutionary. Exact
 solvers take different positions: \textcite{GiacomazzoRezzolla2006} exclude compound waves
-and intermediate shocks by construction, whereas the Newtonian solver of
+by construction (each fast or slow wave is a single shock or rarefaction) and do not discuss
+intermediate shocks, although the left slow shock of their stored Balsara~1 solution is a
+$2\to3$ intermediate shock (solver record \S5), whereas the Newtonian solver of
 \textcite{TakahashiYamada2014} includes all types of intermediate shocks and switch-on/off
 waves and can find all solutions of a given problem. We return to the consequences in
 \cref{ch:nonunique}.
@@ -1416,7 +1445,8 @@ the fast family alone, which is what the scan checks, admits both. The pair-spli
 scan (\code{RMHD_FAST_EDGE_SCAN}, on by default) runs on the lanes the standard scan gave
 up on; it splits the pair where the shock speed equals the Alfvén speed behind and takes
 the first root outward from there. An evolutionary
-selection of slow-shock roots exists but is parked (\code{RMHD_EVOLUTIONARY}). Every
+selection of slow-shock roots exists but is parked on a branch (\code{RMHD_EVOLUTIONARY},
+branch \code{evolutionary-selection}). Every
 accepted answer must in addition pass the full RH residual and the wave-order gate
 (\cref{sec:student-impl}).
 \end{codebox}
@@ -1535,7 +1565,7 @@ right-going one)
 \operatorname{artanh}v_b=\operatorname{artanh}v_a+s\,\bigl[\mathcal G(c_{s,b})-\mathcal G(c_{s,a})\bigr],
 \qquad \rho_b=\rho_a\Bigl(\frac{p_b}{p_a}\Bigr)^{1/\Gamma}.
 \end{equation}
-Inside the fan the state at $\xi$ follows from $\xi=\lambda_s(v,c_s)$ together with
+Inside the fan the state at $\xi$ follows from $\xi=\lambda_\pm(v,c_s)$, with the sign of $s$, together with
 \eqref{eq:raref-hydro}.
 
 \paragraph{Tangential velocities.} With $v_t\ne0$ the tangential momentum equation gives one
@@ -1579,9 +1609,10 @@ roots $-B^x/(\vB\pm\sqrt w)$, i.e.\ $\xi=\lambda_A^{(\pm)}$ by \eqref{eq:lamA}; 
 checked symbolically. So the fan equations are singular exactly where the fan speed
 $\xi$ (a fast or slow speed) equals an Alfvén speed: at a Type~II degeneracy.
 \textcite{GiacomazzoRezzolla2006} note that such points cannot be integrated without a
-regularisation, which their code does not include. Since $\lambda_s\le\lambda_A\le
-\lambda_f$, a slow fan approaches this singularity when the field becomes nearly normal to
-the front.
+regularisation, which their code does not include. When the field becomes nearly normal
+to the front in the fluid frame ($\theta\to0$), the rest-frame roots of \eqref{eq:ms-rest}
+tend to $c_s^2$ and $c_a^2$, so the slow fan approaches this singularity if $c_a<c_s$ and the
+fast fan if $c_a>c_s$ (the case of \cref{fig:friedrichs}).
 
 \paragraph{Other parametrisations.} Between the two slow waves GR06 use the tangential field
 as the unknown. Their slow fans are integrated with $|B_t|$ as the independent variable at
@@ -1604,8 +1635,8 @@ discussed above. The batched versions are in \file{rmhd/batched/rarefaction_b.py
 \file{fan_njit.py}.
 
 Which variable to use matters. The solver record (\S5a) measured, along the slow family at
-the input states, $\dd\ln\Ptot/\dd\ln|B_t|\approx-0.005$ (median) on interfaces the
-five-wave solver answers, and $-0.54$ to $-0.69$ on unsolved interfaces where the field is
+the input states, $\dd\ln\Ptot/\dd\ln|B_t|\approx-0.005$ (median) on interfaces production
+solves, and $-0.54$ and $-0.69$ on unsolved interfaces where the field is
 nearly normal to the face: there $|B_t|$ hardly moves along the slow family, so a slow wave
 steered by $|B_t|$ is steered by a coordinate that does not change. The four-unknown solver
 (\cref{sec:student-impl}) therefore chooses, for each slow wave, between $B_t$ and $\Ptot$
@@ -1634,15 +1665,15 @@ equation gives $(v-\xi)\rho'+\rho\,W^2(1-v\xi)\,v'=0$.
 \end{exercise}
 
 \begin{exercise}
-Gas at rest with sound speed $c_a$ fills $x>0$; $x<0$ is vacuum. The gas expands to the
+Gas at rest with sound speed $c_{s,0}$ fills $x>0$; $x<0$ is vacuum. The gas expands to the
 left through a right-going rarefaction. Show that the gas--vacuum interface moves with
-$v_{\rm vac}=-\tanh\mathcal G(c_a)$. Evaluate it for $\Gamma=5/3$, $p/\rho=1$, and compare
-with the Newtonian escape speed $2c_s/(\Gamma-1)$ evaluated with the same $c_s$.
+$v_{\rm vac}=-\tanh\mathcal G(c_{s,0})$. Evaluate it for $\Gamma=5/3$, $p/\rho=1$, and compare
+with the Newtonian escape speed $2c_{s,0}/(\Gamma-1)$.
 \end{exercise}
 \begin{solution}
 At the vacuum end $\rho\to0$, so $c_s\to0$ and $\mathcal G\to0$; \eqref{eq:raref-hydro}
-gives $|\operatorname{artanh}v_{\rm vac}|=\mathcal G(c_a)$. For $\Gamma=5/3$, $p/\rho=1$:
-$h=3.5$, $c_a^2=5/10.5$, $c_a\approx0.690$, $\sqrt{\Gamma-1}\approx0.816$, so
+gives $|\operatorname{artanh}v_{\rm vac}|=\mathcal G(c_{s,0})$. For $\Gamma=5/3$, $p/\rho=1$:
+$h=3.5$, $c_{s,0}^2=5/10.5$, $c_{s,0}\approx0.690$, $\sqrt{\Gamma-1}\approx0.816$, so
 $\mathcal G\approx1.225\ln(1.506/0.126)\approx3.04$ and $|v_{\rm vac}|\approx0.995$. The
 Newtonian formula would give $2.07$, faster than light.
 \end{solution}
@@ -1741,8 +1772,10 @@ where $\mathcal S$ and $\mathcal R$ denote the shock and rarefaction branches of
 \boxed{\;v_{L\ast}(p_\ast)=v_{R\ast}(p_\ast)\;}
 \end{equation}
 $v_{L\ast}$ decreases and $v_{R\ast}$ increases monotonically with $p$, so for normal flow
-\eqref{eq:pstar} has exactly one root, which bisection or a safeguarded Newton iteration
-finds reliably \parencite{MartiMuller1994}. \Cref{fig:hydro-pstar} shows the two curves
+\eqref{eq:pstar} has at most one root; it exists unless $v_{L\ast}(0)\le v_{R\ast}(0)$, in which
+case the gas separates and a vacuum forms between the two rarefactions (last exercise of this
+chapter). When it exists, bisection or a safeguarded Newton iteration finds it reliably
+\parencite{MartiMuller1994}. \Cref{fig:hydro-pstar} shows the two curves
 for a strong blast wave.
 
 \begin{figure}[t]
@@ -1953,8 +1986,8 @@ $W^{-2}=1-v_x^2-v_t^2$ gives the formula.
 
 \begin{exercise}[Programming]
 Implement the solver of this chapter (normal flow) and reproduce \cref{ex:blast}. Then
-give the right state a tangential velocity $v_t=0.9$ and observe how $p_\ast$ and the
-pattern change.
+give the right state a tangential velocity $v_t=0.9$ and observe how $p_\ast$ and $v_\ast$
+change. Does the wave pattern change?
 \end{exercise}
 
 \begin{exercise}
@@ -2035,8 +2068,10 @@ problem is relativistic hydrodynamics with the effective equation of state
 v_A^2=\frac{b^2}{\rho\hat h}.
 \end{equation}
 The last identity (checked symbolically) shows that the effective sound speed is the fast
-speed $\zeta$ for propagation perpendicular to the field. Everything in \cref{ch:hydro}
-applies with hats: the three waves are fast shocks or rarefactions and a tangential
+speed $\zeta$ for propagation perpendicular to the field. The general relations of
+\cref{ch:hydro} (\eqref{eq:taub}, \eqref{eq:Vsj}, \eqref{eq:vbshock}, the invariance of
+$A=\hat hWv_t$ and \eqref{eq:pmm-ode}) apply with hats, but not the ideal-gas forms
+\eqref{eq:taubquad} and \eqref{eq:raref-hydro}: the three waves are fast shocks or rarefactions and a tangential
 discontinuity across which $\hat p$ and $v_x$ are continuous. Magnetic pressure raises
 $\hat p$ in the initial states and can change the wave pattern for fixed gas states
 \parencite{Romero2005}.
@@ -2090,11 +2125,15 @@ Its ingredients are:
 They report that the residuals change very rapidly near the root, so the iteration
 converges only from a sufficiently close initial guess; they take it from an HLLE solution
 on about 800 cells. Their test suite---Komissarov's shock tubes, Balsara's five tests
-(\cref{tab:balsara}) and a generic Alfvén test---is solved to residuals of about
-$10^{-10}$. Two exceptions are instructive: Balsara's test~1 develops a compound wave in
-numerical solutions, which the method excludes by construction (\cref{ch:nonunique}); and in
-test~5 the left Alfvén and slow waves are so close that the Alfvén jump is resolved less
-accurately and the field rotates inside the slow rarefaction.
+(\cref{tab:balsara}) and a generic Alfvén test---is solved to an accuracy of about
+$10^{-10}$ in most cases ($10^{-11}$--$10^{-12}$ for $B^x=0$), but only to $10^{-6}$ for
+Komissarov's collision, $10^{-7}$ for Balsara's test~4 and $3\times10^{-4}$ for test~5. Two
+cases are instructive: Balsara's test~1 develops a compound wave in numerical solutions,
+which the method excludes by construction, although the left slow shock of its own exact
+solution is a $2\to3$ intermediate shock, and the test also has a regular solution, with a
+$180^\circ$ rotation (\cref{ch:nonunique}); and in test~5 the left
+Alfvén and slow waves are so close that the Alfvén jump is resolved less accurately and the
+field rotates inside the slow rarefaction.
 
 \begin{example}[Balsara's test~2]\label{ex:balsara2}
 \Cref{tab:balsara2} reproduces the exact solution of Balsara's test~2 given by
@@ -2161,7 +2200,10 @@ Newton is seeded by a small neural network that predicts $\bm u_6$ from the two 
 written in a canonical form that removes the symmetries of the problem. Failed lanes are
 retried from other networks' seeds and from jittered seeds. The recorded experience is that
 convergence is threshold-shaped in the quality of the seed and that more \emph{diverse}
-starts help where better single seeds do not (the guide, \S1.9).
+starts help where better single seeds do not (the guide, \S1.9). Part of what looked like a
+narrow basin was the Alfvén solve failing inside the iterations: with the closed-form
+retry of \cref{sec:rotational} the first seed alone converges on 89\% of the attempted
+faces of the $64^2$ rotor, against 50\% without it (solver record \S5e).
 
 \paragraph{The five-wave planar solver.} On a 2D flow every face is coplanar to about
 $10^{-10}$ (median of the cross product of the normalised tangential fields, $7.6\times10^{-11}$
@@ -2216,42 +2258,51 @@ overwrites the faces the exact solver earns (the guide, Part~4):
   symmetry orbit (reflection, signed exchanges of the tangential axes, $\BB\to-\BB$, with
   $B_n\ge0$), solved, and mapped back;
 \item \emph{seven-wave Newton} from the network seeds, up to three rounds of 40
-  iterations; an answer is accepted if it converged, the state on the ray is resolved and
-  physical, and the fan is ordered;
+  iterations, every Alfvén solve inside it retrying a failed rotation from the closed form
+  (\cref{sec:rotational}); an answer is accepted if it converged, the state on the ray is
+  resolved and physical, and the fan is ordered;
 \item \emph{rescues} on the faces it lost: the five-wave planar solver with extra starts,
   then the four-unknown solver (both only on faces planar to $10^{-6}$);
-\item \emph{fallback}: a face every rung lost takes the HLLD flux (or the linearised flux if
-  its jump is small);
+\item \emph{fallback}: a face every rung lost takes the HLLD flux (if the weak-jump gate is
+  lowered below $10^{-2}$, a lost face whose jump is below that takes the linearised flux
+  instead);
 \item the flux is the flux of the state at $\xi=0$.
 \end{enumerate}
 
 \begin{table}[t]
 \centering\small
-\begin{tabular}{@{}lr@{}}
+\begin{tabular}{@{}lrr@{}}
 \toprule
-what happens to a face (all $8.0\times10^6$ face evaluations) & share\\
+what happens to a face (all $8.0\times10^6$ face evaluations) & without & with\\
 \midrule
-below the weak-jump gate (linearised flux) & 85.9\%\\
-fan entirely on one side (upwind) & 2.0\%\\
-attempted by the exact solver & 12.1\%\\
+below the weak-jump gate (linearised flux) & 85.93\% & 85.94\%\\
+fan entirely on one side (upwind) & 2.01\% & 2.01\%\\
+attempted by the exact solver & 12.06\% & 12.05\%\\
 \midrule
-of the attempted: seven-wave Newton & 43.8\%\\
-\phantom{of the attempted: }five-wave planar rescue & 50.5\%\\
-\phantom{of the attempted: }four-unknown planar solver & 2.3\%\\
-\phantom{of the attempted: }degenerate class & 1.1\%\\
-\phantom{of the attempted: }HLLD fallback & 2.28\%\\
-\phantom{of the attempted: }\textbf{solved exactly} & \textbf{97.72\%}\\
+of the attempted: seven-wave Newton & 55.5\% & 92.3\%\\
+\phantom{of the attempted: }five-wave planar rescue & 38.9\% & 3.4\%\\
+\phantom{of the attempted: }four-unknown planar solver & 2.1\% & 1.8\%\\
+\phantom{of the attempted: }degenerate class & 1.1\% & 1.1\%\\
+\phantom{of the attempted: }HLLD fallback & 2.38\% & 1.46\%\\
+\phantom{of the attempted: }\textbf{solved exactly} & \textbf{97.62\%} & \textbf{98.54\%}\\
 \bottomrule
 \end{tabular}
-\caption{Provenance of the fluxes in a complete $64^2$ relativistic-rotor run with the
-production defaults (solver record, \S5a, ``Every face of one run'').}
+\caption{Provenance of the fluxes in two complete $64^2$ relativistic-rotor runs with the
+production defaults, without and with the closed-form Alfvén retry of
+\cref{sec:rotational}, which is now a default (solver record \S5e). The run of \S5a,
+``Every face of one run'', made with the defaults of 2026-10-03, had 43.8\% and 50.5\%.}
 \label{tab:provenance}
 \end{table}
 
 \Cref{tab:provenance} shows where the fluxes of one complete run came from. Two things
-stand out. Half of the attempted faces are answered by the planar rescue, which reflects
-the coplanarity of 2D flows. And a few per cent are not answered at all; why is the subject
-of the next chapter.
+stand out. With the closed-form Alfvén retry the seven-wave Newton answers nine faces in
+ten. Without it the planar rescue answered between a quarter and a half of the attempted
+faces on the three test problems (\cref{sec:tests}); that looked like a consequence of the
+coplanarity of 2D flows, but it was mostly the Alfvén solve failing inside the Newton
+iterations, since with the retry the same faces are answered by the seven-wave Newton. And
+some faces are not answered at all: 1.5\% of the attempted ones on the rotor, 0.9\% on
+Orszag--Tang and 4.0\% on the four-quadrant problem. What is known about them is the
+subject of the next chapter.
 
 \section*{Exercises}
 \addcontentsline{toc}{section}{Exercises}
@@ -2285,7 +2336,8 @@ remaining continuous problem is the three-unknown planar one.
 
 \begin{exercise}[Programming]
 Implement the three-wave solver for $B^x=0$, $\vv\cdot\BB=0$ by reusing your hydrodynamic
-solver with the effective EOS \eqref{eq:romeroeos}, and compare with the $p$-method applied
+solver (generalised to this EOS and to tangential velocity) with the effective EOS
+\eqref{eq:romeroeos}, and compare with the $p$-method applied
 directly to the magnetised states.
 \end{exercise}
 
@@ -2338,6 +2390,10 @@ this precise for Newtonian MHD with an exact solver that includes intermediate w
   true one; the effect is strongest when the solution is unique but close to a non-unique
   one, and is expected for any diffusive scheme.
 \end{itemize}
+Balsara's test~1 behaves the same way in SRMHD (\cref{tab:b1family}): besides its compound
+wave and the intermediate shock of \textcite{GiacomazzoRezzolla2006} it has an r-solution
+with a single $180^\circ$ rotation, whose star-plateau density is 1.1\% above that of the
+intermediate-shock answer (solver record \S5).
 \textcite{TakahashiYamada2013} built a solver for regular and non-regular solutions and
 found, starting from the Brio--Wu data, an initial condition with \emph{no} regular solution,
 only a non-regular one on the boundary of the regular ones, and showed that non-regular
@@ -2354,18 +2410,48 @@ to their stability \parencite{Wu1990}, and \textcite{InoueInutsuka2007} found al
 evolutionary once dissipation is included. A numerical scheme supplies its own
 dissipation, and therefore its own selection.
 
-\begin{keybox}{Measured: which of two exact answers a finite-volume code picks}
-The solver record (\S5) reports that Balsara's test~1 has two exact solutions in SRMHD, a
-compound wave and a single intermediate shock, $7.7\times10^{-4}$ apart in the star state.
-One-dimensional runs with HLLD and HLLE fluxes, piecewise-linear and fifth-order
-monotonicity-preserving reconstruction (also seventh order and WENO5-Z), at 1024 to 4096
-cells, all approach the intermediate-shock solution (to $9.1\times10^{-5}$ at 4096 cells),
-while the distance to the compound solution stalls near $10^{-3}$. Neither the
-reconstruction order nor the flux function changes the selection. The record's
-interpretation: the selection happens inside the discontinuity, where every scheme is first
-order and the profile is set by its dissipation, so a code that reports one of the two
-answers reports a property of its own solver.
+\begin{keybox}[Measured: which exact answer a finite-volume code picks]
+The solver record (\S5) finds that Balsara's test~1 has not two but a one-parameter family
+of exact solutions in SRMHD (\cref{tab:b1family}). Its intermediate shock is not
+evolutionary, so the jump conditions leave the state behind it free; with $b$ the
+tangential field behind the left field reversal, the family runs from the compound wave,
+through the intermediate shock alone (the stored solution of
+\textcite{GiacomazzoRezzolla2006}) and an intermediate shock followed by a Lax slow shock,
+to the end where the shock has no density or pressure jump and moves at the Alfvén speed on
+both sides: a $180^\circ$ rotational discontinuity followed by a Lax slow shock, the
+regular solution. Every member satisfies the jump conditions to $10^{-13}$, and the
+entropy rises across every shock. One-dimensional runs up to 16384 cells (32768 for HLLE
+with the piecewise-linear MC limiter), measured where the members differ, land in different
+places of the family. With WENO5-Z reconstruction both HLLD and HLLE approach the compound
+wave. With MC neither settles on the intermediate shock: a compressive slow wave grows
+behind it, and the tangential field behind the run's shock drifts toward the regular end as
+the grid is refined ($b=-0.448$, $-0.458$, $-0.472$ at 8192, 16384 and 32768 cells with
+HLLE). Earlier runs at up to 4096 cells, judged by the plateau alone, had seemed to agree on
+the intermediate shock. The record's interpretation: the selection happens inside the
+discontinuity, where every scheme is first order and the profile is set by its dissipation,
+reconstruction included, so a code that reports one member reports a property of its own
+solver.
 \end{keybox}
+
+\begin{table}[t]
+\centering\small
+\begin{tabularx}{\textwidth}{@{}lXl@{}}
+\toprule
+$b$ & the left slow structure & star-plateau $\rho$, relative\\
+\midrule
+$-0.310$ & intermediate shock, sonic behind, its rarefaction attached (compound wave) & $-1.1\times10^{-3}$\\
+$(-0.4285,\,-0.310)$ & intermediate shock and a detached slow rarefaction & \\
+$-0.4285$ & the intermediate shock alone \parencite{GiacomazzoRezzolla2006} & $0$\\
+$(-0.6414,\,-0.4285)$ & intermediate shock and a Lax slow shock & \\
+$-0.6414$ & $180^\circ$ rotational discontinuity and a Lax slow shock (regular) & $+1.10\times10^{-2}$\\
+\bottomrule
+\end{tabularx}
+\caption{The family of exact solutions of Balsara's test~1 (solver record \S5), labelled by
+the tangential field $b$ behind the left field reversal. The star-plateau density is
+relative to that of the intermediate-shock solution. Beyond $b=-0.6414$ the shock is no
+longer intermediate and the entropy falls across it.}
+\label{tab:b1family}
+\end{table}
 
 \section{What this means for an exact solver}
 
@@ -2380,19 +2466,30 @@ returns a regular answer if one exists. Two further consequences matter in pract
   of the definition of a solution.
 \item \emph{Uniqueness within the regular family} is an empirical question for the
   populations a code meets. On 7620 lanes compared by two independent routes the record
-  found no second admissible regular solution (\S5b).
+  found no second admissible regular solution (\S5b). Counting intermediate shocks, answers
+  are not unique: when the closed-form Alfvén retry went in, 35 of 35\,000 paired faces
+  changed root, 7 of them between a regular and an intermediate-shock answer (\S5e).
+\item \emph{The reference solver is not purely regular.} Its slow-shock search extends $0.03$
+  past the Alfvén speed (\code{MARGIN}), which admits intermediate shocks: they are 2--4\%
+  of the exact answers in its two-dimensional runs, and no diagnostic flags them in
+  production. Until the closed-form Alfvén retry it returned the $2\to3$ intermediate shock
+  on Balsara~1, as does the stored solution of \textcite{GiacomazzoRezzolla2006}; with it,
+  the seven-wave Newton returns the regular solution (solver record \S5e). Which root wins
+  when both are reachable is decided implicitly, by the order of the solver's stages.
 \end{itemize}
 
 \section{The failure classes of the reference implementation}\label{sec:failure-classes}
 
 The reference implementation keeps a ledger of every interface its exact solver loses.
-Three classes are documented (solver record, \S5--5a and the four-quadrant section of \S7):
+Three classes were documented (solver record, \S5--5a and the four-quadrant section of
+\S7). The closed-form Alfvén retry of \cref{sec:rotational} has since removed much of the
+first and the third, so each is given with what is known now:
 
 \begin{enumerate}
 \item \textbf{Compound waves.} Running each lost interface as a one-dimensional shock tube
   shows a reversal of the tangential field through zero fused to a density and magnitude
   jump---a structure outside the seven-wave family. On the $64^2$ rotor, compound
-  interfaces are 2.5\% of the attempted ones and 75.7\% of them are unsolvable (2.3\% and
+  interfaces were 2.5\% of the attempted ones and 75.7\% of them went unsolved (2.3\% and
   68.1\% at $128^2$). A two-condition rule computed from the states alone,
   \begin{equation}
   \min(|B_{t,L}|,|B_{t,R}|)<0.3\,|B_n|\quad\text{and}\quad|\Delta\psi|>\pi/2,
@@ -2400,10 +2497,15 @@ Three classes are documented (solver record, \S5--5a and the four-quadrant secti
   (the field is nearly normal to the face and its tangential part turns by more than a right
   angle) flags 2.5\% of the attempted interfaces with 81\% precision and 79\% recall. This
   is the regime near $B_t=0$ where the slow, Alfvén and fast speeds approach one another.
+  \emph{Revised:} at the resolution of these tube tests a $180^\circ$ rotation riding on a
+  slow shock looks the same, and the searches that found no such root built their rotations
+  from the rigid seed of \cref{sec:rotational}. With the closed-form retry most of the faces
+  the runs had lost are answered by regular solutions with a $180^\circ$ rotation: 72\% of
+  the 573 rotor faces gained, 90--93\% on Orszag--Tang (solver record \S5e).
 \item \textbf{Field nearly normal to the face.} About half of what production lost on the
   rotor (695 of 1371 failing interfaces in the ledger) is elementary according to the
   shock-tube test. These interfaces have $|B_n|/|B_t|$ with median 4.4 (0.85 on solved
-  ones), and the Alfvén speed exceeds the sound speed. There the fast waves carry the
+  ones). Where, in addition, the Alfvén speed exceeds the sound speed, the fast waves carry the
   tangential field and the slow waves carry the pressure, $|B_t|$ is the wrong coordinate for
   the slow wave, and the planar Newton's residual jumps between branches. The four-unknown
   solver, which steers such slow waves by the pressure, certifies 135 of 200 of them; with
@@ -2413,9 +2515,15 @@ Three classes are documented (solver record, \S5--5a and the four-quadrant secti
   faces were solved. The lost faces sit just inside the two quadrants moving at $0.99c$,
   in flow with $W\approx6.4$ and magnetisation $0.045$, where the slow waves move with their
   Alfvén waves (gap $\sim2\times10^{-4}$) and the whole inner fan is about $0.01$ wide.
-  Nothing in the solver chain closes 95\% of them; the record concludes that a formulation
-  for a slow wave travelling with its Alfvén wave is needed.
+  Nothing in the solver chain closed 95\% of them, and the record concluded that a
+  formulation for a slow wave travelling with its Alfvén wave was needed. \emph{Revised:} it
+  was mostly the Alfvén solve. With the closed-form retry the run solves 96.0\% of the
+  attempted faces, and of 4000 faces it had lost, 1506 are solved and none lost: 643 by
+  regular solutions with a $180^\circ$ rotation and 849 by intermediate shocks, almost all
+  from the planar solver (solver record \S5e).
 \end{enumerate}
+The remaining losses, 1.5\%, 0.9\% and 4.0\% of the attempted faces on the rotor,
+Orszag--Tang and the four-quadrant problem at $64^2$, have not been classified since.
 
 \section*{Exercises}
 \addcontentsline{toc}{section}{Exercises}
@@ -2438,9 +2546,12 @@ $L\leftrightarrow R$ only changes its sign.
 \end{solution}
 
 \begin{exercise}
-A finite-volume code converges to the intermediate-shock solution of Balsara's test~1. Should
-an exact Riemann solver used as its flux return that solution, the compound one, or none?
-Discuss in terms of consistency between the flux and the dissipation of the scheme.
+Balsara's test~1 has a one-parameter family of exact solutions (\cref{tab:b1family}), and
+finite-volume codes land on different members depending on their reconstruction. Which
+member should an exact Riemann solver used as their flux return: the regular solution, the
+intermediate shock of \textcite{GiacomazzoRezzolla2006}, the compound wave, or none? Discuss
+in terms of evolutionarity and of consistency between the flux and the dissipation of the
+scheme.
 \end{exercise}
 
 
@@ -2537,7 +2648,9 @@ the two consistency conditions that the star states average to $\UU^{\rm hll}$ a
 fluxes to $\FF^{\rm hll}$. The contact moves with the fluid, $\lambda^\ast=v_x^\ast$, and the
 total pressure and normal velocity are continuous across it.
 
-\paragraph{The case $B^x=0$.} The star states have $m_x^\ast=(E^\ast+p^\ast)v^\ast$ and
+\paragraph{The case $B^x=0$.} (Following \textcite{MignoneBodo2006} we write
+$\bm m\equiv\SSS$, $E=\tau+D$, and $\gamma$ for the Lorentz factor $W$.) The star states have
+$m_x^\ast=(E^\ast+p^\ast)v^\ast$ and
 star fluxes $F^\ast_{m_x}=m_x^\ast v^\ast+p^\ast$, $F^\ast_E=m_x^\ast$, with common
 $p^\ast,v^\ast$ ($p$ is the total pressure here). Hence on both sides
 \begin{equation}
@@ -2696,7 +2809,9 @@ $t=0.4$ is $0.2881$ with HLLD and $0.2874$ with the exact flux on the attempted 
 (solver record, \S5a), and changing the reconstruction from piecewise-linear to fifth order
 moved the rotor some 24 times more than switching on the exact flux (\S7). On the magnetised
 four-quadrant problem at $64^2$, by contrast, the exact flux reduced $L_1(\rho)$ against the
-$512^2$ reference at $t=0.4$ from $0.1100$ (HLLD) to $0.1019$, about 7\% of the gap. Which solver is ``best'' is therefore problem- and
+$512^2$ reference at $t=0.4$ from $0.1100$ (HLLD) to $0.1019$, about 7\% of the gap
+($0.1023$ with the closed-form Alfvén retry, which solves three more per cent of the
+attempted faces; solver record \S5e). Which solver is ``best'' is therefore problem- and
 resolution-dependent; what the exact solver provides unambiguously is a reference.
 
 \section*{Exercises}
@@ -2709,11 +2824,11 @@ through zero.
 
 \begin{exercise}
 Show that, for an isolated stationary contact ($\vv_L=\vv_R=0$, $p_L=p_R$, $\BB=0$,
-$\rho_L\ne\rho_R$), the HLL flux has a nonzero mass component while the HLLC flux vanishes.
+$\rho_L\ne\rho_R$), the HLL flux has a nonzero mass component while the mass component of the HLLC flux vanishes.
 \end{exercise}
 \begin{solution}
 $F_D=0$ on both sides but $\UU_R-\UU_L\ne0$, so the HLL mass flux is
-$-S_LS_R(D_R-D_L)/(S_R-S_L)\neq0$. In HLLC, $v^\ast=0$ (the quadratic has $c=m_x^{\rm hll}=0$
+$S_LS_R(D_R-D_L)/(S_R-S_L)\neq0$ (negative for $D_R>D_L$, since $S_L<0<S_R$). In HLLC, $v^\ast=0$ (the quadratic has $c=m_x^{\rm hll}=0$
 and the minus root vanishes), so the star states carry no mass flux.
 \end{solution}
 
@@ -2954,13 +3069,13 @@ With $u^\mu=W(1,\vv)$, $\vB=\vv\cdot\BB$ and $w=\rho h+b^2$:
 \end{align*}
 Components of $T^{\mu\nu}=w\,u^\mu u^\nu+\Ptot g^{\mu\nu}-b^\mu b^\nu$:
 \begin{align*}
-T^{00}&=wW^2-\Ptot-(b^0)^2=\rho hW^2+B^2-p-\tfrac12b^2=\rho hW^2-p+\tfrac12(E^2+B^2),\\
+T^{00}&=wW^2-\Ptot-(b^0)^2=\rho hW^2+B^2-p-\tfrac12b^2=\rho hW^2-p+\tfrac12(|\EE|^2+B^2),\\
 T^{0i}&=wW^2v^i-b^0b^i=(\rho hW^2+B^2)v^i-\vB B^i=\rho hW^2v^i+(\EE\times\BB)^i,\\
 T^{ij}&=wW^2v^iv^j+\Ptot\delta^{ij}-b^ib^j
 =(\rho hW^2+B^2)v^iv^j-\vB(B^iv^j+B^jv^i)-\frac{B^iB^j}{W^2}+\Ptot\delta^{ij}\\
 &=S^jv^i+\Ptot\delta^{ij}-\frac{B^ib^j}{W},
 \end{align*}
-with $E^2=v^2B^2-\vB^2$. In the fluid rest frame $b^\mu=(0,\BB')$, $T^{00}=e+\frac12b^2$,
+with $|\EE|^2=v^2B^2-\vB^2$. In the fluid rest frame $b^\mu=(0,\BB')$, $T^{00}=e+\frac12b^2$,
 $T^{0i}=0$ and $T^{ij}=(p+\frac12b^2)\delta^{ij}-b^ib^j$. Useful combinations:
 $h_t=h+b^2/\rho$ (total specific enthalpy), $w=\rho h_t$, $c_a^2=b^2/w$,
 $\zeta^2=c_s^2+c_a^2-c_s^2c_a^2$, $\sigma=b^2/(\rho h)=c_a^2/(1-c_a^2)$. All identities in
@@ -3002,7 +3117,9 @@ in the contracted form (their eq.~32); and $l^\mu$ includes the term $\calB b^\m
 the text below eq.~32 but not in their eq.~26. We checked numerically, at an arbitrary
 state and several values of $\lambda$, that with $-a\,\delta^\mu_\nu$ and with the
 $\calB b^\mu/(\rho h)$ term the determinant identity above holds exactly and the eigenvectors
-below are exact null vectors; with $+a\,\delta^\mu_\nu$ neither holds (\cref{app:verification}).
+below are exact null vectors; with $+a\,\delta^\mu_\nu$, or without the $\calB b^\mu/(\rho h)$
+term, the determinant identity fails and the magnetosonic eigenvectors are not null vectors
+(\cref{app:verification}).
 \end{remark}
 
 \section{Right eigenvectors}
@@ -3027,8 +3144,9 @@ $\calB/a=\mp\sqrt{\mathcal E}$.
 and at Type~II degeneracies ($\varepsilon^\alpha=0$ because $b^\alpha$ becomes a combination
 of $u^\alpha$ and $\phi^\alpha$). Dividing by $a$ and using $\calB/a=\mp\sqrt{\mathcal E}$ removes
 the first problem; writing $\varepsilon^\alpha=g_1\alpha^\alpha_1+g_2\alpha^\alpha_2$ in a
-basis that stays regular, dividing by $\sqrt{g_1^2+g_2^2}$ and setting
-$f_{1,2}=1/\sqrt2$ at the degenerate point removes the second \parencite[eqs.~52--67]{Anton2010}.
+basis that stays regular, replacing $g_{1,2}$ by $\hat g_{1,2}\equiv g_{1,2}/\sqrt{g_1^2+g_2^2}$
+and setting $\hat g_1=\hat g_2=1/\sqrt2$ at the degenerate point removes the second
+\parencite[eqs.~52--67]{Anton2010}.
 This is the relativistic version of the procedure of \textcite{BrioWu1988}. The magnetosonic
 vectors are renormalised similarly \parencite[\S3.3.2]{Anton2010}; their expressions, the left
 eigenvectors, and the transformation to conserved variables are long and are not reproduced
@@ -3052,6 +3170,7 @@ $w,\ h_t$ & total enthalpy density $\rho h+b^2$, total specific enthalpy $w/\rho
 $\Ptot$ & total pressure $p+b^2/2$\\
 $\sigma$ & magnetisation $b^2/(\rho h)$\\
 $D,\ \SSS,\ \tau,\ E$ & conserved density, momentum, energy minus rest mass, total energy\\
+$\bm m$ & the momentum $\SSS$ in the notation of \textcite{MignoneBodo2006} (\cref{ch:approx})\\
 $c_s,\ c_a,\ \zeta$ & sound speed, rest-frame Alfvén speed $b/\sqrt w$, $\sqrt{c_s^2+c_a^2-c_s^2c_a^2}$\\
 $\lambda_{\rm e},\lambda_{\rm A}^\pm,\lambda_{\rm s}^\pm,\lambda_{\rm f}^\pm$ & entropy, Alfvén, slow, fast speeds\\
 $a,\ \calB,\ G$ & $u^\mu\phi_\mu$, $b^\mu\phi_\mu$, $\phi^\mu\phi_\mu$ for $\phi_\mu=(-\lambda,1,0,0)$\\
@@ -3077,6 +3196,8 @@ numerical ones use \textsc{mpmath} at 40 significant digits.
 \begin{itemize}[nosep]
 \item \Cref{prop:bmu}: $b^\mu={}^\ast\!F^{\mu\nu}u_\nu$ with $\EE=-\vv\times\BB$ gives
   \eqref{eq:b0}--\eqref{eq:b2}, $u_\mu b^\mu=0$ and ${}^\ast\!F^{\mu\nu}=u^\mu b^\nu-u^\nu b^\mu$.
+\item The identities and the components of $T^{\mu\nu}$ in \cref{app:bmu}, including the
+  general and rest-frame forms and $\sigma=c_a^2/(1-c_a^2)$.
 \item The conserved variables and fluxes \eqref{eq:UF}--\eqref{eq:Fx} from the components of
   \eqref{eq:Tmunu}, both forms of $\tau$ used in \file{hlld.py}, and the momentum-flux form of
   \textcite{MignoneBodo2006}.
@@ -3090,7 +3211,8 @@ numerical ones use \textsc{mpmath} at 40 significant digits.
   \cref{prop:ordering}; the isotropic bound \eqref{eq:lamzeta} and \cref{lem:monotone}.
 \item The HLL identities; the effective sound speed \eqref{eq:romeroeos}; the relativistic
   Riemann invariant for the ideal gas; the primitive-recovery relations
-  \eqref{eq:c2p-v2}--\eqref{eq:c2p-f}; the factorisation \eqref{eq:Bydenom}.
+  \eqref{eq:c2p-v2}--\eqref{eq:c2p-f}, checked exactly, in rational arithmetic, at one
+  state; the factorisation \eqref{eq:Bydenom}.
 \end{itemize}
 
 \paragraph{Checked numerically.}
@@ -3106,9 +3228,8 @@ numerical ones use \textsc{mpmath} at 40 significant digits.
   $1\to2$ transition.
 \item Rotational discontinuities built from \cref{prop:alfven} satisfy all RH conditions to
   $10^{-40}$ at $V_s=\lambda_A$, with $\rho$, $p$ and $b^2$ continuous and $v_x$, $|B_t|$ not.
-\item The characteristic determinant and the eigenvectors of \cref{app:eigen}.
-\item \Cref{ex:blast} against the exact solver of the reference implementation (built-in
-  case~3).
+\item The characteristic determinant and the eigenvectors of \cref{app:eigen}, and that both
+  variants of the matrix printed by \textcite{Anton2010} fail these tests.
 \end{itemize}
 
 \paragraph{Checked against the sources.} Every bibliography entry was checked on its arXiv
@@ -3132,6 +3253,9 @@ the Lichnerowicz adiabat, which was only checked numerically. (iv) The page rang
 (v) Claims attributed to \textcite{Komissarov1997} are quoted from the summaries in
 \textcite{MignoneBodo2006} and \textcite{MignoneUglianoBodo2009}; the paper itself was not
 accessed.
+
+\paragraph{Checked separately (not by the script).} \Cref{ex:blast} was compared against
+the exact solver of the reference implementation (its built-in case~3).
 
 %%NEXT-CHAPTER%%
 
