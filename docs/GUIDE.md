@@ -1,6 +1,6 @@
 # A guide to the code and the physics
 
-Written 2026-09-29. This is the entry document: it explains the physics the
+Written 2026-09-29, brought up to date 2026-10-27. This is the entry document: it explains the physics the
 two repositories implement, how the code is organised, how a flux is actually
 computed, and what has been measured so far. It is meant to be read top to
 bottom once, and then used as a map.
@@ -146,15 +146,25 @@ to the tangential field:
     rho₁ (u₁² - a₁²) B_t1 = rho₂ (u₂² - a₂²) B_t2
 
 (`u` the flow speed in the shock frame, `a` the Alfvén speed). A slow shock
-can reduce `B_t` to zero but cannot reverse it; an Alfvén wave can rotate it
-but cannot change its size. Reversing the field *through* zero while
-compressing takes something else — section 1.8.
+can reduce `B_t` to zero but cannot reverse it; an Alfvén wave can rotate it,
+even by 180°, but never through zero (non-relativistically without changing
+its size, relativistically changing it a little). Reversing the field
+*through* zero while compressing takes something else — section 1.8.
 
 **Alfvén waves** are rotational discontinuities. Non-relativistically they
 rotate `B_t` and `v_t` by an angle and change nothing else. Relativistically
-the rotation is coupled to the velocity and the solve is a small nonlinear
-system of its own (`rmhd/alfven_solver.py`, `alfven_b.py`), with more than
-one root — which root is taken is a recurring source of subtlety.
+the rotation is coupled to the velocity: across Balsara 1's 180° rotation
+`|v_y|` goes from 0.036 to 0.765 and `W` from 1.08 to 1.69. Production solves
+it with a pinned Newton (`rmhd/alfven_solver.py`, `alfven_b.py`), started
+from a rigid rotation at fixed `W` — which is far from such a rotation, and
+from which the Newton fails. Since 2026-10-27 every rotation it fails is
+retried from the **closed form** (`exact_rotation` in
+`rmhd/batched/fullcontact_b.py`; `RMHD_ALFVEN_EXACT`, on): across the wave
+`rho`, `p` and `b²` are continuous and so is `b + s sqrt(rho h + b²) u`, so
+the conditions on the four-velocity behind are linear but one, and the
+rotation is where a line meets `u·u = -1`. This one sub-solver defect was
+behind 39–62% of the faces the 64² runs lost (section 1.8; `what_we_solve.md`
+5e).
 
 **The contact** carries a density jump only. Across it, `vx`, `P_tot`, the
 tangential velocity and the tangential field are all continuous (when
@@ -228,6 +238,12 @@ residual, so they are exact in the same sense as any other.
 On the rotor, 93.5% of solved interfaces carry exactly five waves (both fast,
 both slow, the contact); the Alfvén waves are silent.
 
+Until 2026-10-27 the planar solver answered about half of the rotor's
+attempted faces, which was read as the price of coplanarity. Most of it was
+the Alfvén sub-solver failing inside the seven-wave Newton (section 1.4):
+with the closed-form rotation the seven-wave Newton answers 92% of them and
+the planar rescue 3%.
+
 **The four-unknown planar solver** (`rmhd/batched/planar4_b.py`, 2026-09-30)
 is the same five-wave picture with one strength per wave. The five-wave
 solver gives both slow waves ONE field to reach, and decides shock or fan by
@@ -280,22 +296,39 @@ Thresholds are relative to the width of the wave fan, not absolute.
 Some interfaces need the tangential field to **reverse through zero while the
 flow is compressed**. No elementary wave does that (section 1.4). What nature
 — or at least the PDE — does is an **intermediate shock**, or a *compound
-wave*: an intermediate shock with a rarefaction attached to it.
+wave*: an intermediate shock with a rarefaction attached to it. A
+**regular** solution can reverse the field too, without passing it through
+zero: a 180° rotation at an Alfvén wave followed closely by a slow shock. In
+a shock tube the two look alike.
 
-Three measured facts (`what_we_solve.md` §5):
+What is measured (`what_we_solve.md` §5, §5e):
 
-1. These structures are **not in the seven-wave family**. No seed and no
-   amount of retrying finds them, because the root does not exist there.
-2. Coplanar ideal MHD is **non-unique**. Balsara's test 1 has two exact
-   solutions, a compound wave and a single intermediate shock, 7.7e-4 apart.
-3. A finite-volume scheme **selects** one of them — the intermediate shock —
-   and neither the order of the reconstruction (2nd to 7th) nor the flux
-   function (HLLD or HLLE) changes the selection. It is made by the scheme's
-   dissipation, which is not an ideal-MHD quantity.
+1. Many of the faces the runs lost looked like a reversal fused to a jump,
+   and every search for a regular root came back empty, so they were taken
+   to lie outside the seven-wave family. About half of them do not: the
+   closed form (section 1.4) answers them, mostly with a regular solution
+   with a 180° rotation, which the Alfvén solve could not build before.
+   Compound waves and intermediate shocks themselves are outside the regular
+   family.
+2. Coplanar ideal MHD is **non-unique**. Balsara's test 1 has a
+   one-parameter family of exact solutions: the compound wave at one end,
+   Giacomazzo & Rezzolla's single intermediate shock in the middle, and at
+   the other end the regular solution, a 180° rotation followed by a Lax
+   slow shock, whose plateau density is 1.1% higher. Production returns the
+   regular one since 2026-10-27; before, it returned the intermediate shock,
+   which the slow-shock window's `MARGIN` admits.
+3. A finite-volume scheme **selects** a member, and the reconstruction does
+   the selecting: up to 16384–32768 cells, WENO5-Z goes to the compound end
+   with HLLD and with HLLE, while MC does not settle and drifts toward the
+   regular end. (An earlier reading, that every scheme picks the
+   intermediate shock, came from plateau values at up to 4096 cells.) The
+   choice is made by the scheme's dissipation, which is not an ideal-MHD
+   quantity.
 
-On the rotor, compound interfaces are 2.3–2.5% of the attempted ones, and
-they are predictable from the states alone: the weaker side's `|B_t|` is
-below 0.3 `|B_n|` **and** the tangential field turns by more than π/2.
+On the rotor, faces with the compound signature are 2.3–2.5% of the
+attempted ones, and they are predictable from the states alone: the weaker
+side's `|B_t|` is below 0.3 `|B_n|` **and** the tangential field turns by
+more than π/2.
 
 ### 1.9 Why strong magnetisation is hard
 
@@ -305,7 +338,10 @@ light. The basin from which Newton converges shrinks. Convergence is
 *threshold-shaped* in the quality of the seed: within about 0.10 of the root
 it converges ~88% of the time, and a seed that is merely somewhat better
 gains nothing. This is why *more starts* (multistart, an ensemble of seeds)
-has repeatedly helped where *a better seed* has not.
+has repeatedly helped where *a better seed* has not. Part of what looked like
+a narrow basin was the Alfvén sub-solver failing inside the iterations: with
+the closed-form rotation (section 1.4) the first seed alone converges on 89%
+of the rotor's attempted faces, against 50% before.
 
 ---
 
@@ -460,7 +496,9 @@ Inside (`fullcontact_b.py`):
 
 1. `fullfuncv6(left, right, unk6, Bn)` builds the fan — fast wave, Alfvén
    wave, slow wave on each side — and returns the residual, the six zones
-   and the wave speeds.
+   and the wave speeds. The Alfvén wave comes from `alfven_checked`: the
+   pinned Newton, and for a rotation it fails, the closed form
+   (section 1.4).
 2. The **Jacobian** is a finite difference, but the six perturbed unknown
    vectors are stacked into the batch, so one call replaces seven.
 3. The step comes from an **SVD** with small singular values truncated (the
@@ -535,6 +573,8 @@ keeps a valid flux.
       │
       ├─ ATTEMPTED faces (about 12% of face-evaluations on the rotor)
       │     ML seed  ->  seven-wave Newton, up to 3 rounds x 40 iterations
+      │       every Alfvén rotation the pinned Newton fails is retried
+      │       from the closed form   (RMHD_ALFVEN_EXACT, on since 2026-10-27)
       │     accept if: converged, ray resolved, state physical, fan ordered
       │
       ├─ RESCUES on the faces the seven-wave path lost
@@ -559,15 +599,21 @@ keeps a valid flux.
       │
       └─ VERIFY against the full seven-wave residual (1e-8), count, record
 
-What production gets, per attempted face-evaluation on the 64² rotor (the
-first run with per-face provenance, 2026-09-28):
+What production gets, per attempted face-evaluation on the 64² rotor:
 
-| answered by | share |
-|---|---|
-| seven-wave Newton | 43.9% |
-| planar five-wave rescue | 49.6% |
-| degenerate class | 1.1% |
-| **fell back to HLLD** | **5.4%** |
+| answered by | 2026-09-28, the first run with per-face provenance | 2026-10-03, the rescue rungs on | 2026-10-27, + the closed-form Alfvén rotation |
+|---|---|---|---|
+| seven-wave Newton | 43.9% | 43.8% | 92.3% |
+| planar five-wave rescue | 49.6% | 50.5% | 3.4% |
+| four-unknown planar solver | – | 2.3% | 1.8% |
+| degenerate class | 1.1% | 1.1% | 1.1% |
+| **fell back to HLLD** | **5.4%** | **2.28%** | **1.46%** |
+| **solved** | 94.6% | 97.72% | **98.54%** |
+
+The same day's run with the closed form off gave 55.5% seven-wave, 38.9%
+planar, 2.1% four-unknown and 1.1% degenerate, and 97.62% solved. On Orszag–Tang (64²) the closed form takes the solved share
+from 97.67% to 99.11%, on the four-quadrant problem from 93.06% to 96.00%
+(`what_we_solve.md` 5a, 5e).
 
 **Diagnostics.** After every call `LAST_DIAG` (a dict in `hlld.py`) holds the
 counts and per-lane masks. A run writes `diag.csv` (one row per logged step),
@@ -642,9 +688,12 @@ identical *to the bit*. It protects against the dangerous kind of edit — not
 one that crashes, but one that quietly changes every flux.
 
 **The suites** (`gate.sh full`): pytest on both repositories, run across a
-node. Baselines: HLLD 149 passed / 7 expected failures; rmhd_final 173 passed
-/ 2 skipped / 3 known failures on calea. The expected failures are strict and
-documented; an unexpected pass is also a failure.
+node. Baselines (2026-10-27): HLLD 194 passed / 6 expected failures;
+rmhd_final 202 passed / 3 skipped on the laptop, 199 passed / 3 skipped / 3
+known failures on calea. The expected failures are strict and documented; an
+unexpected pass is also a failure. `full` fails on any failure that is not on
+calea's known list (`KNOWN_FAIL_R` in `gate.sh`) and keeps the whole pytest
+output in `rmhd_final/logs/`.
 
 **Nothing is committed before the gates pass.**
 
@@ -674,25 +723,31 @@ Each line is a result with its section in `what_we_solve.md`.
 | finding | where |
 |---|---|
 | The rotor is a **five-wave, coplanar** flow; the Alfvén waves are silent on 93.5% of solved interfaces. | §2 |
-| Production solves **94.6%** of the interfaces it attempts; half of those through the planar rescue. | §4 |
+| Production solves **98.5%** of the interfaces it attempts on the 64² rotor, **99.1%** on Orszag–Tang and **96.0%** on the four-quadrant problem; the seven-wave Newton answers 85–97% of them. (September: 94.6% on the rotor, half through the planar rescue.) | §4, §5a, §5e |
 | Only ~12% of face-evaluations are attempted; the rest are weak jumps or upwind fans. | §4b |
 | Switching on the exact flux changes the rotor by **0.5%**, against a 32.8% gap between resolutions. The exact solver was never the limit on accuracy. | §7 |
 | The **reconstruction** moves the rotor 24× more than the exact flux. WENO5-Z beats the production scheme by 10–12% at 256²; MP5 and MP7 lose, break positivity, and go non-finite at 512². | §7 |
 | The HLLD star pressure is best found by the **secant**; every Newton variant is slower and falls back ten times as often. | §7 |
-| About a third of the unsolved interfaces are **compound** — not in the seven-wave family — and predictable from two numbers. The rest are crowded wave speeds. | §5 |
-| Ideal coplanar MHD is **non-unique**; the scheme's dissipation selects the intermediate shock, regardless of reconstruction order or flux function. | §5 |
+| About half of the losses once read as **compound** waves or **crowded wave speeds** were one sub-solver defect: the Alfvén solve could not build strongly relativistic rotations. A closed form recovers 10,230 of 28,000 lost faces and loses 7; most of those it recovers have a regular solution with a 180° rotation. | §5, §5e |
+| Ideal coplanar MHD is **non-unique**: Balsara 1 has a one-parameter family of exact solutions, from a compound wave through Giacomazzo & Rezzolla's intermediate shock to a regular solution. The scheme's dissipation — the reconstruction above all — picks the member; production returns the regular one. | §5, §5e |
+| The **four-unknown solver** (one strength per wave) answers the near-normal-field faces the planar Newton cannot steer: 94.4% → 96.8% on the rotor's ledger windows, 97.9% with the other rungs. | §5a |
+| Accepted fluxes are exact to a median **1e-12** (worst 9.4e-7). | §5b |
+| Below the weak-jump gate the **linearised flux** is 25–120× closer to the exact flux than HLLD; it is the default there. | §4c |
+| **Canonical orientation** (each face solved as a fixed member of its symmetry orbit) restores mirror symmetry: Orszag–Tang's asymmetry falls by 1e4. | §7 |
+| The exact flux moves a run visibly only where the grid cannot resolve a discontinuity: 7% of HLLD's gap to 512² on the four-quadrant problem, 0.4–2.9% on Orszag–Tang, 0.2% on the rotor. | §7 |
 | Skipping predicted-compound interfaces costs 6.1% of the exact fluxes for 8% of the time. Not worth it. | §5 |
 | A sign error in the Alfvén speeds for `B_n < 0` had been costing 18% of the exact fluxes. Fixed. | §5 |
 | More training data for the seed: two null results. **Multistart** is the lever that works. | memory notes |
 
-**In progress (science plan H, "toward 100% solved").** The aim is to raise
-the 94.6%. First a *failure ledger*: every failing interface of a fixed set of
-recorded sweeps is offered to every method available — seven-wave with many
-diverse seeds, planar over all flip branches, the ε-continuation ladder, a
-seed read off a 1D tube simulation, and the intermediate-shock branch — each
-answer held to production's acceptance. That table is the ceiling. Machine
-learning is then aimed at the interfaces that have a root we fail to find,
-and an extension of the solution family at the ones that do not.
+**Where it stands (2026-10-27; science plan H, "toward 100% solved").** The
+failure ledger (§5a) offered every failing interface of a fixed set of
+recorded sweeps to every method available; what it found led to the rescue
+rungs and the four-unknown solver (§5a), and the closed-form Alfvén rotation
+(§5e) removed 39–62% of what was left. Still lost at 64²: 1.5% of the
+attempted faces on the rotor, 0.9% on Orszag–Tang and 4.0% on the
+four-quadrant problem, not yet classified. Still open: which root to return
+when a regular and an intermediate-shock answer are both reachable — the
+chain keeps the first it certifies.
 
 ---
 
@@ -713,7 +768,7 @@ and an extension of the solution family at the ones that do not.
 | `ml_guess.py` | the network, training, checkpoints |
 | `batched/api.py` | **the batched entry point**, `make_solver` |
 | `batched/classify.py` | structure classes |
-| `batched/fullcontact_b.py` | the six-unknown Newton |
+| `batched/fullcontact_b.py` | the six-unknown Newton, and the Alfvén solve (`alfven_checked`) with its closed-form retry (`exact_rotation`) |
 | `batched/planar5_b.py` | the five-wave planar solver |
 | `batched/planar4_b.py` | the four-unknown planar solver: one strength per wave, its own certificate |
 | `batched/contact_b.py` | the three-wave solver |
@@ -742,7 +797,9 @@ and an extension of the solution family at the ones that do not.
 `harvest_summary.py`), and studies (`snapshot_census.py`,
 `compound_classifier.py`, `tube_features.py`, `coplanar_limit.py`,
 `compound_planar.py`, `compound_wave.py`, `pstar_methods.py`,
-`rotor_replay.py`).
+`rotor_replay.py`, and Balsara 1: `balsara1_study.py`, `balsara1_family.py`,
+`balsara1_selection.py`). The closed-form rotation's measurements are in
+`rmhd_final/scripts/alfven_exact/`.
 
 ---
 
@@ -761,6 +818,7 @@ and an extension of the solution family at the ones that do not.
 | **lane** | one interface inside a batch |
 | **multistart** | retrying a failed solve from different seeds |
 | **P_tot** | total pressure, `p + b²/2` |
+| **regular solution** | one built only from Lax shocks, rarefactions, rotational discontinuities and a contact |
 | **seed** | the Newton's starting guess |
 | **sigma** | magnetisation, `b²/(rho h)` |
 | **star state** | the state between the waves, next to the contact |
