@@ -65,7 +65,22 @@ ALL_N = (100, 200, 400, 800, 1600)
 G53 = 5.0 / 3.0
 
 TUBE_CONFIGS = {"b5": "configs/Giacomazzo/Balsara5.yaml",
-                "sst": "configs/slow_shock_tube.yaml"}
+                "sst": "configs/slow_shock_tube.yaml",
+                # the rest of Giacomazzo & Rezzolla (2006), Table 4
+                "b1": "configs/Giacomazzo/Balsara1.yaml",
+                "b2": "configs/Giacomazzo/Balsara2.yaml",
+                "b3": "configs/Giacomazzo/Balsara3.yaml",
+                "b4": "configs/Giacomazzo/Balsara4.yaml",
+                "galf": "configs/Giacomazzo/generic_alfven.yaml",
+                "kst1": "configs/Giacomazzo/komissarov_tube1.yaml",
+                "kcol": "configs/Giacomazzo/komissarov_collision.yaml"}
+GR06 = ("b1", "b2", "b3", "b4", "b5", "galf", "kst1", "kcol")
+GR06_N = (200, 400, 800, 1600)
+# the exact arm with every face given to the exact solver: no weak-jump gate,
+# no upwind skip, the tube network and the continuation rung (the 2026-10-29
+# high-coverage configuration), the slow-shock retry named explicitly
+GR06_OPEN = ("--tau-weak 0 --env RMHD_UPWIND_SKIP=0 --env RMHD_ML_CKPT=data/ml_guess_gamma53_v5.pt "
+             "--env RMHD_CONTINUATION=1 --env RMHD_SLOWSHOCK_RETRY=1 --suffix _open")
 # make_slow_shock_tube.py arguments of the two constructed tubes
 TUBE_BUILD = {"sst0": dict(),                                   # the script's defaults
               "sst": dict(Bn=1.5, Bt=0.75, p=0.05, factor=1.5)}  # the committed config
@@ -363,6 +378,25 @@ def tasks(experiment, out):
                         cost = 200.0 * 200.0 * (30.0 if sol == "exact" else 1.0)
                         T.append((cost, "run --case %s:%s --solver %s --limiter %s --ncells 200 "
                                   "--snap-every 10 --out %s" % (name, s, sol, lim, out)))
+    if experiment in ("gr06", "gr06pilot"):
+        # Giacomazzo & Rezzolla (2006): HLLE / HLLC / HLLD and the exact flux
+        # on every face, first and second order, 200 to 1600 cells; the pilot
+        # is every exact run's first 10 steps at 200 cells
+        for case in GR06:
+            cfl = 0.2 if case == "b4" else 0.4
+            for n in (GR06_N if experiment == "gr06" else (200,)):
+                for lim in LIMITERS:
+                    for sol in SOLVERS:
+                        if experiment == "gr06pilot" and sol != "exact":
+                            continue
+                        cost = n * n / cfl * (300.0 if sol == "exact" else 1.0)
+                        line = "run --case %s --solver %s --limiter %s --ncells %d --out %s" % (
+                            case, sol, lim, n, out)
+                        if sol == "exact":
+                            line += " " + GR06_OPEN
+                        if experiment == "gr06pilot":
+                            line += " --tend %r" % (10 * cfl / n)
+                        T.append((cost, line))
     if experiment == "pilot":
         for line in ("--case sst --solver exact --limiter mc --ncells 100 --tend 0.1",
                      "--case b5 --solver exact --limiter pcm --ncells 100 --tend 0.1",
@@ -471,7 +505,8 @@ def main():
                    help="set before the solver modules are imported (they read "
                         "their switches at import), e.g. RMHD_CONTINUATION=1")
     li = sub.add_parser("list")
-    li.add_argument("experiment", choices=("tubes", "standing", "all", "pilot", "levers"))
+    li.add_argument("experiment", choices=("tubes", "standing", "all", "pilot", "levers",
+                                           "gr06", "gr06pilot"))
     li.add_argument("--out", required=True)
     an = sub.add_parser("analyse")
     an.add_argument("out")
