@@ -2085,6 +2085,136 @@ baseline failed by gains only -- calea 149 -> 163 exact faces, the laptop
 150 -> 164, none lost, solved faces moved by up to 3.6e-6 -- and was
 re-answered on both hosts; both suites pass (calea jobs 52238 and 54609).
 
+**What is still lost** (2026-10-27/28; calea jobs 55242-55244,
+`results/failure_ledger_{rotor,ot,r2d}_alfx1`). The failure ledger of section
+5a, on each 64² run's own faces with the switch on: every face production
+lost is offered, offline and with a generous budget, to every other method
+this project has, held to production's acceptance, and filed by the cheapest
+method that closes it (R1 to R4); the tube test labels it compound or
+elementary; faces production solves are offered too, as controls. 1,200 lost
+and 1,200 solved faces per run, replayed through production's path: of the
+lost, 524 / 842 / 1,101 are lost again (the others are the four-unknown and
+degenerate answers the harvest does not keep as solved rows, and round-off),
+and none of the solved. (The first ledger on a Γ = 4/3 problem: until
+2026-10-27, HLLD ccc2b2e, the ledger's stages solved with 5/3 whatever the
+population.)
+
+| of the faces lost again | rotor | Orszag–Tang | four-quadrant |
+|---|---|---|---|
+| R1 a cheap method (seven-wave from diverse seeds; planar from 24 starts) | 4.8% | 4.9% | 1.5% |
+| R2 only the expensive search (ε-ladder, tube seed) | 5.2% | 1.8% | 0.5% |
+| R3 only with the slow-shock window opened (method d) | 9.2% | 12.7% | 15.3% |
+| of them, an intermediate shock on every answer | 1.1% | 0.8% | 9.4% |
+| **R4 nothing** | **80.9%** | **80.6%** | **82.7%** |
+| compound, by the tube test | 42.6% | 52.3% | 4.6% ± 1.0% * |
+| compound, among R4 | 46.5% | 59.4% | 5.1% * |
+
+\* On 460 of the 1,101 faces: the job's one-day limit ended the tube stage
+with 28 of its 64 shards done (a user cannot extend a running job on calea),
+and it was not rerun. The labelled faces' R1-R4 mix is close to that of all
+1,101 (R4 81.7% against 82.7%), and the complete ledger of 2026-10-09
+(section 7) had 3.1%.
+
+In terms of each run's attempted faces:
+
+| % of the attempted | rotor | Orszag–Tang | four-quadrant |
+|---|---|---|---|
+| solved | 98.54 | 99.11 | 96.00 |
+| if every R1 and R2 face were won back | 98.68 | 99.17 | 96.08 |
+| and every R3 face too | 98.82 | 99.28 | 96.69 |
+| left, compound | 0.55 | 0.43 | 0.17 |
+| left, elementary | 0.63 | 0.29 | 3.15 |
+
+Production lost 92% / 75% / 98% of them because neither the seven-wave nor
+the planar solver converged; on Orszag–Tang the planar answer failed the full
+residual on 20% and the seven-wave answer was refused as self-crossing on 8%.
+On the controls no method on production's branch finds another root on more
+than 0.3%; the opened window does on 0.2-1.6%: it also reaches roots past the
+Alfvén speed.
+
+How this compares. On the four-quadrant run's own faces before the closed
+form, R4 was 95.2%, R3 3.2% and compound 3.1% (section 7, 2026-10-09): what
+the closed form took there (6.94% -> 4.00% of the attempted, above) was
+almost all elementary, and what is left is elementary too, on the two
+columns along the shear layers; the opened window now closes 15% of it. For the rotor the only earlier ledger is on recorded windows of an
+older production (section 5a, 2026-09-29: R4 74%, a third of it compound),
+which does not compare directly, and Orszag–Tang had none. Now about half of
+what the rotor and Orszag–Tang lose is labelled compound by the tube test,
+and no method finds a root for it. The label is not a proof that no
+seven-wave root exists -- section 5's verdicts of that kind fell with the
+closed form. Without the opened window, nothing that existed wins back more
+than 0.15% of the attempted faces -- but most of what the window wins is not
+an intermediate shock, and a retry in the slow-shock solve wins far more:
+
+**Most of R3, and most of the four-quadrant R4, is a slow-shock search
+defect** (2026-10-29; calea job 60922; the scripts in
+`claude_scratch/ledger_check/r3_window`, not in the repository yet). On 42 of
+the 48 rotor R3 faces, 100 of the 107 Orszag–Tang ones and 65 of the 168
+four-quadrant ones every answer method d accepts is ordered: no slow wave runs
+ahead of its Alfvén wave, and none is an intermediate shock. Production misses
+them in its slow-shock solve (`slow_shock_b`). The answer's slow shock lies
+inside the solve's window, but in a sliver next to the Alfvén speed: the gap
+d = |λ_slow − λ_A| of the state ahead is 3e-4 / 2e-4 / 9e-5 (medians), with
+the shock at 0.9 d from the Alfvén end, and the ladder's grid has cells of
+~3e-3 in V_s and 0.13 in v_xb. Handed the answer's own inputs (its tangential
+field behind, its state ahead), the solve fails on 26 of 53 / 37 of 147 / 64
+of 66 shocks and returns another root on 17 / 63 / 1 -- every one of them past
+the Alfvén speed, inside the 0.03 overshoot its window allows. Either way the
+planar residual is not defined at the root; method d found it only because
+its wider grid happened to land closer.
+
+A retry of the failed lanes only, on a window scaled to the room a slow shock
+has -- V_s from the Alfvén speed (less min(0.03, g)) to v_xa, v_xb over
+v_xa ± 2g, with g = |v_xa − λ_A| ahead (the adaptive window of 2026-09-02,
+which then replaced the ladder's and moved root selection on the outer
+Newton's off-family iterates; as a retry, every lane the ladder answers keeps
+its bits) -- builds the shock to 1e-13 on 233 of the 234 test shocks. With it,
+the ledger's methods a and b, unchanged otherwise, answer:
+
+| lost faces now answered | rotor | Orszag–Tang | four-quadrant |
+|---|---|---|---|
+| R3 | 25 of 48 | 33 of 107 | 166 of 168 |
+| R4 | 41 of 424 | 93 of 679 | 745 of 911 |
+| in % of the attempted | +0.18 | +0.13 | +3.31 |
+
+All of them by the planar solver from its first start (the default seed, no
+flip), none of them compound, and no face the ledger answered is lost. On the
+controls the seven-wave answers are the same bit for bit and the planar ones
+the same roots, to 1.3e-6. On 370 of the 911 four-quadrant faces an
+intermediate twin lies 1e-6 away in p*; the first answer is the regular one
+on all of them. The four-quadrant losses were this defect -- the slow shock
+those faces need is the one section 7's probe of 2026-10-08 could not build
+(a 5.6% drop of the tangential field) -- and what is left there is 0.69% of
+the attempted. On the rotor the retry wins faces with a nearly tangential
+field (B_t/B_n ~ 90), where the sliver is narrow because B_n is small; the
+near-normal-field faces (B_t/B_n ~ 0.1, the parametrisation class of
+section 5a) and the compound ones stay lost. The production switch is
+`RMHD_SLOWSHOCK_RETRY` (rmhd_final `slow_shock_b`, on by default since
+2026-10-30, 0 turns it off; tests `tests/batched/test_slow_shock_retry.py`). It keeps one grid of the three
+tried: the 12 x 16 grid made 130,740 of the 130,749 rescues on the three
+ledgers, 24 x 32 none and 48 x 64 nine, and the finer two ran on every lane
+the first could not rescue -- mid-Newton iterates, mostly, with no shock to
+find (calea 60931, 60932: the same faces answered with one, two or three
+grids). Full 64² runs, off against on, the code otherwise the same (calea
+60938-60940 against the closed-form runs of section 5e): faces exact of the
+attempted, rotor 98.54 -> 98.69%, Orszag–Tang 99.11 -> 99.24%, four-quadrant
+96.00 -> 99.26% (HLLD there on 4.00 -> 0.74% of the attempted), every face
+gained by the planar solver; wall per step +6 / +4 / +21%. The solutions do
+not move: L1(rho) between on and off is 1.7e-4 / 2.1e-4 / 9.2e-5 at the end,
+at most 0.09% of their distance to 512² (0.287 / 0.266 / 0.102). The rotor's
+symmetry error ends at 1.5e-3 against 8.4e-4 off (2-3x higher over steps
+10-150, the same afterwards; not traced).
+
+The roots past the Alfvén speed can be refused too: where the solve answers
+with one, look again on the physical side of the Alfvén speed and keep a root
+found there (calea 60923, in the same scripts; not in production). This
+CHANGES answers production returns. It answers 99 / 238 / 974 of the lost
+faces instead of 66 / 126 / 911 (+0.28 / +0.25 / +3.54% of the attempted,
+including 4 and 6 faces labelled compound on the rotor and Orszag–Tang). On
+the controls the seven-wave answers stay the same (to 7e-13), but the planar
+sweep finds another root (by up to 3.3% in p*) on 2 rotor controls and no
+longer answers 1 Orszag–Tang and 1 four-quadrant control.
+
 **What this changes elsewhere in this document.** The tube test of section 5
 and its census predate the closed form: their "no elementary root" and
 "unsolvable" verdicts on reversing faces do not stand. The four-quadrant
@@ -2095,8 +2225,20 @@ run's losses fall from 6.94% to 4.00% of the attempted faces).
 **Open (the user's decisions).** Which root to return when a regular and an
 intermediate-shock answer are both reachable: the chain keeps the first it
 certifies, and 3 of the 35 root changes went from regular to intermediate.
-The remaining losses, 1.46%, 0.89% and 4.00% of the attempted faces, are not
-classified yet.
+The same question decides the R3 faces whose every answer is an
+intermediate shock, 0.02 / 0.01 / 0.37% of the attempted (with the slow-shock
+retry 1 of the 103 four-quadrant ones keeps only intermediate answers), and
+whether the slow-shock solve should prefer a root on the physical side of the
+Alfvén speed where it finds one past it (+0.09 / +0.12 / +0.23% of the
+attempted beyond the retry, for roots that move on a few solved faces). Production already returns slow
+shocks more than 1e-3 past the Alfvén speed on 0.27% / 0% / 0.19% of the faces
+it solves (one harvest shard per run). (The slow-shock retry itself is the
+default since 2026-10-30, the user's decision after the full runs.) Then what
+needs something that does
+not exist yet: for the faces labelled compound, a compound element, unless a
+regular root exists that no method reaches, as on Balsara 1 until the closed
+form (section 5); for the elementary faces left, on the rotor mostly the
+near-normal-field class of section 5a.
 
 ## 6. Are the waves resolved properly?
 
@@ -2793,7 +2935,11 @@ seeds nor the existing branches provide it.
 > faces (93.06% without it; calea jobs 50351-50356), and of 4,000 faces this
 > run's harvest had lost, 1,506 are gained and none lost (job 50319): 643 by
 > regular solutions with a 180-degree rotation, from the seven-wave Newton,
-> and 849 by intermediate shocks, 842 of them from the planar rescue.
+> and 849 by intermediate shocks, 842 of them from the planar rescue. What
+> the run still loses with it was put through the ledger again (section 5e,
+> 2026-10-28): R4 82.7%, R3 15.3%, compound about 5% -- still elementary.
+> Almost all of it is a slow-shock search defect: a retry in the slow-shock
+> solve answers 911 of its 1,101 lost faces (section 5e, 2026-10-29).
 
 27 of the ledger's 64 workers died silently during the expensive search on
 2026-10-08 (no traceback, no memory pressure; the storage outage of that
@@ -3378,6 +3524,8 @@ the tubes (Balsara 5 the dearest).
 | the closed-form Alfvén rotation (5e): the lost faces, paired | rmhd_final `scripts/alfven_exact/calea_alfven_measure.sh` (sbatch from `ssh itp`; writes `results/alfven_exact_2026-10`; the table by `alfven_paired.py`) |
 | its answers by kind (5e) | rmhd_final `scripts/alfven_exact/calea_alfven_classify.sh`; every harvested answer of the six runs `calea_alfven_classify_runs.sh` |
 | the six 64² runs, off and on (5e) | `bash scripts/alfven_exact/submit_alfven_runs.sh` (rmhd_final, from `ssh itp`; one node per run), then `calea_alfven_runs_summary.sh`; the density figure `scripts/alfven_exact/plot_2d_diff.py <results> <png>` |
+| what the runs still lose, the ledger (5e) | `HARVEST=results/<run>_64_exact_alfx1/harvest OUT=results/failure_ledger_<run>_alfx1 sbatch --time=3-00:00:00 scripts/calea_failure_ledger.sh` (from `ssh itp`, one node per run; the four-quadrant tube stage needs more than a day). An incomplete tube stage: take the compound share over the labelled faces only (`failure_ledger.load_all`, column `e_compound` where `e_compound__seen`); `--summarise` counts unlabelled faces as elementary |
+| the slow-shock retry on the ledger's faces (5e) | `ssh itp; sbatch calea_ssadapt.sh` from `claude_scratch/ledger_check/r3_window` (copied to `/mnt/rafast/miler/scratch/ssadapt`): test 1 replays method d's ordered R3 answers and hands each slow shock to production's solve and to the retry windows (`r3_root_test.py`); test 2 reruns methods a, b with the retry installed (`ssadapt.py`, `run_patched.py`) on every face of `failure_ledger_<run>_alfx1`; summaries `summ_root.py`, `summ_patched.py` (calea job 60922) |
 | what production returns on Balsara 1 (5e) | the one face in the solver frame, (rho, P_tot, v_x, v_y, v_z, B_y, B_z, B_n) = (1, 1.625, 0, 0, 0, 1, 0, 0.5) and (0.125, 0.725, 0, 0, 0, -1, 0, 0.5), through `alfven_classify.py replay <npz> --out <dir> --gamma 2` in production's env (`kernels.env`, the ML checkpoints, `RMHD_PLANAR5_FALLBACK=1`), then `alfven_classify.py classify <dir>` |
 
 The census, hierarchy, rotation and rarefaction measurements were run from
