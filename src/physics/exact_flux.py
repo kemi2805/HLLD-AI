@@ -255,6 +255,16 @@ _PLANAR_PRECHECK = os.environ.get("RMHD_PLANAR_PRECHECK", "1") not in ("0", "", 
 # losses recovered, another root on 1 of 1,187 controls (docs section 7).
 # Opt-in until measured on a whole run.
 _CONTINUATION = os.environ.get("RMHD_CONTINUATION", "0") not in ("0", "", "off")
+# The linearised fan as the start on weak faces (src/physics/linear_seed.py):
+# a lane the seven-wave stage lost whose relative jump is below
+# RMHD_LINEAR_SEED_TAU is solved again from the fan, which is within
+# O(jump^2) of the exact zones -- the seven-wave Newton, then the planar
+# solver for the planar lanes that still fail -- BEFORE the rescue rungs, so
+# the faces it answers no longer pay for them.  Production's weak gate never
+# offers such a face (tau_weak = 1e-2 is the same threshold), so only runs
+# with the gate open can see it.  Opt-in (2026-10-30, for the GR06 tubes).
+_LINEAR_SEED = os.environ.get("RMHD_LINEAR_SEED", "0") not in ("0", "", "off")
+_LINEAR_SEED_TAU = float(os.environ.get("RMHD_LINEAR_SEED_TAU", "1e-2"))
 # Solve each face as the canonical member of its symmetry orbit (reflection,
 # signed exchanges of the tangential axes, the sign of B) in the x-frame, and
 # map the answer back (src/physics/canonical.py).  Mirror-image faces then get
@@ -840,6 +850,36 @@ def _planar_ladder(P, gamma, sL5, sR5, B5, *, r5, accuracy, max_iter):
     return out
 
 
+def _accept7(res, star, ray_ok, Bn):
+    """The seven-wave stage's acceptance, for lanes solved again: converged,
+    ray resolved, state on the ray physical, a seven-wave class that was not
+    reclassified, and (RMHD_WAVE_ORDER) the fan in order."""
+    import numpy as np
+    from rmhd.batched import classify as C
+    rho, P_tot, vn, vt1, vt2, Bt1, Bt2 = star
+    v2 = vn * vn + vt1 * vt1 + vt2 * vt2
+    W2 = 1.0 / np.maximum(1.0 - v2, 1e-300)
+    eta = Bn * vn + Bt1 * vt1 + Bt2 * vt2
+    b2 = (Bn ** 2 + Bt1 ** 2 + Bt2 ** 2) / W2 + eta ** 2
+    good = (rho > 0.0) & (v2 < 1.0) & (P_tot - 0.5 * b2 > 0.0)
+    for c in star:
+        good &= np.isfinite(c)
+    good &= res["converged"] & ray_ok & np.isin(res["cls"], (C.FULL7, C.COPLANAR))
+    good &= ~np.asarray(res["reclassified"], dtype=bool)
+    if _WAVE_ORDER and good.any():
+        good &= ~_self_crossing(res["zones"], res["VsLv"], res["VsRv"],
+                                _WAVE_ORDER_TOL)
+    return good
+
+
+def _planar_linear_and_ray(P, gamma, sL5, sR5, B5, *, lin, accuracy, max_iter):
+    """`_planar_and_ray` from the linearised fan's planar unknowns
+    (``lin["unk3"]``, a dict so that `exact_pool.map_lanes` cuts it by lane)
+    -- the planar half of RMHD_LINEAR_SEED."""
+    return _planar_and_ray(P, gamma, sL5, sR5, B5, accuracy=accuracy,
+                           max_iter=max_iter, unk3_init=lin["unk3"])
+
+
 def _continuation_and_ray(P, gamma, sL, sR, Bn, **kw):
     """The continuation rung's body (src/physics/continuation.py), named
     here so that `exact_pool.map_lanes` can run it on the workers."""
@@ -1061,6 +1101,10 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
                          planar4_mask=np.zeros(0, bool),
                          n_continuation_attempted=0, n_continuation_exact=0,
                          continuation_mask=np.zeros(0, bool),
+                         n_linear_seed_attempted=0, n_linear_seed_exact=0,
+                         linear_seed7_mask=np.zeros(0, bool),
+                         linear_seed5_mask=np.zeros(0, bool),
+                         reason_linear_seed=np.zeros(0, np.int8),
                          n_weak=int(weak.sum()), n_weak_linear=n_weak_linear,
                          weak_linear_mask=weak_linear,
                          n_linear_fallback_offered=0, n_linear_fallback=0,
@@ -1221,6 +1265,75 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
     # nothing else.  Offering them to the planar solver would change the
     # flux, which is a separate decision.
 
+    # ── the linearised fan as the start on weak faces (opt-in) ────────────
+    # (RMHD_LINEAR_SEED above.)  Every lane of a seven-wave class the stage
+    # lost -- self-crossing and reclassified ones included: a start that close
+    # is a different question from the network's -- below the threshold,
+    # first by the seven-wave Newton under the stage's own acceptance, then,
+    # where the face is planar, by the five-wave solver under the planar
+    # rescue's.  `takel` keeps them from the rungs below.
+    takel7 = np.zeros(sel.size, dtype=bool)
+    takel5 = np.zeros(sel.size, dtype=bool)
+    unkl = [np.zeros(sel.size) for _ in range(6)]
+    reasonl = np.full(sel.size, 9, dtype=np.int8)       # 9 = not offered
+    nl_att = 0
+    if _LINEAR_SEED:
+        from . import linear_seed as LSD
+        jump_sel = to_np(jump).reshape(-1)[sel]
+        offered = (~take & (np.isin(cls, (C.FULL7, C.COPLANAR)) | reclass)
+                   & (jump_sel < _LINEAR_SEED_TAU))
+        cand = np.flatnonzero(offered)
+        nl_att = int(cand.size)
+        if cand.size:
+            fan = LSD.linear_fan([c[cand] for c in subL],
+                                 [c[cand] for c in subR], subBn[cand], eos)
+            reasonl[cand] = np.where(fan["ok"], 3, 2)    # 2 = no fan, 3 = lost
+            k7 = np.flatnonzero(fan["ok"])
+            if k7.size:
+                c7 = cand[k7]
+                rl, _, stl, regl, rokl, _ = _run_pipeline(
+                    P, gamma, [c[c7] for c in subL], [c[c7] for c in subR],
+                    subBn[c7], LSD.seed6(fan, subBn[cand], k7), None, None,
+                    accuracy=accuracy, max_iter=max_iter, n_retries=0,
+                    tau_bt=tau_bt)
+                good = _accept7(rl, stl, rokl, subBn[c7])
+                if good.any():
+                    w = c7[good]
+                    for j in range(7):
+                        star[j][w] = stl[j][good]
+                    region[w] = np.asarray(regl)[good]
+                    for j in range(6):
+                        unkl[j][w] = np.asarray(rl["unk"][j])[good]
+                    takel7[w] = True
+                    reasonl[w] = 0
+            if _PLANAR5_FALLBACK:
+                from rmhd.batched import planar5_b as _P5B
+                k5 = np.flatnonzero(fan["ok"] & ~takel7[cand])
+                c5 = cand[k5]
+                if c5.size:
+                    sL5 = [c[c5] for c in subL]
+                    sR5 = [c[c5] for c in subR]
+                    planar = np.asarray(_P5B.to_planar(sL5, sR5, subBn[c5])[3]) <= _PLANAR_TOL
+                    k5, c5 = k5[planar], c5[planar]
+                if c5.size:
+                    from . import exact_pool
+                    sL5 = [c[c5] for c in subL]
+                    sR5 = [c[c5] for c in subR]
+                    u3 = LSD.seed_planar(fan, [c[cand] for c in subL],
+                                         [c[cand] for c in subR], subBn[cand], k5)
+                    r5l = exact_pool.map_lanes(
+                        "_planar_linear_and_ray", gamma, sL5, sR5, subBn[c5],
+                        lin=dict(unk3=u3), accuracy=accuracy, max_iter=max_iter)
+                    good = np.asarray(r5l["good"], dtype=bool)
+                    if good.any():
+                        w = c5[good]
+                        for j in range(7):
+                            star[j][w] = r5l["star"][j][good]
+                        region[w] = np.asarray(r5l["region"])[good]
+                        takel5[w] = True
+                        reasonl[w] = 1
+    takel = takel7 | takel5
+
     # ── reduced three-wave rescue (opt-in) ────────────────────────────────
     # Only lanes the seven-wave solver did NOT win, and only where the
     # normal field is weak enough for the neglected slow waves to cost less
@@ -1231,7 +1344,7 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
     take3 = np.zeros(sel.size, dtype=bool)
     n3_att = 0
     if _3WAVE_FALLBACK:
-        cand = np.flatnonzero(~take & ~crossed & (np.abs(subBn) <= _BN_3WX_MAX))
+        cand = np.flatnonzero(~take & ~takel & ~crossed & (np.abs(subBn) <= _BN_3WX_MAX))
         n3_att = int(cand.size)
         if cand.size:
             r3 = P["reduced"]([c[cand] for c in subL], [c[cand] for c in subR],
@@ -1280,7 +1393,7 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
     iters5 = np.full(sel.size, -1, dtype=int)
     rung5 = np.full(sel.size, -1, dtype=np.int8)         # -1 = not by planar
     if _PLANAR5_FALLBACK:
-        offered = ~take & ~take3
+        offered = ~take & ~takel & ~take3
         if not _PLANAR5_CROSSED:
             offered &= ~crossed
         if _PLANAR_PRECHECK:
@@ -1362,7 +1475,7 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
     kinds4 = np.full((2, sel.size), -1, dtype=np.int8)
     n4_skipped = 0
     if _PLANAR4:
-        offered = ~take & ~take3 & ~take5
+        offered = ~take & ~takel & ~take3 & ~take5
         if not _PLANAR5_CROSSED:
             offered &= ~crossed
         if _PLANAR4_SKIP_COMPOUND:
@@ -1405,7 +1518,7 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
         if not (_PLANAR_PRECHECK and (_PLANAR5_FALLBACK or _PLANAR4)) and sel.size:
             from rmhd.batched import planar5_b as _P5B
             planar_ok = np.asarray(_P5B.to_planar(subL, subR, subBn)[3]) <= _PLANAR_TOL
-        offered = ~take & ~take3 & ~take5 & ~take4 & ~planar_ok
+        offered = ~take & ~takel & ~take3 & ~take5 & ~take4 & ~planar_ok
         cand = np.flatnonzero(offered)
         nc_att = int(cand.size)
         if cand.size:
@@ -1429,7 +1542,7 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
                 region[w] = np.asarray(rc["region"])[good]
                 takec[w] = True
 
-    take_all = take | take3 | take5 | take4 | takec
+    take_all = take | takel | take3 | take5 | take4 | takec
     g = sel[take_all]
     if g.size:
         tt = lambda a: torch.tensor(a[take_all], dtype=dt)
@@ -1482,7 +1595,7 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
     # agree.  The planar path already verifies internally, so what is added
     # here is the seven-wave path and the run-level number.
     verified = np.zeros(sel.size, dtype=bool)
-    if take.any() and _VERIFY_EXACT:
+    if (take.any() or takel7.any()) and _VERIFY_EXACT:
         f6 = P["planar5"]["waves"]["fullfuncv6"]
         seven = np.isin(cls, (C.FULL7, C.COPLANAR))
 
@@ -1497,6 +1610,9 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
         # the seven-wave path fills `unk` directly
         _check(np.flatnonzero(take & seven),
                [u[np.flatnonzero(take & seven)] for u in res["unk"]])
+        # the linearised seed's seven-wave answers carry their own unknowns
+        wl = np.flatnonzero(takel7)
+        _check(wl, [u[wl] for u in unkl])
 
         # The DEGENERATE classes are answered by the reduced three-wave
         # solver inside `solve_batch`, which fills only R4 and R5 and never
@@ -1518,6 +1634,8 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
     # 0.0% of its answers reach 1e-6 on this residual); the planar path
     # verifies inside `solve` before it reports convergence
     verified |= take5
+    # and so does its planar half from the linearised fan
+    verified |= takel5
     # the four-unknown path certifies inside `solve` (each shock's
     # Rankine-Hugoniot conditions to the same tolerance, the contact, the
     # fan's order); the seven-wave residual is not its certificate
@@ -1543,7 +1661,8 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
         seven_ok = take & np.isin(cls, (C.FULL7, C.COPLANAR))
         harvester.record_coverage(
             rec_idir, N, sel, g, np.flatnonzero(routed),
-            seven=seven_ok, planar5=take5, three_wave=take3, planar4=take4,
+            seven=seven_ok | takel7, planar5=take5 | takel5,
+            three_wave=take3, planar4=take4, linear_seed=takel,
             continuation=takec, degenerate=degen, verified=verified,
             linear_fallback=lin_fb,
             bad=to_np(bad).astype(bool), weak=to_np(weak).astype(bool),
@@ -1585,6 +1704,15 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
         n_continuation_exact=int(takec.sum()),
         continuation_mask=takec, reason_cont=reasonc,
         continuation_n_iter=itersc,
+        # the linearised fan as the start on weak faces (RMHD_LINEAR_SEED):
+        # offered, answered, by which solver (masks over the attempted
+        # lanes), and per offered lane what happened (0 the seven-wave
+        # Newton answered, 1 the planar solver, 2 no fan to trust, 3 lost;
+        # 9 = not offered)
+        n_linear_seed_attempted=nl_att,
+        n_linear_seed_exact=int(takel.sum()),
+        linear_seed7_mask=takel7, linear_seed5_mask=takel5,
+        reason_linear_seed=reasonl,
         # faces below the weak-jump gate, and how many of them the linearised
         # solver answered (RMHD_WEAK_FLUX=linear; 0 with HLLD there)
         n_weak=int(weak.sum()), n_weak_linear=n_weak_linear,

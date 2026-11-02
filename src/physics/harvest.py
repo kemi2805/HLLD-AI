@@ -253,7 +253,7 @@ class Harvester:
     COVERAGE_KEYS = ("attempted", "exact", "routed", "seven", "planar5",
                      "three_wave", "degenerate", "verified",
                      "bad", "weak", "upwind", "planar4", "continuation",
-                     "linear_fallback")
+                     "linear_fallback", "linear_seed")
     # The relative jump of every face, by decade: bin 0 is a jump below
     # 1e-16 (the two states agree to rounding), bin k = 1..16 is
     # [10^(k-17), 10^(k-16)), bin 17 a jump of 1 or more.  One histogram per
@@ -266,7 +266,7 @@ class Harvester:
     TOTAL_KEYS = ("faces", "bad", "weak", "upwind", "routed", "attempted",
                   "exact", "verified", "seven", "planar5", "three_wave",
                   "planar4", "continuation", "degenerate", "linear_fallback",
-                  "hlld_after_attempt")
+                  "linear_seed", "hlld_after_attempt")
 
     def record_coverage(self, idir, n_interfaces, attempted_idx, exact_idx,
                         routed_idx=None, jump=None, **masks):
@@ -292,6 +292,9 @@ class Harvester:
             linear_fallback   attempted, lost by every exact rung, and given
                         the linearised flux instead of HLLD (its jump is below
                         RMHD_WEAK_FALLBACK_TAU); never exact
+            linear_seed answered from the linearised fan's start
+                        (RMHD_LINEAR_SEED); also counted under seven or
+                        planar5, whichever solver it was
 
         ``jump`` (optional, over the whole sweep) is each face's relative
         jump; with it the sweep also stores ``jump_hist``, the faces of
