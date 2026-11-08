@@ -1,0 +1,1139 @@
+diff --git a/src/physics/exact_flux.py b/src/physics/exact_flux.py
+index 04f89e7..25690f2 100644
+--- a/src/physics/exact_flux.py
++++ b/src/physics/exact_flux.py
+@@ -171,6 +171,108 @@ _PLANAR5_CROSSED = os.environ.get("RMHD_PLANAR5_CROSSED", "1") not in ("0", "",
+ # the contact, the fan's order).  Offered the lanes every rescue above lost.
+ # See rmhd.batched.planar4_b and docs/what_we_solve.md 5a.
+ _PLANAR4 = os.environ.get("RMHD_PLANAR4", "1") not in ("0", "", "off")
++# Lanes the four-unknown Newton loses from its own start (the mean total
++# pressure, slow waves of zero strength, the steering read off that start) are
++# offered again from HLLD's star pressure, which every face has already paid
++# for: both fast waves to p*, the slow waves weak fans steered by pressure or
++# field (_PLANAR4_STAR_STARTS, in this order), then the same starts with a
++# central-difference Jacobian (planar4_b.jacobian), each answer held to the
++# same acceptance and to a non-decreasing entropy across every shock.  On the
++# four-quadrant 128^2 run's lost near-normal faces the default start is 15%
++# off in pressure where both fast waves are rarefactions, and a field-steered
++# fan cannot carry B_t through zero, which is how the slow fans there reverse
++# the field.  Failure ledger (calea 78576): 195 of the 472 lanes the
++# loose-fallback retry still loses, the checked ones within 1e-6 of their own
++# tubes (HLLD 1e-3..1e-2); 600 controls, one other root.  RMHD_PLANAR4_STAR=1;
++# off by default.
++_PLANAR4_STAR = os.environ.get("RMHD_PLANAR4_STAR", "0") not in ("0", "", "off")
++# (central differences, steering of the two slow waves, start strength), in
++# the order they are tried; steering 0 field, 1 pressure, 2 SIGNED field
++# (planar4_b.KIND_S, for beta ~ 100 faces with the field nearly normal, whose
++# slow waves are nearly Alfven waves and carry B_t through zero: calea 78609,
++# 191 of the 249 lanes the other starts lose)
++_PLANAR4_STAR_FULL = tuple(
++    [(False,) + st for st in (((1, 1), 1e-4), ((1, 1), 1e-3), ((1, 0), 1e-4),
++                              ((0, 1), 1e-4), ((0, 1), 1e-3))]
++    + [(True,) + st for st in (((1, 1), 1e-4), ((1, 1), 1e-3), ((1, 0), 1e-4),
++                               ((0, 1), 1e-4), ((0, 1), 1e-3), ((2, 2), 1e-4))])
++# The starts that answered on the failure ledger, each only once: the full
++# set costs 1.85-2.9x wall on the 64^2 runs (numpy Newton calls on every lost
++# lane, whose per-call overhead the pool does not spread).  RMHD_PLANAR4_STAR_SET
++# = lean (default) | full; RMHD_PLANAR4_STAR_ITER caps each attempt's Newton.
++_PLANAR4_STAR_LEAN = ((False, (1, 1), 1e-4), (True, (1, 1), 1e-4),
++                      (True, (2, 2), 1e-4), (True, (0, 1), 1e-4),
++                      (True, (1, 0), 1e-4))
++# Then the same pressure steering from a start that puts a WEAK fast wave
++# (p* within 2% of its ahead pressure) just past its own ahead pressure
++# instead of at p*: next to the fast-Alfven degeneracy the basin in that
++# wave's pressure is narrower than p*'s error (lane 858, 2026-11-05: p* 1.7%
++# from p_RF; calea 78627, 13 of the 52 near-normal strong-field lanes left).
++# Last, both fast waves at their own ahead pressures x (1 + offset): the
++# strong-field near-normal faces whose p* is 2-9% from one side (calea 78634:
++# 29 of the 41 lanes everything above loses, none with a falling entropy).
++# (central, steering, slow start strength, fast start: "near" / "both", offset)
++_PLANAR4_STAR_SIDE = ((True, (1, 1), 1e-4, "near", 1e-3),
++                      (True, (1, 1), 1e-4, "near", -1e-3),
++                      (True, (1, 1), 1e-4, "both", 1e-3),
++                      (True, (1, 1), 1e-4, "both", -1e-3),
++                      (True, (1, 1), 1e-4, "both", 1e-2),
++                      (True, (1, 1), 1e-4, "both", -1e-2))
++_PLANAR4_STAR_STARTS = (_PLANAR4_STAR_FULL
++                        if os.environ.get("RMHD_PLANAR4_STAR_SET", "lean") == "full"
++                        else _PLANAR4_STAR_LEAN)
++_PLANAR4_STAR_ITER = int(os.environ.get("RMHD_PLANAR4_STAR_ITER", "25"))
++# The admissibility gate: an accepted answer must also be an ADMISSIBLE
++# solution of ideal RMHD as far as three cheap tests tell -- no shock or
++# rotation lowers the entropy (by more than RMHD_ADMISSIBLE_GATE_DS), every
++# fan's characteristic speed spreads in its direction of travel, and every
++# wave (fans as their whole xi-range) sits at or after the previous non-zero
++# one, slow against fast included, to _WAVE_ORDER_TOL.  Applied where the
++# seven-wave, planar and four-unknown solvers accept, so a refused answer is
++# offered to the next rung before it falls back to HLLD.  Measured with an
++# independent ideal-RMHD verifier (2026-11-05, 256,000 answers of the 4Q
++# 128^2 run): 0.55% / 1.99% of seven-wave / planar answers lower the entropy
++# at a jump, 0.17% / 1.73% carry a "fan" that compresses, 0.19% / 0.90% a
++# slow wave past its fast one; conservation itself holds.  RMHD_ADMISSIBLE_GATE=1;
++# off by default.
++_ADMISSIBLE_GATE = os.environ.get("RMHD_ADMISSIBLE_GATE", "0") not in ("0", "", "off")
++_ADMISSIBLE_GATE_DS = float(os.environ.get("RMHD_ADMISSIBLE_GATE_DS", "1e-9"))
++# The four-unknown answers the gate refuses are, on the 4Q 128^2 failure
++# ledger, a ROTATION fused into a slow jump: near-normal field, slow and Alfven
++# speeds within 1e-9, the jump runs between the Alfven speeds of its two sides
++# and lowers the entropy by 1e-9..7e-5.  planar4 has no rotations, and the
++# reversal production builds elsewhere (planar5_b._reverse) finds only the
++# rotations that reverse B_t in the lab, while about half of these keep its lab
++# sign.  RMHD_PLANAR4_ROT=1: every lane still lost after the star starts that
++# had a refused answer is solved again from that answer with the coplanar
++# rotation (fullcontact_b.coplanar_rotation, closed form, either lab sign) in
++# front of the slow wave -- on both sides, the left, the right -- signed-field
++# slow waves, central differences, and accepted only when admissible
++# (`_admissible_structure`).  Measured on 6 refused lanes: each has exactly one
++# admissible combination, a regular seven-wave answer whose flux differs from
++# the refused one by 2e-10..2e-6.  Off by default.
++_PLANAR4_ROT = os.environ.get("RMHD_PLANAR4_ROT", "0") == "1"
++# RMHD_PLANAR4_STAR_BATCH=1: the star starts (and the rotation choices) of all
++# lanes in one solve per difference scheme instead of one solve per start --
++# the same answers (the solves are batch-independent), less waiting
++# (`_planar4_star_batched`).  Off by default.
++_PLANAR4_STAR_BATCH = os.environ.get("RMHD_PLANAR4_STAR_BATCH", "0") == "1"
++# RMHD_COPLANAR7=late: the planar form of the seven-wave family
++# (rmhd coplanar7_b: signed-field and pressure-steered slow waves, the coplanar
++# rotation of either lab sign) as a rescue rung between the five-wave planar
++# solver and the four-unknown one, from the sweep's own network seeds
++# (`_coplanar7_and_ray`).  Inside solve_batch (RMHD_COPLANAR7=1 or =after) it
++# took the faces the five-wave solver answers in 4 iterations and cost the 4Q
++# 64^2 run 3.7x the control (2026-11-05); here it sees only what that solver
++# left.  Off by default.
++_COPLANAR7_LATE = os.environ.get("RMHD_COPLANAR7", "0") == "late"
++_PLANAR4_ROT_COMBOS = ((True, True), (True, False), (False, True))
++# How far the entropy may fall across a shock of a star-start answer:
++# K_behind / K_ahead >= 1 - _PLANAR4_STAR_DS (K = p / rho^gamma).  The
++# signed-field answers carry field-reversing jumps whose entropy falls by
++# 1e-10..2e-5 and whose fluxes still sit 10-300x closer to the faces' own
++# tubes than HLLD (calea 78606 tubes, 2026-11-04); 1e-9 refuses them.
++_PLANAR4_STAR_DS = float(os.environ.get("RMHD_PLANAR4_STAR_DS", "1e-9"))
+ # What the faces BELOW the weak-jump gate get: the linearised solver (the
+ # default) or HLLD (`linearised.py`, exact to second order in the jump where
+ # HLLD is first order).  Never counted as exact.
+@@ -287,6 +389,15 @@ _WAVE_ORDER_TOL = float(os.environ.get("RMHD_WAVE_ORDER_TOL", "1e-6"))
+ # `only_retried` default -- these lanes did fail the seven-wave attempt first,
+ # so that is a description rather than a fiction.
+ _HARVEST_PLANAR5 = os.environ.get("RMHD_HARVEST_PLANAR5", "1") not in ("0", "", "off")
++# Harvest the later rungs' answers too (RMHD_HARVEST_RESCUES, off by default):
++# the planar seven-wave rung's as source=2 and the four-unknown solver's as
++# source=3, each row with the slow-wave steering of each side, the rotations
++# and the stage that answered it (harvest.py: `steer`, `rot`, `stage`).  The
++# data for a planar warm start (2026-11-06): on the 4Q 64^2 run the late rung
++# answered 12 of its 50 faces from the network seed and 38 only with the
++# pressure-steered slow waves, and 34 more faces it could not answer needed
++# the four-unknown solver.
++_HARVEST_RESCUES = os.environ.get("RMHD_HARVEST_RESCUES", "0") not in ("0", "", "off")
+ 
+ _EXTRA_CKPTS = [c.strip() for c in os.environ.get("RMHD_ML_CKPTS", "").split(",")
+                 if c.strip()]
+@@ -420,6 +531,70 @@ def _self_crossing(Zc, VL, VR, tol):
+     return crossed
+ 
+ 
++def _admissible_structure(P, gamma, sL, sR, Bn, zones6, VsLv, VsRv):
++    """True where an answer passes the admissibility gate (_ADMISSIBLE_GATE).
++
++    ``zones6`` are the six states R2..R7 between the outer states ``sL`` and
++    ``sR``, ``VsLv``/``VsRv`` the [fast, Alfven, slow] speeds of each side.
++    A wave is a discontinuity where its own speed satisfies the jump
++    conditions (planar4_b's scaled residual <= 1e-6), else a fan; a
++    rotation weaker than production's 1e-8 (as in `_self_crossing`) and a
++    wave of zero strength are skipped.
++    """
++    import numpy as np
++    S4 = P["planar4"]
++    xi = P["xi"]
++    n = Bn.shape[0]
++    st = [list(sL)] + [list(z) for z in zones6] + [list(sR)]
++    V = [VsLv[0], VsLv[1], VsLv[2], 0.5 * (zones6[2][2] + zones6[3][2]),
++         VsRv[2], VsRv[1], VsRv[0]]
++
++    def K(X):
++        rho, Pt, vx, vy, vz, By, Bz = X
++        W2 = 1.0 / np.maximum(1.0 - (vx * vx + vy * vy + vz * vz), 1e-300)
++        vB = vx * Bn + vy * By + vz * Bz
++        return (Pt - 0.5 * ((Bn ** 2 + By ** 2 + Bz ** 2) / W2 + vB ** 2)) / rho ** gamma
++
++    ok = np.ones(n, dtype=bool)
++    lo, hi = np.zeros((7, n)), np.zeros((7, n))
++    live = np.zeros((7, n), dtype=bool)
++    with np.errstate(all="ignore"):
++        for w in range(7):
++            left = w < 3
++            a, b = (st[w], st[w + 1]) if left else (st[w + 1], st[w])
++            Bm = np.sqrt(Bn ** 2 + np.maximum(a[5] ** 2 + a[6] ** 2, b[5] ** 2 + b[6] ** 2))
++            sc = [np.abs(b[0]), np.abs(b[1]), 1.0, 1.0, 1.0, Bm, Bm]
++            d = np.max(np.stack([np.abs(a[j] - b[j]) / sc[j] for j in range(7)]), axis=0)
++            zero = d < 1e-12
++            if w in (1, 5):
++                dv = np.sqrt(sum((a[j] - b[j]) ** 2 for j in (2, 3, 4)))
++                zero |= np.maximum(np.abs(a[0] - b[0]) / np.abs(a[0]), dv) <= 1e-8
++            live[w] = ~zero
++            if w == 3:
++                lo[w] = hi[w] = V[w]
++                continue
++            rh = S4["rh_residual"](a, b, V[w], Bn)
++            disc = ~zero & (rh <= 1e-6)
++            ratio = K(b) / K(a) - 1.0
++            ok &= ~(disc & np.isfinite(ratio) & (ratio < -_ADMISSIBLE_GATE_DS))
++            if w in (1, 5):
++                lo[w] = hi[w] = V[w]
++                continue
++            sw = ("LF", None, "LS", None, "RS", None, "RF")[w]
++            fan = ~zero & ~disc
++            la, lb = xi(a, sw, Bn), xi(b, sw, Bn)
++            spread = (lb - la) if left else (la - lb)
++            ok &= ~(fan & np.isfinite(spread) & (spread < -1e-9))
++            lo[w] = np.where(fan, np.fmin(la, lb), V[w])
++            hi[w] = np.where(fan, np.fmax(la, lb), V[w])
++        last = np.full(n, -np.inf)
++        for w in range(7):
++            behind = live[w] & np.isfinite(lo[w]) & (lo[w] < last - _WAVE_ORDER_TOL)
++            ok &= ~behind
++            last = np.where(live[w] & np.isfinite(hi[w]), hi[w], last)
++    return ok
++
++
+ def exact_flux(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
+                fallback=hlld_flux, tau_weak: float = 1e-6,
+                accuracy: float = 1e-8, max_iter: int = 40,
+@@ -624,6 +799,9 @@ def _batched_parts(gamma):
+                  reduced=CB.make_solver(gamma),
+                  planar5=P5.make_solver(gamma),
+                  planar4=P4.make_solver(gamma))
++    if _COPLANAR7_LATE:
++        from rmhd.batched import coplanar7_b as CP7
++        parts["coplanar7"] = CP7.make_solver(gamma)
+     _SOLVER_CACHE[gamma] = parts
+     return parts
+ 
+@@ -656,6 +834,30 @@ def _solve_and_ray(P, gamma, subL, subR, subBn, seed6, keys, seeds_extra, *,
+     n_fan = 0
+ 
+     m7 = np.flatnonzero(conv & np.isin(cls, (C.FULL7, C.COPLANAR)))
++    c7 = np.zeros(n, dtype=bool)
++    if "coplanar7" in res:
++        # answers of the planar form (RMHD_COPLANAR7): their slow fans may
++        # carry B_t through zero, so the ray integrates them in the total
++        # pressure, with the answer's own shock masks -- as for planar4
++        c7 = np.asarray(res["coplanar7"], dtype=bool)
++        m7c = m7[c7[m7]]
++        m7 = m7[~c7[m7]]
++        if m7c.size:
++            sh = [np.asarray(s)[m7c] for s in res["c7_shocks"]]
++            kd = [np.asarray(k)[m7c] for k in res["c7_kinds"]]
++            from rmhd.batched import planar4_b as _P4B
++            st, reg, e = RAY.state_at_xi(
++                [c[m7c] for c in subL], [c[m7c] for c in subR],
++                [[z[j][m7c] for j in range(7)] for z in res["zones"]],
++                [v[m7c] for v in res["VsLv"]], [v[m7c] for v in res["VsRv"]],
++                subBn[m7c], gamma, P["xi"], P["fan_p"], P["fan_n"],
++                kinds={"LF": sh[0], "LS": sh[1], "RS": sh[2], "RF": sh[3]},
++                slow_by_pressure=(kd[0] != _P4B.KIND_B, kd[1] != _P4B.KIND_B))
++            for j in range(7):
++                star[j][m7c] = st[j]
++            region[m7c] = reg
++            ray_ok[m7c] = ~e
++            n_fan += int(np.isin(reg, RAY.FAN_REGIONS).sum())
+     if m7.size:
+         st, reg, e = RAY.state_at_xi(
+             [c[m7] for c in subL], [c[m7] for c in subR],
+@@ -759,6 +961,10 @@ def _planar_and_ray(P, gamma, sL5, sR5, B5, *, accuracy, max_iter,
+         x5 = _self_crossing(zones6, VsLv5, VsRv5, _WAVE_ORDER_TOL)
+         reason[good & x5] = 6
+         good = good & ~x5
++    if _ADMISSIBLE_GATE and good.any():
++        xa = ~_admissible_structure(P, gamma, sL5, sR5, B5, zones6, VsLv5, VsRv5)
++        reason[good & xa] = 7                          # refused by the gate
++        good = good & ~xa
+     out.update(good=good, star=st5, region=reg5, VsLv=VsLv5, VsRv=VsRv5)
+     return out
+ 
+@@ -840,6 +1046,78 @@ def _planar_ladder(P, gamma, sL5, sR5, B5, *, r5, accuracy, max_iter):
+     return out
+ 
+ 
++def _coplanar7_and_ray(P, gamma, sL7, sR7, B7, *, seeds, accuracy):
++    """The planar seven-wave rung (``RMHD_COPLANAR7=late``): coplanar7_b's
++    solve from the sweep's network seeds, the xi = 0 ray with the answer's own
++    shock masks and slow-wave steering (as `_solve_and_ray` resolves the same
++    answers when they come out of solve_batch), and production's acceptance:
++    a physical state, the wave order, the admissibility gate.
++
++    ``seeds``: ``seed6`` (the primary checkpoint's clamped seed, six per-lane
++    arrays) and ``extra`` (one such seed per extra checkpoint, or None).
++    Returns `_planar_and_ray`'s layout plus ``stage`` (1-4, 0 unanswered) and
++    ``rot`` (two per-lane masks); ``reason`` 0 accepted, 1 no branch
++    converged, 4 the ray, 5 unphysical, 6 waves out of order, 7 refused by
++    the gate.
++    """
++    import numpy as np
++    from rmhd.batched import planar4_b as P4B
++    RAY = P["ray"]
++    n = B7.shape[0]
++    r7 = P["coplanar7"]["solve"](sL7, sR7, B7, seeds["seed6"],
++                                 seeds_extra=seeds.get("extra"),
++                                 accuracy=accuracy)
++    good = np.asarray(r7["converged"], dtype=bool)
++    reason = np.where(good, 0, 1).astype(np.int8)
++    zones6, VsLv, VsRv = r7["zones"], r7["VsLv"], r7["VsRv"]
++    out = dict(good=good, star=None, region=None, zones6=zones6,
++               VsLv=VsLv, VsRv=VsRv, n_iter=np.asarray(r7["n_iter"]),
++               reason=reason, stage=np.asarray(r7["stage"]),
++               rot=[np.asarray(x, dtype=bool) for x in r7["rot"]],
++               steer=[np.asarray(k, dtype=np.int8) for k in r7["kinds"]])
++    if not good.any():
++        return out
++    i = np.flatnonzero(good)
++    sh = [np.asarray(s)[i] for s in r7["shocks"]]
++    kd = [np.asarray(k)[i] for k in r7["kinds"]]
++    st, reg, e = RAY.state_at_xi(
++        [c[i] for c in sL7], [c[i] for c in sR7],
++        [[z[j][i] for j in range(7)] for z in zones6],
++        [v[i] for v in VsLv], [v[i] for v in VsRv],
++        B7[i], gamma, P["xi"], P["fan_p"], P["fan_n"],
++        kinds={"LF": sh[0], "LS": sh[1], "RS": sh[2], "RF": sh[3]},
++        slow_by_pressure=(kd[0] != P4B.KIND_B, kd[1] != P4B.KIND_B))
++    star = [np.zeros(n) for _ in range(7)]
++    region = np.full(n, -1, dtype=int)
++    for j in range(7):
++        star[j][i] = st[j]
++    region[i] = reg
++    ray_bad = np.zeros(n, dtype=bool)
++    ray_bad[i] = e
++    reason[good & ray_bad] = 4
++    good = good & ~ray_bad
++    rho7, P7_, vn7, vt17, vt27, Bt17, Bt27 = star
++    v2_ = vn7 * vn7 + vt17 * vt17 + vt27 * vt27
++    W2_ = 1.0 / np.maximum(1.0 - v2_, 1e-300)
++    eta_ = B7 * vn7 + Bt17 * vt17 + Bt27 * vt27
++    b2_ = (B7 ** 2 + Bt17 ** 2 + Bt27 ** 2) / W2_ + eta_ ** 2
++    phys7 = (rho7 > 0.0) & (v2_ < 1.0) & (P7_ - 0.5 * b2_ > 0.0)
++    for c_ in star:
++        phys7 &= np.isfinite(c_)
++    reason[good & ~phys7] = 5
++    good = good & phys7
++    if _WAVE_ORDER and good.any():
++        x7 = _self_crossing(zones6, VsLv, VsRv, _WAVE_ORDER_TOL)
++        reason[good & x7] = 6
++        good = good & ~x7
++    if _ADMISSIBLE_GATE and good.any():
++        xa = ~_admissible_structure(P, gamma, sL7, sR7, B7, zones6, VsLv, VsRv)
++        reason[good & xa] = 7                          # refused by the gate
++        good = good & ~xa
++    out.update(good=good, star=star, region=region)
++    return out
++
++
+ def _continuation_and_ray(P, gamma, sL, sR, Bn, **kw):
+     """The continuation rung's body (src/physics/continuation.py), named
+     here so that `exact_pool.map_lanes` can run it on the workers."""
+@@ -870,43 +1148,31 @@ def _ml_seeds(model, scaler, L, R, Bn, n_retries):
+     return dict(seed6=seed6, keys=keys, extra=extra)
+ 
+ 
+-def _planar4_and_ray(P, gamma, sL4, sR4, B4, *, accuracy, max_iter):
+-    """The four-unknown planar solve, the xi = 0 ray and the physical check
+-    -- the rung's body, so that the failure ledger can offer lanes to it
+-    under exactly production's acceptance.
+-
+-    Returns a dict: ``good``, ``star``, ``region``, ``zones6``
+-    (``[A, A, B, C, D, D]``), ``VsLv``, ``VsRv``, ``n_iter``, ``kinds`` (2, N),
+-    ``reason`` (0 accepted, 1 not converged, 2 not planar, 3 fails the
+-    certificate, 4 fan not ordered, 5 cannot start, 6 ray, 7 unphysical),
+-    ``cert_resid``, ``full_resid``.
+-    """
++def _planar4_accept(P, gamma, r, sL4, sR4, B4):
++    """Production's acceptance of a planar4 ``solve`` answer beyond its own
++    certificate: the xi = 0 ray resolved and the state there physical.
++    Returns ``(good, reason, star, region, zones6, VsLv, VsRv)``; the last four
++    are None when no lane converged."""
+     import numpy as np
+     from rmhd.batched import planar4_b as P4B
+     RAY = P["ray"]
+     S4 = P["planar4"]
+-    r = S4["solve"](sL4, sR4, B4, accuracy=accuracy, max_iter=max_iter,
+-                    planar_tol=_PLANAR_TOL, verify_tol=_PLANAR5_VERIFY)
+     good = r["converged"].astype(bool)
+     reason = r["reason"].astype(np.int8).copy()
+     A, B_, C_, D = r["zones"]
+     zones6 = [A, A, B_, C_, D, D]
+-    out = dict(good=good, star=None, region=None, zones6=zones6,
+-               VsLv=None, VsRv=None, n_iter=np.asarray(r["n_iter"]),
+-               kinds=r["kinds"], reason=reason, unk=r["unk"],
+-               cert_resid=np.asarray(r["cert_resid"]),
+-               full_resid=np.asarray(r["full_resid"]),
+-               resid=np.asarray(r["nrm"]))
++    if "zones_rot" in r:                       # a rotation answer (RMHD_PLANAR4_ROT)
++        zones6 = [A, r["zones_rot"][0], B_, C_, r["zones_rot"][1], D]
+     if not good.any():
+-        return out
++        return good, reason, None, None, zones6, None, None
+     VsLv = [r["speeds"][0], S4["alfven_speed"](A, B4, "L"), r["speeds"][1]]
+     VsRv = [r["speeds"][4], S4["alfven_speed"](D, B4, "R"), r["speeds"][3]]
+     sh = r["shocks"]
+     st, reg, e = RAY.state_at_xi(
+         sL4, sR4, zones6, VsLv, VsRv, B4, gamma, P["xi"], P["fan_p"],
+         P["fan_n"], kinds={"LF": sh[0], "LS": sh[1], "RS": sh[2], "RF": sh[3]},
+-        slow_by_pressure=(r["kinds"][0] == P4B.KIND_P,
+-                          r["kinds"][1] == P4B.KIND_P))
++        slow_by_pressure=(r["kinds"][0] != P4B.KIND_B,
++                          r["kinds"][1] != P4B.KIND_B))
+     reason[good & e] = 6
+     good = good & ~e
+     rho, Pt, vn, vt1, vt2, Bt1, Bt2 = st
+@@ -919,7 +1185,439 @@ def _planar4_and_ray(P, gamma, sL4, sR4, B4, *, accuracy, max_iter):
+         phys &= np.isfinite(c_)
+     reason[good & ~phys] = 7
+     good = good & phys
+-    out.update(good=good, star=st, region=reg, VsLv=VsLv, VsRv=VsRv)
++    if _ADMISSIBLE_GATE and good.any():
++        xa = ~_admissible_structure(P, gamma, sL4, sR4, B4, zones6, VsLv, VsRv)
++        reason[good & xa] = 9                          # refused by the gate
++        good = good & ~xa
++    return good, reason, st, reg, zones6, VsLv, VsRv
++
++
++def _planar4_and_ray(P, gamma, sL4, sR4, B4, *, accuracy, max_iter, hint=None):
++    """The four-unknown planar solve, the xi = 0 ray and the physical check
++    -- the rung's body, so that the failure ledger can offer lanes to it
++    under exactly production's acceptance.
++
++    ``hint`` (with RMHD_PLANAR4_STAR) is ``{"p": HLLD's star pressure}`` per
++    lane, the start of the second attempt (`_planar4_star`).
++
++    Returns a dict: ``good``, ``star``, ``region``, ``zones6``
++    (``[A, A, B, C, D, D]``), ``VsLv``, ``VsRv``, ``n_iter``, ``kinds`` (2, N),
++    ``reason`` (0 accepted, 1 not converged, 2 not planar, 3 fails the
++    certificate, 4 fan not ordered, 5 cannot start, 6 ray, 7 unphysical),
++    ``cert_resid``, ``full_resid``.
++    """
++    import numpy as np
++    S4 = P["planar4"]
++    r = S4["solve"](sL4, sR4, B4, accuracy=accuracy, max_iter=max_iter,
++                    planar_tol=_PLANAR_TOL, verify_tol=_PLANAR5_VERIFY)
++    good, reason, st, reg, zones6, VsLv, VsRv = _planar4_accept(
++        P, gamma, r, sL4, sR4, B4)
++    out = dict(good=good, star=st, region=reg, zones6=zones6,
++               VsLv=VsLv, VsRv=VsRv, n_iter=np.asarray(r["n_iter"]),
++               kinds=r["kinds"], reason=reason, unk=r["unk"],
++               cert_resid=np.asarray(r["cert_resid"]),
++               full_resid=np.asarray(r["full_resid"]),
++               resid=np.asarray(r["nrm"]))
++    if _PLANAR4_ROT:
++        out["refused_seed"] = [np.full(B4.shape[0], np.nan) for _ in range(4)]
++        _keep_refused(out, np.arange(B4.shape[0]), r, reason == 9)
++    if _PLANAR4_STAR and hint is not None and not good.all():
++        star = _planar4_star_batched if _PLANAR4_STAR_BATCH else _planar4_star
++        out = star(P, gamma, sL4, sR4, B4, out, hint["p"],
++                   accuracy=accuracy, max_iter=max_iter)
++    if _PLANAR4_ROT and not out["good"].all():
++        out = _planar4_rotation(P, gamma, sL4, sR4, B4, out,
++                                accuracy=accuracy, max_iter=max_iter)
++    return out
++
++
++def _keep_refused(out, i, r, refused):
++    """Remember, as the rotation re-solve's start (`_planar4_rotation`), the
++    first answer of lanes ``i[refused]`` that converged but was refused: its
++    four unknowns in the signed-field form [ln P behind LF, B_t behind LS, B_t
++    behind RS, ln P behind RF], planar frame."""
++    import numpy as np
++    seed = out["refused_seed"]
++    k = np.flatnonzero(np.asarray(refused, dtype=bool) & np.isnan(seed[0][i]))
++    if k.size == 0:
++        return
++    ca, sa = np.cos(r["alpha"][k]), np.sin(r["alpha"][k])
++    B_, C_ = r["zones"][1], r["zones"][2]
++    w = i[k]
++    seed[0][w] = r["unk"][0][k]
++    seed[1][w] = ca * B_[5][k] - sa * B_[6][k]
++    seed[2][w] = ca * C_[5][k] - sa * C_[6][k]
++    seed[3][w] = r["unk"][3][k]
++
++
++def _harvest_rescue(harvester, C, subL, subR, subBn, w, good, r, *, source,
++                    steer, rot, stage):
++    """Record a rescue rung's accepted answers as harvest rows
++    (RMHD_HARVEST_RESCUES): ``source`` 2 the planar seven-wave rung, 3 the
++    four-unknown solver, with each row's slow-wave steering and rotations
++    (2, k) and stage (k).  ``w`` are the accepted lanes in the sweep's
++    selection, ``good`` the same lanes as a mask over the rung's candidates,
++    ``r`` the rung's result (its ``zones6``, ``VsLv``, ``VsRv`` over the
++    candidates).  Restricted to the accepted lanes, as the five-wave rows
++    are: `record`'s unsolved branch fires on every call."""
++    import numpy as np
++    k = int(w.size)
++    harvester.record(
++        [c[w] for c in subL], [c[w] for c in subR], subBn[w],
++        cls=np.full(k, C.COPLANAR, dtype=np.int8),
++        converged=np.ones(k, dtype=bool),
++        zones=[[np.asarray(c)[good] for c in z] for z in r["zones6"]],
++        VsLv=[np.asarray(v)[good] for v in r["VsLv"]],
++        VsRv=[np.asarray(v)[good] for v in r["VsRv"]],
++        attempts=np.full(k, 2, dtype=int),
++        accepted=np.ones(k, dtype=bool),
++        seven_wave=np.ones(k, dtype=bool),
++        source=source,
++        extras=dict(steer=steer, rot=rot, stage=stage))
++
++
++def _planar4_take(out, w, g, r, st, reg, zones6, VsLv, VsRv, n):
++    """Write the accepted lanes ``g`` of a four-unknown answer ``r`` (solved on
++    the sub-batch whose lanes are ``w`` of ``out``) into ``out``."""
++    import numpy as np
++    if out["star"] is None:
++        out["star"] = [np.zeros(n) for _ in range(7)]
++        out["region"] = np.zeros(n, dtype=np.asarray(reg).dtype)
++        out["VsLv"] = [np.zeros(n) for _ in range(3)]
++        out["VsRv"] = [np.zeros(n) for _ in range(3)]
++    for j in range(7):
++        out["star"][j][w] = st[j][g]
++    out["region"][w] = np.asarray(reg)[g]
++    for k in range(3):
++        out["VsLv"][k][w] = VsLv[k][g]
++        out["VsRv"][k][w] = VsRv[k][g]
++    for z, z2 in zip(out["zones6"], zones6):
++        for j in range(7):
++            z[j][w] = z2[j][g]
++    out["kinds"][:, w] = r["kinds"][:, g]
++    out["reason"][w] = 0
++    for c in range(4):
++        out["unk"][c][w] = r["unk"][c][g]
++    for k, k2 in (("cert_resid", "cert_resid"), ("full_resid", "full_resid"),
++                  ("resid", "nrm")):
++        out[k] = np.asarray(out[k]).copy()
++        out[k][w] = np.asarray(r[k2])[g]
++    out["good"] = out["good"].copy()
++    out["good"][w] = True
++
++
++def _planar4_rotation(P, gamma, sL4, sR4, B4, out, *, accuracy, max_iter):
++    """The lanes still lost that had a refused four-unknown answer, solved
++    again from it with the coplanar rotation in front of the slow waves (see
++    _PLANAR4_ROT); the first combination whose answer production accepts and
++    `_admissible_structure` passes is kept.  ``out`` is updated in place and
++    returned."""
++    import numpy as np
++    S4 = P["planar4"]
++    n = B4.shape[0]
++    seed = out["refused_seed"]
++    sub = lambda X, i: [c[i] for c in X]
++    # zones6 is [A, A, B, C, D, D] with A and D shared: a rotation answer's R3
++    # and R6 differ from R2 and R7, so give every slot its own arrays first
++    out["zones6"] = [[np.array(c, dtype=float, copy=True) for c in z] for z in out["zones6"]]
++    if _PLANAR4_STAR_BATCH:
++        # all three choices of every lane in one solve, per lane the first
++        # accepted in _PLANAR4_ROT_COMBOS order (the serial loop's answer)
++        i0 = np.flatnonzero(~out["good"] & np.isfinite(seed[0]))
++        if i0.size == 0:
++            return out
++        nc = len(_PLANAR4_ROT_COMBOS)
++        i = np.tile(i0, nc)
++        cidx = np.repeat(np.arange(nc), i0.size)
++        rot = np.array(_PLANAR4_ROT_COMBOS, dtype=bool)[cidx].T
++        kinds = np.full((2, i.size), 2, dtype=np.int8)
++        r = S4["solve"](sub(sL4, i), sub(sR4, i), B4[i], accuracy=accuracy,
++                        max_iter=min(max_iter, _PLANAR4_STAR_ITER),
++                        planar_tol=_PLANAR_TOL, verify_tol=_PLANAR5_VERIFY,
++                        kinds=kinds, retry=False, unk_init=[c[i].copy() for c in seed],
++                        central=True, rot=rot)
++        good, reason, st, reg, zones6, VsLv, VsRv = _planar4_accept(
++            P, gamma, r, sub(sL4, i), sub(sR4, i), B4[i])
++        if good.any() and not _ADMISSIBLE_GATE:
++            good &= _admissible_structure(P, gamma, sub(sL4, i), sub(sR4, i), B4[i],
++                                          zones6, VsLv, VsRv)
++        out["n_iter"] = np.asarray(out["n_iter"]).copy()
++        np.add.at(out["n_iter"], i, np.asarray(r["n_iter"]))
++        gi = np.flatnonzero(good)          # branches are combination-major
++        if gi.size:
++            _, first = np.unique(i[gi], return_index=True)
++            g = gi[first]
++            _planar4_take(out, i[g], g, r, st, reg, zones6, VsLv, VsRv, n)
++        return out
++    for combo in _PLANAR4_ROT_COMBOS:
++        i = np.flatnonzero(~out["good"] & np.isfinite(seed[0]))
++        if i.size == 0:
++            break
++        kinds = np.full((2, i.size), 2, dtype=np.int8)       # signed-field slow waves
++        rot = np.tile(np.array(combo, dtype=bool)[:, None], (1, i.size))
++        r = S4["solve"](sub(sL4, i), sub(sR4, i), B4[i], accuracy=accuracy,
++                        max_iter=min(max_iter, _PLANAR4_STAR_ITER),
++                        planar_tol=_PLANAR_TOL, verify_tol=_PLANAR5_VERIFY,
++                        kinds=kinds, retry=False, unk_init=[c[i].copy() for c in seed],
++                        central=True, rot=rot)
++        good, reason, st, reg, zones6, VsLv, VsRv = _planar4_accept(
++            P, gamma, r, sub(sL4, i), sub(sR4, i), B4[i])
++        if good.any() and not _ADMISSIBLE_GATE:
++            good &= _admissible_structure(P, gamma, sub(sL4, i), sub(sR4, i), B4[i],
++                                          zones6, VsLv, VsRv)
++        out["n_iter"] = np.asarray(out["n_iter"]).copy()
++        out["n_iter"][i] += np.asarray(r["n_iter"])
++        if good.any():
++            _planar4_take(out, i[good], np.flatnonzero(good), r, st, reg, zones6,
++                          VsLv, VsRv, n)
++    return out
++
++
++def _shock_entropy_ratio(r, sL4, sR4, B4, gamma):
++    """The smallest K_behind / K_ahead (K = p / rho^gamma) over the shocks of
++    a planar4 answer; 1 where it has none."""
++    import numpy as np
++
++    def K(X):
++        rho, Pt, vx, vy, vz, By, Bz = X
++        v2 = vx * vx + vy * vy + vz * vz
++        W2 = 1.0 / np.maximum(1.0 - v2, 1e-300)
++        vB = vx * B4 + vy * By + vz * Bz
++        return (Pt - 0.5 * ((B4 ** 2 + By ** 2 + Bz ** 2) / W2 + vB ** 2)) / X[0] ** gamma
++
++    A, B_, C_, D = r["zones"]
++    m = np.ones(B4.shape[0])
++    with np.errstate(all="ignore"):
++        for row, (ah, bh) in enumerate(((sL4, A), (A, B_), (D, C_), (sR4, D))):
++            ratio = np.where(np.isfinite(K(bh) / K(ah)), K(bh) / K(ah), 0.0)
++            m = np.where(r["shocks"][row], np.minimum(m, ratio), m)
++    return m
++
++
++def _planar4_star(P, gamma, sL4, sR4, B4, out, p_hint, *, accuracy, max_iter):
++    """The lanes `_planar4_and_ray` lost, again from HLLD's star pressure
++    (see _PLANAR4_STAR): every start of _PLANAR4_STAR_STARTS, then of
++    _PLANAR4_STAR_SIDE, on the lanes still lost, the first accepted answer
++    kept.  ``out`` is updated in place on the lanes it answers and returned."""
++    import numpy as np
++    S4 = P["planar4"]
++    W = S4["waves"]
++    n = B4.shape[0]
++    L0, R0 = S4["to_planar"](sL4, sR4, B4)[:2]
++    lp = np.log(np.maximum(np.asarray(p_hint, dtype=float), 1e-12))
++    sub = lambda X, i: [c[i] for c in X]
++    starts = ([st + (None, 0.0) for st in _PLANAR4_STAR_STARTS]
++              + list(_PLANAR4_STAR_SIDE))
++    for central, kd, dl, fast, off in starts:
++        i = np.flatnonzero(~out["good"])
++        if i.size == 0:
++            break
++        if fast == "near":
++            # only a lane with a weak fast wave has something new to try
++            i = i[(np.abs(np.exp(lp[i]) / L0[1][i] - 1.0) < 0.02)
++                  | (np.abs(np.exp(lp[i]) / R0[1][i] - 1.0) < 0.02)]
++            if i.size == 0:
++                continue
++        pl, pr = np.exp(lp[i]), np.exp(lp[i])
++        if fast == "near":
++            for pp, P0 in ((pl, L0[1][i]), (pr, R0[1][i])):
++                near = np.abs(pp / P0 - 1.0) < 0.02
++                pp[near] = P0[near] * (1.0 + off)
++        elif fast == "both":
++            pl, pr = L0[1][i] * (1.0 + off), R0[1][i] * (1.0 + off)
++        with np.errstate(all="ignore"):
++            A, _, eA = W["fast_wave"](pl, sub(L0, i), "LF", B4[i])
++            D, _, eD = W["fast_wave"](pr, sub(R0, i), "RF", B4[i])
++            sl = (np.log(np.maximum(A[1] * (1.0 - dl), 1e-300)) if kd[0] == 1
++                  else A[5] * (1.0 + dl))
++            sr = (np.log(np.maximum(D[1] * (1.0 - dl), 1e-300)) if kd[1] == 1
++                  else D[5] * (1.0 + dl))
++        kinds = np.tile(np.array(kd, dtype=np.int8)[:, None], (1, i.size))
++        r = S4["solve"](sub(sL4, i), sub(sR4, i), B4[i], accuracy=accuracy,
++                        max_iter=min(max_iter, _PLANAR4_STAR_ITER),
++                        planar_tol=_PLANAR_TOL,
++                        verify_tol=_PLANAR5_VERIFY, kinds=kinds, retry=False,
++                        unk_init=[np.log(pl), sl, sr, np.log(pr)], central=central)
++        good, reason, st, reg, zones6, VsLv, VsRv = _planar4_accept(
++            P, gamma, r, sub(sL4, i), sub(sR4, i), B4[i])
++        good = good & ~(eA | eD)
++        pre = good.copy()
++        if good.any():
++            good &= _shock_entropy_ratio(r, sub(sL4, i), sub(sR4, i), B4[i],
++                                         gamma) >= 1.0 - _PLANAR4_STAR_DS
++        if "refused_seed" in out:
++            _keep_refused(out, i, r, ((reason == 9) & ~(eA | eD)) | (pre & ~good))
++        out["n_iter"] = np.asarray(out["n_iter"]).copy()
++        out["n_iter"][i] += np.asarray(r["n_iter"])
++        if not good.any():
++            continue
++        w, g = i[good], np.flatnonzero(good)
++        if out["star"] is None:
++            out["star"] = [np.zeros(n) for _ in range(7)]
++            out["region"] = np.zeros(n, dtype=np.asarray(reg).dtype)
++            out["VsLv"] = [np.zeros(n) for _ in range(3)]
++            out["VsRv"] = [np.zeros(n) for _ in range(3)]
++        for j in range(7):
++            out["star"][j][w] = st[j][g]
++        out["region"][w] = np.asarray(reg)[g]
++        for k in range(3):
++            out["VsLv"][k][w] = VsLv[k][g]
++            out["VsRv"][k][w] = VsRv[k][g]
++        for z, z2 in zip(out["zones6"], zones6):
++            for j in range(7):
++                z[j][w] = z2[j][g]
++        out["kinds"][:, w] = r["kinds"][:, g]
++        out["reason"][w] = 0
++        for c in range(4):
++            out["unk"][c][w] = r["unk"][c][g]
++        for k, k2 in (("cert_resid", "cert_resid"), ("full_resid", "full_resid"),
++                      ("resid", "nrm")):
++            out[k] = np.asarray(out[k]).copy()
++            out[k][w] = np.asarray(r[k2])[g]
++        out["good"] = out["good"].copy()
++        out["good"][w] = True
++    return out
++
++
++def _planar4_star_batched(P, gamma, sL4, sR4, B4, out, p_hint, *, accuracy, max_iter):
++    """`_planar4_star` with every start of every lane in ONE batch per
++    difference scheme (forward, central) instead of one solve per start.
++
++    Each lane's Newton does not see the others (the solves are batch-
++    independent), so taking per lane the first accepted start in the original
++    order gives the serial loop's answers; what changes is the latency: a lane
++    that exhausts the starts waits for two solves instead of eight, and a run's
++    sweep waits for its slowest lane (RMHD_PLANAR4_STAR_BATCH=1).  Lanes the
++    serial loop would have answered early also run their later starts -- more
++    CPU, on cores the runs leave idle."""
++    import numpy as np
++    S4 = P["planar4"]
++    W = S4["waves"]
++    n = B4.shape[0]
++    L0, R0 = S4["to_planar"](sL4, sR4, B4)[:2]
++    lp = np.log(np.maximum(np.asarray(p_hint, dtype=float), 1e-12))
++    sub = lambda X, i: [c[i] for c in X]
++    starts = ([st + (None, 0.0) for st in _PLANAR4_STAR_STARTS]
++              + list(_PLANAR4_STAR_SIDE))
++    todo = np.flatnonzero(~out["good"])
++    if todo.size == 0:
++        return out
++    # every (lane, start) branch and its start
++    lanes, sidx, U, K, ok_fast = [], [], [[], [], [], []], [], []
++    for s, (central, kd, dl, fast, off) in enumerate(starts):
++        i = todo
++        if fast == "near":
++            i = i[(np.abs(np.exp(lp[i]) / L0[1][i] - 1.0) < 0.02)
++                  | (np.abs(np.exp(lp[i]) / R0[1][i] - 1.0) < 0.02)]
++            if i.size == 0:
++                continue
++        pl, pr = np.exp(lp[i]), np.exp(lp[i])
++        if fast == "near":
++            for pp, P0 in ((pl, L0[1][i]), (pr, R0[1][i])):
++                near = np.abs(pp / P0 - 1.0) < 0.02
++                pp[near] = P0[near] * (1.0 + off)
++        elif fast == "both":
++            pl, pr = L0[1][i] * (1.0 + off), R0[1][i] * (1.0 + off)
++        with np.errstate(all="ignore"):
++            A, _, eA = W["fast_wave"](pl, sub(L0, i), "LF", B4[i])
++            D, _, eD = W["fast_wave"](pr, sub(R0, i), "RF", B4[i])
++            sl = (np.log(np.maximum(A[1] * (1.0 - dl), 1e-300)) if kd[0] == 1
++                  else A[5] * (1.0 + dl))
++            sr = (np.log(np.maximum(D[1] * (1.0 - dl), 1e-300)) if kd[1] == 1
++                  else D[5] * (1.0 + dl))
++        lanes.append(i)
++        sidx.append(np.full(i.size, s))
++        for c, v in enumerate((np.log(pl), sl, sr, np.log(pr))):
++            U[c].append(v)
++        K.append(np.tile(np.array(kd, dtype=np.int8)[:, None], (1, i.size)))
++        ok_fast.append(~(eA | eD))
++    lanes = np.concatenate(lanes)
++    sidx = np.concatenate(sidx)
++    U = [np.concatenate(u) for u in U]
++    K = np.concatenate(K, axis=1)
++    ok_fast = np.concatenate(ok_fast)
++    cen = np.array([bool(starts[s][0]) for s in sidx])
++    # one solve per difference scheme, accepted exactly as the serial loop does
++    good_b = np.zeros(lanes.size, dtype=bool)
++    refused_b = np.zeros(lanes.size, dtype=bool)
++    res = {}
++    for flag in (False, True):
++        b = np.flatnonzero(cen == flag)
++        if b.size == 0:
++            continue
++        li = lanes[b]
++        r = S4["solve"](sub(sL4, li), sub(sR4, li), B4[li], accuracy=accuracy,
++                        max_iter=min(max_iter, _PLANAR4_STAR_ITER),
++                        planar_tol=_PLANAR_TOL, verify_tol=_PLANAR5_VERIFY,
++                        kinds=K[:, b], retry=False, unk_init=[u[b] for u in U],
++                        central=flag)
++        good, reason, st, reg, zones6, VsLv, VsRv = _planar4_accept(
++            P, gamma, r, sub(sL4, li), sub(sR4, li), B4[li])
++        good = good & ok_fast[b]
++        pre = good.copy()
++        if good.any():
++            good &= _shock_entropy_ratio(r, sub(sL4, li), sub(sR4, li), B4[li],
++                                         gamma) >= 1.0 - _PLANAR4_STAR_DS
++        good_b[b] = good
++        refused_b[b] = ((reason == 9) & ok_fast[b]) | (pre & ~good)
++        res[flag] = (b, r, st, reg, zones6, VsLv, VsRv)
++        out["n_iter"] = np.asarray(out["n_iter"]).copy()
++        np.add.at(out["n_iter"], li, np.asarray(r["n_iter"]))
++    # per lane, the first accepted start in the serial order
++    order = np.lexsort((sidx, lanes))
++    lo, go = lanes[order], good_b[order]
++    if "refused_seed" in out:
++        # the serial loop keeps the first refused answer in start order: the
++        # forward start comes first, and within a scheme the branches are in
++        # start order, so per lane the first refused branch of each scheme,
++        # forward scheme first (_keep_refused never overwrites a kept seed)
++        for flag in (False, True):
++            if flag not in res:
++                continue
++            b, r = res[flag][0], res[flag][1]
++            idx = np.flatnonzero(refused_b[b])
++            if idx.size == 0:
++                continue
++            _, f = np.unique(lanes[b][idx], return_index=True)
++            mask = np.zeros(b.size, dtype=bool)
++            mask[idx[f]] = True
++            _keep_refused(out, lanes[b], r, mask)
++    gi = np.flatnonzero(go)
++    if gi.size == 0:
++        return out
++    _, first = np.unique(lo[gi], return_index=True)
++    chosen = order[gi[first]]                     # branch index per answered lane
++    for flag, (b, r, st, reg, zones6, VsLv, VsRv) in res.items():
++        pos = np.searchsorted(b, chosen)
++        inb = (pos < b.size) & (b[np.minimum(pos, b.size - 1)] == chosen)
++        if not inb.any():
++            continue
++        g = pos[inb]
++        w = lanes[chosen[inb]]
++        if out["star"] is None:
++            out["star"] = [np.zeros(n) for _ in range(7)]
++            out["region"] = np.zeros(n, dtype=np.asarray(reg).dtype)
++            out["VsLv"] = [np.zeros(n) for _ in range(3)]
++            out["VsRv"] = [np.zeros(n) for _ in range(3)]
++        for j in range(7):
++            out["star"][j][w] = st[j][g]
++        out["region"][w] = np.asarray(reg)[g]
++        for k in range(3):
++            out["VsLv"][k][w] = VsLv[k][g]
++            out["VsRv"][k][w] = VsRv[k][g]
++        for z, z2 in zip(out["zones6"], zones6):
++            for j in range(7):
++                z[j][w] = z2[j][g]
++        out["kinds"][:, w] = r["kinds"][:, g]
++        out["reason"][w] = 0
++        for c in range(4):
++            out["unk"][c][w] = r["unk"][c][g]
++        for k, k2 in (("cert_resid", "cert_resid"), ("full_resid", "full_resid"),
++                      ("resid", "nrm")):
++            out[k] = np.asarray(out[k]).copy()
++            out[k][w] = np.asarray(r[k2])[g]
++        out["good"] = out["good"].copy()
++        out["good"][w] = True
+     return out
+ 
+ 
+@@ -975,6 +1673,10 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
+     F = {k: v.clone() for k, v in F.items()}
+     U = {k: v.clone() for k, v in U.items()}
+     p_star = p_star.clone()
++    # HLLD's star pressure, before any exact answer overwrites it: the
++    # four-unknown rung's second start (_PLANAR4_STAR)
++    p_hll = (p_star.detach().abs().reshape(-1).cpu().numpy().astype(float)
++             if _PLANAR4_STAR else None)
+ 
+     (L7, BnL), (R7, BnR) = to_solver_frame(sL, eos, idir), to_solver_frame(sR, eos, idir)
+     dBn = float((BnL - BnR).abs().max())
+@@ -1175,6 +1877,13 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
+                                  _WAVE_ORDER_TOL)
+         crossed &= take & np.isin(cls, (C.FULL7, C.COPLANAR))
+         take = take & ~crossed
++    inadm7 = np.zeros(sel.size, dtype=bool)
++    if _ADMISSIBLE_GATE and take.any():
++        inadm7 = take & np.isin(cls, (C.FULL7, C.COPLANAR)) & ~_admissible_structure(
++            P, gamma, subL, subR, subBn, res["zones"], res["VsLv"], res["VsRv"])
++        take = take & ~inadm7
++        # offered to the rescues below exactly as a self-crossing lane
++        crossed = crossed | inadm7
+     n_crossed = int(crossed.sum())
+ 
+     # Harvest before the flux assembly, while the per-lane verdict is still
+@@ -1206,10 +1915,12 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
+     # Why the seven-wave path lost a lane, one code per attempted lane --
+     # diagnostics only, nothing below reads it: 0 accepted, 1 the Newton did
+     # not converge, 2 the ray could not be resolved, 3 unphysical state,
+-    # 4 self-crossing fan, 5 degenerate answer refused (reclassified).
++    # 4 self-crossing fan, 5 degenerate answer refused (reclassified),
++    # 6 refused by the admissibility gate.
+     reason7 = np.zeros(sel.size, dtype=np.int8)
+     reason7[take & reclass] = 5
+     reason7[crossed] = 4
++    reason7[inadm7] = 6
+     reason7[conv & ray_ok & ~physical] = 3
+     reason7[conv & ~ray_ok] = 2
+     reason7[~conv] = 1
+@@ -1350,6 +2061,52 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
+                             seven_wave=np.ones(k5, dtype=bool),
+                             source=1)
+ 
++    # ── the planar seven-wave rung (RMHD_COPLANAR7=late) ──────────────────
++    # After the five-wave solver, which answers most of the planar lanes the
++    # Newton lost in a few iterations, and before the four-unknown one: the
++    # COPLANAR lanes neither answered admissibly, from the seeds the sweep's
++    # Newton started from.  Harvested as rows (source=2) only with
++    # RMHD_HARVEST_RESCUES; the coverage map flags them either way.
++    take7p = np.zeros(sel.size, dtype=bool)
++    n7p_att = 0
++    reason7p = np.full(sel.size, 8, dtype=np.int8)       # 8 = not offered
++    stage7p = np.zeros(sel.size, dtype=np.int8)
++    rot7p = np.zeros((2, sel.size), dtype=bool)
++    iters7p = np.full(sel.size, -1, dtype=int)
++    if _COPLANAR7_LATE:
++        offered = ~take & ~take3 & ~take5 & planar_ok & (cls == C.COPLANAR)
++        if not _PLANAR5_CROSSED:
++            offered &= ~crossed
++        cand = np.flatnonzero(offered)
++        n7p_att = int(cand.size)
++        if cand.size:
++            from . import exact_pool
++            seeds7 = dict(
++                seed6=[np.asarray(c)[cand] for c in seed6],
++                extra=(None if seeds_extra is None
++                       else [[np.asarray(c)[cand] for c in s] for s in seeds_extra]))
++            r7p = exact_pool.map_lanes("_coplanar7_and_ray", gamma,
++                                       [c[cand] for c in subL],
++                                       [c[cand] for c in subR], subBn[cand],
++                                       seeds=seeds7, accuracy=accuracy)
++            reason7p[cand] = r7p["reason"]
++            stage7p[cand] = r7p["stage"]
++            iters7p[cand] = r7p["n_iter"]
++            rot7p[:, cand] = np.stack([np.asarray(x, dtype=bool) for x in r7p["rot"]])
++            good = np.asarray(r7p["good"], dtype=bool)
++            if good.any():
++                w = cand[good]
++                for j in range(7):
++                    star[j][w] = r7p["star"][j][good]
++                region[w] = np.asarray(r7p["region"])[good]
++                take7p[w] = True
++                if harvester is not None and _HARVEST_RESCUES:
++                    _harvest_rescue(harvester, C, subL, subR, subBn, w, good, r7p,
++                                    source=2,
++                                    steer=np.stack([np.asarray(s)[good] for s in r7p["steer"]]),
++                                    rot=np.stack([np.asarray(x, dtype=bool)[good] for x in r7p["rot"]]),
++                                    stage=np.asarray(r7p["stage"])[good])
++
+     # ── the four-unknown planar solver (production default) ──────────────
+     # Last: only the lanes every rescue above lost.  Its certificate is its
+     # own (each shock's jump conditions, the contact, the fan's order), not
+@@ -1362,7 +2119,7 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
+     kinds4 = np.full((2, sel.size), -1, dtype=np.int8)
+     n4_skipped = 0
+     if _PLANAR4:
+-        offered = ~take & ~take3 & ~take5
++        offered = ~take & ~take3 & ~take5 & ~take7p
+         if not _PLANAR5_CROSSED:
+             offered &= ~crossed
+         if _PLANAR4_SKIP_COMPOUND:
+@@ -1378,10 +2135,13 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
+         n4_att = int(cand.size)
+         if cand.size:
+             from . import exact_pool
++            kw4 = dict(accuracy=accuracy, max_iter=max_iter)
++            if _PLANAR4_STAR:
++                kw4["hint"] = {"p": p_hll[np.asarray(sel)[cand]]}
+             r4 = exact_pool.map_lanes("_planar4_and_ray", gamma,
+                                       [c[cand] for c in subL],
+                                       [c[cand] for c in subR], subBn[cand],
+-                                      accuracy=accuracy, max_iter=max_iter)
++                                      **kw4)
+             reason4[cand] = r4["reason"]
+             iters4[cand] = r4["n_iter"]
+             kinds4[:, cand] = r4["kinds"]
+@@ -1392,6 +2152,18 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
+                     star[j][w] = r4["star"][j][good]
+                 region[w] = np.asarray(r4["region"])[good]
+                 take4[w] = True
++                if harvester is not None and _HARVEST_RESCUES:
++                    # a rotation answer's R3/R6 differ from R2/R7 (_planar4_take)
++                    z4 = r4["zones6"]
++                    rot4 = np.stack([(np.asarray(z4[1][5]) != np.asarray(z4[0][5]))
++                                     | (np.asarray(z4[1][6]) != np.asarray(z4[0][6])),
++                                     (np.asarray(z4[4][5]) != np.asarray(z4[5][5]))
++                                     | (np.asarray(z4[4][6]) != np.asarray(z4[5][6]))])
++                    _harvest_rescue(harvester, C, subL, subR, subBn, w, good, r4,
++                                    source=3,
++                                    steer=np.asarray(r4["kinds"])[:, good].astype(np.int8),
++                                    rot=rot4[:, good],
++                                    stage=np.zeros(int(np.sum(good)), dtype=np.int8))
+ 
+     # ── the continuation rung (opt-in) ────────────────────────────────────
+     # Last: non-planar lanes every rung above lost, the seven-wave refusals
+@@ -1405,7 +2177,7 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
+         if not (_PLANAR_PRECHECK and (_PLANAR5_FALLBACK or _PLANAR4)) and sel.size:
+             from rmhd.batched import planar5_b as _P5B
+             planar_ok = np.asarray(_P5B.to_planar(subL, subR, subBn)[3]) <= _PLANAR_TOL
+-        offered = ~take & ~take3 & ~take5 & ~take4 & ~planar_ok
++        offered = ~take & ~take3 & ~take5 & ~take7p & ~take4 & ~planar_ok
+         cand = np.flatnonzero(offered)
+         nc_att = int(cand.size)
+         if cand.size:
+@@ -1429,7 +2201,7 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
+                 region[w] = np.asarray(rc["region"])[good]
+                 takec[w] = True
+ 
+-    take_all = take | take3 | take5 | take4 | takec
++    take_all = take | take3 | take5 | take7p | take4 | takec
+     g = sel[take_all]
+     if g.size:
+         tt = lambda a: torch.tensor(a[take_all], dtype=dt)
+@@ -1522,6 +2294,9 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
+     # Rankine-Hugoniot conditions to the same tolerance, the contact, the
+     # fan's order); the seven-wave residual is not its certificate
+     verified |= take4
++    # the planar seven-wave rung certifies as the four-unknown one does (it
++    # IS that solver, with rotations), and the gate has read every shock
++    verified |= take7p
+     # the continuation verifies inside the rung: the full seven-wave residual
+     # to the same tolerance, in the planar frame it was produced in
+     verified |= takec
+@@ -1544,7 +2319,7 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
+         harvester.record_coverage(
+             rec_idir, N, sel, g, np.flatnonzero(routed),
+             seven=seven_ok, planar5=take5, three_wave=take3, planar4=take4,
+-            continuation=takec, degenerate=degen, verified=verified,
++            continuation=takec, coplanar7=take7p, degenerate=degen, verified=verified,
+             linear_fallback=lin_fb,
+             bad=to_np(bad).astype(bool), weak=to_np(weak).astype(bool),
+             upwind=to_np(upwind).astype(bool), jump=to_np(jump).reshape(-1))
+@@ -1564,6 +2339,21 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
+         seven_attempts=np.asarray(res.get("attempts", np.ones(sel.size, int))),
+         seven_n_iter_total=np.asarray(
+             res.get("n_iter_total", res.get("n_iter", np.zeros(sel.size, int)))),
++        # RMHD_COPLANAR7: the seven-wave answers that came from the planar
++        # form, its stage (1 seed's rotations, 2 other rotations, 3 extra
++        # seeds) and the rotations it put in (2, n_attempted)
++        coplanar7_mask=np.asarray(res.get("coplanar7", np.zeros(sel.size, bool))),
++        coplanar7_stage=np.asarray(res.get("c7_stage", np.zeros(sel.size, np.int8))),
++        coplanar7_rot=np.stack([np.asarray(x) for x in res.get(
++            "c7_rot", [np.zeros(sel.size, bool), np.zeros(sel.size, bool)])]),
++        # RMHD_COPLANAR7=late: the same solver as a rescue rung after the
++        # five-wave one -- which lanes it answered, why it refused the others
++        # (8 not offered), its stage, rotations and iterations
++        n_coplanar7_late_attempted=n7p_att,
++        n_coplanar7_late_exact=int(take7p.sum()),
++        coplanar7_late_mask=take7p, coplanar7_late_reason=reason7p,
++        coplanar7_late_stage=stage7p, coplanar7_late_rot=rot7p,
++        coplanar7_late_n_iter=iters7p,
+         planar_n_iter=iters5,
+         # which start of the planar rescue answered: 0 its default, k the
+         # k-th rung of RMHD_PLANAR5_LADDER, -1 not answered by the rescue
+diff --git a/src/physics/harvest.py b/src/physics/harvest.py
+index bce03f8..6e0b588 100644
+--- a/src/physics/harvest.py
++++ b/src/physics/harvest.py
+@@ -54,6 +54,16 @@ R_REASONS = {R_NOT_CONVERGED: "not_converged",
+              R_SELF_CROSSING: "self_crossing"}
+ 
+ 
++# RMHD_HARVEST_RESCUES (exact_flux, off by default): the rungs after the
++# five-wave solver are harvested too, and then EVERY solved row carries three
++# more columns -- ``steer`` (k, 2) the slow-wave steering of each side
++# (planar4_b.KIND_*; -1 where the row's solver has none), ``rot`` (k, 2) a
++# rotation in front of each slow wave (-1 unknown), ``stage`` (k,) the planar
++# seven-wave stage that answered it (0 none).  Off, the shards keep their
++# schema.
++_RESCUE_COLUMNS = os.environ.get("RMHD_HARVEST_RESCUES", "0") not in ("0", "", "off")
++
++
+ class Harvester:
+     """Buffers solved/unsolved interface problems and flushes them to npz.
+ 
+@@ -126,7 +136,7 @@ class Harvester:
+ 
+     def record(self, left, right, Bn, *, cls, converged, zones, VsLv, VsRv,
+                attempts, accepted, seven_wave, source=0, ray_ok=None,
+-               crossed=None):
++               crossed=None, extras=None):
+         """Record one batch.
+ 
+         ``left``/``right`` are 7-lists of per-lane arrays in the solver frame,
+@@ -138,11 +148,18 @@ class Harvester:
+         a 128^2 harvest were self-crossing fans.
+ 
+         ``source`` tags which solver produced the rows: 0 = the seven-wave
+-        Newton, 1 = the five-wave planar solver.  Both write exactly the same
+-        schema -- a planar answer IS a seven-wave solution whose two
+-        rotational discontinuities have zero strength -- but the planar rows
+-        all carry ``phi_L = phi_R = 0`` exactly, so a trainer may want to
+-        weight or ablate them.  Scalar or per-lane.
++        Newton, 1 = the five-wave planar solver, and with
++        RMHD_HARVEST_RESCUES 2 = the planar seven-wave rung, 3 = the
++        four-unknown solver.  All write exactly the same schema -- a planar
++        answer IS a seven-wave solution whose rotational discontinuities have
++        zero strength or turn the field by pi -- but the five-wave rows all
++        carry ``phi_L = phi_R = 0`` exactly, so a trainer may want to weight
++        or ablate them.  Scalar or per-lane.
++
++        ``extras`` (with RMHD_HARVEST_RESCUES): per-lane ``steer`` (2, n),
++        ``rot`` (2, n) and ``stage`` (n), written as the rows' columns of
++        those names (module comment above `Harvester`); rows recorded
++        without them get -1 / -1 / 0.
+ 
+         ``ray_ok`` separates a lane that converged but produced no usable ray
+         from one whose state came out unphysical.  Without it both are
+@@ -171,7 +188,7 @@ class Harvester:
+             idx = idx[:room]
+             if idx.size:
+                 self._solved.append(self._pack_solved(
+-                    left, right, Bn, zones, VsLv, VsRv, att, idx, src))
++                    left, right, Bn, zones, VsLv, VsRv, att, idx, src, extras))
+                 self.n_solved += idx.size
+ 
+         # ── unsolved ─────────────────────────────────────────────────────
+@@ -220,7 +237,7 @@ class Harvester:
+                         + [np.asarray(Bn)[idx]], axis=1)
+ 
+     def _pack_solved(self, left, right, Bn, zones, VsLv, VsRv, att, idx,
+-                     src=None):
++                     src=None, extras=None):
+         k = idx.size
+         U_L = self._u8(left, Bn, idx)
+         U_R = self._u8(right, Bn, idx)
+@@ -245,15 +262,24 @@ class Harvester:
+                       np.asarray(VsRv[0])[idx]], axis=1)
+         if src is None:
+             src = np.zeros(len(att), dtype=np.int8)
+-        return dict(U_L=U_L, U_R=U_R, zones=Z, speeds=S,
+-                    attempts=att[idx].astype(np.int16),
+-                    source=np.asarray(src)[idx].astype(np.int8))
++        out = dict(U_L=U_L, U_R=U_R, zones=Z, speeds=S,
++                   attempts=att[idx].astype(np.int16),
++                   source=np.asarray(src)[idx].astype(np.int8))
++        if _RESCUE_COLUMNS:
++            e = extras or {}
++            two = lambda key, fill: (np.asarray(e[key])[:, idx].T.astype(np.int8)
++                                     if key in e else np.full((k, 2), fill, np.int8))
++            out["steer"] = two("steer", -1)
++            out["rot"] = two("rot", -1)
++            out["stage"] = (np.asarray(e["stage"])[idx].astype(np.int8)
++                            if "stage" in e else np.zeros(k, np.int8))
++        return out
+ 
+     # what answered a face, in the order the flux assembly decides it
+     COVERAGE_KEYS = ("attempted", "exact", "routed", "seven", "planar5",
+                      "three_wave", "degenerate", "verified",
+                      "bad", "weak", "upwind", "planar4", "continuation",
+-                     "linear_fallback")
++                     "linear_fallback", "coplanar7")
+     # The relative jump of every face, by decade: bin 0 is a jump below
+     # 1e-16 (the two states agree to rounding), bin k = 1..16 is
+     # [10^(k-17), 10^(k-16)), bin 17 a jump of 1 or more.  One histogram per
+@@ -266,7 +292,7 @@ class Harvester:
+     TOTAL_KEYS = ("faces", "bad", "weak", "upwind", "routed", "attempted",
+                   "exact", "verified", "seven", "planar5", "three_wave",
+                   "planar4", "continuation", "degenerate", "linear_fallback",
+-                  "hlld_after_attempt")
++                  "coplanar7", "hlld_after_attempt")
+ 
+     def record_coverage(self, idir, n_interfaces, attempted_idx, exact_idx,
+                         routed_idx=None, jump=None, **masks):
+@@ -292,6 +318,8 @@ class Harvester:
+             linear_fallback   attempted, lost by every exact rung, and given
+                         the linearised flux instead of HLLD (its jump is below
+                         RMHD_WEAK_FALLBACK_TAU); never exact
++            coplanar7   the planar seven-wave rung answered it
++                        (RMHD_COPLANAR7=late; all zero otherwise)
+ 
+         ``jump`` (optional, over the whole sweep) is each face's relative
+         jump; with it the sweep also stores ``jump_hist``, the faces of

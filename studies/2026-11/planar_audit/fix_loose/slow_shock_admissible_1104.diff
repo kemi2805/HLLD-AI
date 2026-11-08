@@ -1,0 +1,284 @@
+diff --git a/rmhd/batched/slow_shock_b.py b/rmhd/batched/slow_shock_b.py
+index b963e3a..bdc4e54 100644
+--- a/rmhd/batched/slow_shock_b.py
++++ b/rmhd/batched/slow_shock_b.py
+@@ -73,6 +73,23 @@ SLOW_RETRY = _os.environ.get("RMHD_SLOWSHOCK_RETRY", "1") == "1"
+ RETRY_RH = 1e-8
+ RETRY_RUNGS = ((12, 16),)
+ 
++# Admissible roots only (opt-in, RMHD_SLOWSHOCK_ADMISSIBLE=1; the numpy ladder
++# and retry, and slow_shock_njit's compiled twin).
++# The RH ranking below cannot tell a slow shock from an EXPANSION shock: both
++# satisfy the jump conditions to round-off.  MEASURED 2026-11-03 on the
++# four-quadrant 64^2 run's harvest: 0.40% of its exact faces hold a slow
++# "shock" across which p/rho^gamma falls -- typically one riding on a strong
++# fast shock at its speed, beyond the Alfven speed ahead (inside MARGIN),
++# undoing most of its compression.  Under the switch a candidate competes only
++# if the entropy does not fall (ADM_ENTROPY_TOL, relative) and it meets the
++# Lax conditions of the slow family to ADM_LAX_TOL: lam_s(ahead) > Vs >
++# lam_s(behind), beyond the Alfven speed ahead and short of the contact.  A
++# lane left with no admissible root FAILS: the ladder's loose fallback is
++# withheld wherever the filter discarded a root (see ``ladder``).
++SLOW_ADMISSIBLE = _os.environ.get("RMHD_SLOWSHOCK_ADMISSIBLE", "0") == "1"
++ADM_ENTROPY_TOL = 1e-6
++ADM_LAX_TOL = 1e-4
++
+ 
+ def _load():
+     from rmhd import postshock as PS
+@@ -275,6 +292,36 @@ def make_solver(gamma):
+     eq416 = make_eq416(gamma)
+     hug = make_hug(gamma)
+ 
++    def admissible(ahead, behind, Vs, Bx, switch):
++        """Per candidate: the entropy does not fall and the slow family's Lax
++        conditions hold (see SLOW_ADMISSIBLE).  A root the quartic cannot
++        resolve is judged on the entropy alone, as the fast shock's Lax filter
++        leaves untrusted roots unjudged."""
++        from . import wave_speeds_b as WB
++
++        def entropy(s):
++            rho, P, vx, vy, vz, By, Bz = s
++            v2 = vx * vx + vy * vy + vz * vz
++            eta = Bx * vx + By * vy + Bz * vz
++            b2 = (Bx * Bx + By * By + Bz * Bz) * (1.0 - v2) + eta * eta
++            return (P - 0.5 * b2) / rho ** gamma
++
++        with np.errstate(all="ignore"):
++            ok = entropy(behind) >= entropy(ahead) * (1.0 - ADM_ENTROPY_TOL)
++            ea, _, _, oka = WB.xi_all(*ahead, Bx, gamma)
++            eb, _, _, okb = WB.xi_all(*behind, Bx, gamma)
++            la, ra = alfven_bounds(ahead, Bx, gamma)     # the window's own (njit twin)
++            if switch == "LS":
++                m = np.minimum.reduce([ea[:, 1] - Vs, Vs - eb[:, 1], Vs - la,
++                                       behind[2] - Vs])
++                trusted = oka[:, 1] & okb[:, 1]
++            else:
++                m = np.minimum.reduce([eb[:, 2] - Vs, Vs - ea[:, 2], Vs - behind[2],
++                                       ra - Vs])
++                trusted = oka[:, 2] & okb[:, 2]
++            ok = ok & ((m >= -ADM_LAX_TOL) | ~trusted)
++        return ok
++
+     def joint(Vs, vxb, prob):
+         """The joint residual ``(f_hug, f_416)``, the behind state, and validity.
+ 
+@@ -453,6 +500,11 @@ def make_solver(gamma):
+                              big["ahead"], big["Bx"])
+         rh = rh_resid(big["ahead"], bh, Vs, big["Bx"], gamma)
+         rh = np.where(conv & ~berr, rh, np.inf)
++        dropped = np.zeros(N, dtype=bool)
++        if SLOW_ADMISSIBLE:
++            adm = admissible(big["ahead"], bh, Vs, big["Bx"], prob["switch"])
++            dropped = (np.isfinite(rh) & ~adm).reshape(N_SEEDS, N).any(axis=0)
++            rh = np.where(adm, rh, np.inf)
+ 
+         rh = rh.reshape(N_SEEDS, N)
+         best = np.argmin(rh, axis=0)
+@@ -467,7 +519,9 @@ def make_solver(gamma):
+         # instead of escalating, which is how it lands on a spurious root.
+         kbest = np.argmin(np.where(np.isfinite(scores), scores, np.inf), axis=0)
+         cell = (Vc[kbest, cols[0]], Xc[kbest, cols[0]], scores[kbest, cols[0]])
+-        return Vs_b, bh_b, good, cell
++        # ``dropped``: the lane had a converged root that SLOW_ADMISSIBLE
++        # discarded (always False with the switch off)
++        return Vs_b, bh_b, good, cell, dropped
+ 
+     def ladder(By_t, Bz_t, ahead, switch, Bx, accuracy=1e-8,
+                vxb_bracket=None, vxb_hint=None):
+@@ -526,6 +580,8 @@ def make_solver(gamma):
+         loose_V = vxa.copy()
+         loose_X = vxa.copy()
+         loose_s = np.full(N, np.inf)
++        # lanes with a converged root the admissibility filter discarded
++        discarded = np.zeros(N, dtype=bool)
+ 
+         # the escalation ladder, each rung run on the COMPACTED set of lanes
+         # the previous rung failed
+@@ -547,14 +603,15 @@ def make_solver(gamma):
+                     vlo = np.maximum(sub["v_lo"], sub["ahead"][2] - halfwidth)
+                     vhi = np.minimum(sub["v_hi"], sub["ahead"][2] + halfwidth)
+                 usable = vhi > vlo
+-                Vs_s, bh_s, ok_s, cell = attempt(sub, NV, NX, vlo, vhi,
+-                                                 accuracy)
++                Vs_s, bh_s, ok_s, cell, drop_s = attempt(sub, NV, NX, vlo, vhi,
++                                                         accuracy)
+                 ok_s = ok_s & usable
+                 sel = idx[ok_s]
+                 Vs_out[sel] = Vs_s[ok_s]
+                 for j in range(7):
+                     bh_out[j][sel] = bh_s[j][ok_s]
+                 done[sel] = True
++                discarded[idx] |= drop_s & usable
+ 
+                 cV, cX, cs = cell
+                 keep = usable if rung < 2 else (usable & ~np.isfinite(loose_s[idx]))
+@@ -563,8 +620,17 @@ def make_solver(gamma):
+                 loose_s[idx] = np.where(keep, cs, loose_s[idx])
+ 
+             # only now, with the ladder exhausted: hand the outer Newton the
+-            # best grid point if it is close enough to be worth refining
+-            idx = np.flatnonzero(~done & ~dead & (loose_s < 0.1 * prob["f_scale"]))
++            # best grid point if it is close enough to be worth refining.
++            # Not where the admissibility filter discarded a root: the cell
++            # then sits beside that root and is no root itself, and the outer
++            # residual cannot tell -- it carries only eq. (4.17) of a slow
++            # shock, zero in the plane.  MEASURED 2026-11-04 on the paired
++            # 64^2 filter runs: every slow shock they still accepted with a
++            # falling entropy or a failed Lax margin was such a cell (4Q 92,
++            # OT 1,803, rotor 557 harvest rows, RH residual 1e-3..1e-1).
++            # These lanes fail instead, and the retry gets them.
++            idx = np.flatnonzero(~done & ~dead & ~discarded
++                                 & (loose_s < 0.1 * prob["f_scale"]))
+             if idx.size:
+                 sub = _take(prob, idx)
+                 bl, ble = postshock(loose_V[idx], sub["By_t"], sub["Bz_t"],
+@@ -618,8 +684,8 @@ def make_solver(gamma):
+                 if k.size == 0:
+                     break
+                 sub = _take(prob, k)
+-                V2, b2, ok, _ = attempt(sub, NV, NX, sub["v_lo"], sub["v_hi"],
+-                                        accuracy)
++                V2, b2, ok, _, _ = attempt(sub, NV, NX, sub["v_lo"], sub["v_hi"],
++                                           accuracy)
+                 rh = rh_resid(sub["ahead"], b2, V2, sub["Bx"], gamma)
+                 ok = ok & (rh <= RETRY_RH)
+                 for c in b2:
+diff --git a/rmhd/batched/slow_shock_njit.py b/rmhd/batched/slow_shock_njit.py
+index 294f772..8cc1206 100644
+--- a/rmhd/batched/slow_shock_njit.py
++++ b/rmhd/batched/slow_shock_njit.py
+@@ -136,13 +136,21 @@ def _compiled():
+     ns = {}
+     exec(compile(_src(_sl._hug_residual), "<njit _hug_residual>", "exec"), dict(g), ns)
+     hug_c = njit(cache=False, error_model="numpy")(ns["_hug_residual"])
+-    _COMPILED = (ps_c, eq416_c, hug_c)
++    # the compiled characteristic speed the fast shock's Lax filter uses too
++    # (shock_njit), for the admissibility filter below
++    from rmhd.batched import fan_njit as FN
++    xi_c = FN._compiled()[0]
++    _COMPILED = (ps_c, eq416_c, hug_c, xi_c)
+     return _COMPILED
+ 
+ 
+ # ── per-lane pieces ────────────────────────────────────────────────────────
+ 
+-def _build(ps_c, eq416_c, hug_c):
++def _build(ps_c, eq416_c, hug_c, xi_c, adm_on):
++    # slow_shock_b.SLOW_ADMISSIBLE at build time: a compile-time constant, so
++    # with the switch off the ranking below compiles to what it always was
++    from . import slow_shock_b as _SB
++    ent_tol, lax_tol = _SB.ADM_ENTROPY_TOL, _SB.ADM_LAX_TOL
+ 
+     @njit(cache=False, error_model="numpy")
+     def alfven_bounds_s(rho, P, vx, vy, vz, By, Bz, Bx, gamma):
+@@ -159,6 +167,30 @@ def _build(ps_c, eq416_c, hug_c):
+             la, ra = ra, la
+         return la, ra
+ 
++    @njit(cache=False, error_model="numpy")
++    def entropy_s(s, Bx, gamma):
++        rho, P, vx, vy, vz, By, Bz = s
++        v2 = vx * vx + vy * vy + vz * vz
++        eta = Bx * vx + By * vy + Bz * vz
++        b2 = (Bx * Bx + By * By + Bz * Bz) * (1.0 - v2) + eta * eta
++        return (P - 0.5 * b2) / rho ** gamma
++
++    @njit(cache=False, error_model="numpy")
++    def admissible_s(ah, bh, Vs, Bx, is_LS, gamma):
++        """slow_shock_b.make_solver.admissible for one candidate."""
++        ok = entropy_s(bh, Bx, gamma) >= entropy_s(ah, Bx, gamma) * (1.0 - ent_tol)
++        la, ra = alfven_bounds_s(ah[0], ah[1], ah[2], ah[3], ah[4], ah[5], ah[6], Bx, gamma)
++        k = 1 if is_LS else 2
++        xa = xi_c(ah, k, Bx, gamma)
++        xb = xi_c(bh, k, Bx, gamma)
++        if math.isfinite(xa) and math.isfinite(xb):     # an untrusted root is not judged
++            if is_LS:
++                m = min(min(xa - Vs, Vs - xb), min(Vs - la, bh[2] - Vs))
++            else:
++                m = min(min(xb - Vs, Vs - xa), min(Vs - bh[2], ra - Vs))
++            ok = ok and (m >= -lax_tol)
++        return ok
++
+     @njit(cache=False, error_model="numpy")
+     def joint_s(Vs, vxb, ah, Byt, Bzt, Bx, Vs_lo, Vs_hi, v_lo, v_hi, is_LS, gamma):
+         """(f1, f2, behind7, ok) -- slow_shock_b.make_solver.joint for one lane."""
+@@ -251,7 +283,8 @@ def _build(ps_c, eq416_c, hug_c):
+     def attempt_s(ah, Byt, Bzt, Bx, Vs_lo, Vs_hi, v_lo, v_hi, is_LS, gamma,
+                   NV, NX, vlo, vhi, tol, max_iter, n_backtrack):
+         """One rung for one lane: grid, N_SEEDS Newtons, RH ranking.
+-        Returns (Vs_best, bh_best7, good, cellV, cellX, cellScore)."""
++        Returns (Vs_best, bh_best7, good, cellV, cellX, cellScore, dropped);
++        dropped: a converged root the admissibility filter discarded."""
+         K = NV * NX
+         # grid scores (slow_shock_b.grid), plus the running best-cell
+         scores = np.empty(K)
+@@ -272,6 +305,7 @@ def _build(ps_c, eq416_c, hug_c):
+         Vs_b, X_b = ah[2], ah[2]
+         bh_b = (ah[0], ah[1], ah[2], ah[3], ah[4], ah[5], ah[6])
+         good = False
++        dropped = False
+         for s in range(N_SEEDS):
+             k = order[s]
+             if not math.isfinite(scores[k]):
+@@ -297,9 +331,12 @@ def _build(ps_c, eq416_c, hug_c):
+                     rh = a
+             if bad or not math.isfinite(rh):
+                 continue
++            if adm_on and not admissible_s(ah, bh, Vs, Bx, is_LS, gamma):
++                dropped = True
++                continue
+             if rh < best_rh:
+                 best_rh, Vs_b, X_b, bh_b, good = rh, Vs, X, bh, True
+-        return Vs_b, bh_b, good, Vg[kbest], Xg[kbest], scores[kbest]
++        return Vs_b, bh_b, good, Vg[kbest], Xg[kbest], scores[kbest], dropped
+ 
+     @njit(parallel=True, cache=False, error_model="numpy")
+     def solve_lanes(ahead, Byt, Bzt, Bx, is_LS, accuracy, has_bracket, br_lo, br_hi,
+@@ -332,6 +369,7 @@ def _build(ps_c, eq416_c, hug_c):
+             done = False
+             dead = (Vs_hi <= Vs_lo) or (v_hi <= v_lo)
+             loose_V, loose_X, loose_s = vxa, vxa, _INF
++            discarded = False
+             n_rungs = 2 if has_bracket else 3
+             for rung in range(n_rungs):
+                 if done or dead:
+@@ -347,15 +385,18 @@ def _build(ps_c, eq416_c, hug_c):
+                     vlo = max(v_lo, vxa - 0.20)
+                     vhi = min(v_hi, vxa + 0.20)
+                 usable = vhi > vlo
+-                Vs_s, bh_s, ok_s, cV, cX, cs = attempt_s(
++                Vs_s, bh_s, ok_s, cV, cX, cs, drop_s = attempt_s(
+                     ah, Byt[n], Bzt[n], Bx[n], Vs_lo, Vs_hi, v_lo, v_hi, is_LS, gamma_c,
+                     NV, NX, vlo, vhi, tol, 40, 8)
+                 if ok_s and usable:
+                     Vs_out, bh_out, done = Vs_s, bh_s, True
++                if drop_s and usable:
++                    discarded = True
+                 keep = usable if rung < 2 else (usable and (not math.isfinite(loose_s)))
+                 if keep:
+                     loose_V, loose_X, loose_s = cV, cX, cs
+-            if (not done) and (not dead) and (loose_s < 0.1 * f_scale):
++            # no loose fallback where the filter discarded a root (slow_shock_b.ladder)
++            if (not done) and (not dead) and (not discarded) and (loose_s < 0.1 * f_scale):
+                 bl, ble = ps_c(loose_V, Byt[n], Bzt[n], loose_X, ah, Bx[n], gamma_c)
+                 fin = True
+                 for q in range(7):
+@@ -378,11 +419,13 @@ def make_solver(gamma):
+     """``solve(By_t, Bz_t, ahead, switch, Bx, accuracy=1e-8, vxb_bracket=None,
+     vxb_hint=None) -> (Vs, behind7, err)`` -- slow_shock_b.make_solver's contract."""
+     global gamma_c
+-    ps_c, eq416_c, hug_c = _compiled()
+-    key = float(gamma)
++    from . import slow_shock_b as _SB
++    ps_c, eq416_c, hug_c, xi_c = _compiled()
++    adm_on = bool(_SB.SLOW_ADMISSIBLE)
++    key = (float(gamma), adm_on)
+     if key not in _SOLVERS:
+-        gamma_c = key                      # closed over by solve_lanes at compile
+-        _SOLVERS[key] = _build(ps_c, eq416_c, hug_c)
++        gamma_c = key[0]                   # closed over by solve_lanes at compile
++        _SOLVERS[key] = _build(ps_c, eq416_c, hug_c, xi_c, adm_on)
+     lanes = _SOLVERS[key]
+ 
+     def solve(By_t, Bz_t, ahead, switch, Bx, accuracy=1e-8,

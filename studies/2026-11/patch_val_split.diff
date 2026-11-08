@@ -1,0 +1,94 @@
+diff --git a/rmhd/ml_guess.py b/rmhd/ml_guess.py
+index eb0f2f3..499e279 100644
+--- a/rmhd/ml_guess.py
++++ b/rmhd/ml_guess.py
+@@ -625,6 +625,7 @@ def train_from_dataset(
+     init_scaler:   Optional[Scaler] = None,
+     loss_weights6: Optional[list] = None,
+     n_candidates:  int = 1,
++    val_path:      Optional[str] = None,
+     **fit_kwargs,
+ ) -> tuple[GuessMLP, Scaler]:
+     """
+@@ -663,6 +664,12 @@ def train_from_dataset(
+     X, Y, Bx_range, Bx_full = build_arrays_from_npz(path, mirror=True,
+                                                      verbose=verbose,
+                                                      return_bx=True)
++    # `val_path`: validate on that file (a held-out time block, say) and
++    # train on every row of `path`.  A random split of a file that holds one
++    # problem several times (mirror twins, upweighted repeats) puts copies of
++    # it on both sides, and the validation loss then measures memorisation.
++    val_xy = (build_arrays_from_npz(val_path, mirror=True, verbose=verbose)[:2]
++              if val_path is not None else None)
+     return _fit(X, Y, gamma=gamma, Bx_range=Bx_range, hidden=hidden,
+                 epochs=epochs, batch_size=batch_size, lr=lr, val_frac=val_frac,
+                 seed=seed, device=device, ckpt_path=ckpt_path, verbose=verbose,
+@@ -670,7 +677,7 @@ def train_from_dataset(
+                 bin_weights=bin_weights, bx_bin_edges=bx_bin_edges,
+                 mirror_paired=True, init_model=init_model,
+                 init_scaler=init_scaler, loss_weights6=loss_weights6,
+-                n_candidates=n_candidates, **fit_kwargs)
++                n_candidates=n_candidates, val_xy=val_xy, **fit_kwargs)
+ 
+ 
+ def _proxy_metrics(model, scaler, proxy: dict, device: str,
+@@ -746,6 +753,7 @@ def _fit(
+     ema_decay:     Optional[float] = None,
+     proxy_eval:    Optional[dict] = None,
+     proxy_every:   int = 10,
++    val_xy:        Optional[tuple] = None,
+ ) -> tuple[GuessMLP, Scaler]:
+     """
+     Core training loop shared by train() and train_from_dataset().
+@@ -810,7 +818,9 @@ def _fit(
+     everything that only-save-at-the-end would.
+     """
+     rng = np.random.default_rng(seed)
+-    if mirror_paired:
++    if val_xy is not None:                  # an explicit validation set
++        i_tr = np.arange(len(X))
++    elif mirror_paired:
+         n_base = len(X) // 2
+         idx    = rng.permutation(n_base)
+         n_val  = max(1, int(n_base * val_frac))
+@@ -823,7 +833,7 @@ def _fit(
+         i_val, i_tr = idx[:n_val], idx[n_val:]
+ 
+     X_tr, Y_tr = X[i_tr], Y[i_tr]
+-    X_va, Y_va = X[i_val], Y[i_val]
++    X_va, Y_va = val_xy if val_xy is not None else (X[i_val], Y[i_val])
+ 
+     Wt_tr = None
+     if sample_bx is not None:
+diff --git a/scripts/train_variant.py b/scripts/train_variant.py
+index 20af887..ff75138 100644
+--- a/scripts/train_variant.py
++++ b/scripts/train_variant.py
+@@ -70,6 +70,9 @@ ap.add_argument("--lr", type=float, default=2.8e-3)
+ ap.add_argument("--seed", type=int, default=0)
+ ap.add_argument("--hidden", type=int, nargs="+", default=[4096, 4096, 2048])
+ ap.add_argument("--val-frac", type=float, default=0.02)
++ap.add_argument("--val-data", default=None,
++                help="validate on this dataset (e.g. a held-out time block) "
++                     "and train on every row of --data; --val-frac is unused")
+ ap.add_argument("--gamma", type=float, default=5.0 / 3.0)
+ ap.add_argument("--k", type=int, default=1)
+ weighting = ap.add_mutually_exclusive_group()
+@@ -89,7 +92,9 @@ hidden = tuple(a.hidden)
+ nparam = sum(x * y + y for x, y in zip((13,) + hidden, hidden + (9 * a.k,)))
+ print(f"variant: {os.path.basename(a.out)}  {nparam:,} params  K={a.k}  sens={a.sens}  "
+       f"margin={a.margin}  ema={a.ema or 'off'}  epochs={a.epochs}  batch={a.batch}  "
+-      f"lr={a.lr}  seed={a.seed}  val_frac={a.val_frac}  device={a.device}", flush=True)
++      f"lr={a.lr}  seed={a.seed}  "
++      + (f"val_data={a.val_data}" if a.val_data else f"val_frac={a.val_frac}")
++      + f"  device={a.device}", flush=True)
+ 
+ w6 = None
+ if a.sens or a.margin:
+@@ -122,5 +127,5 @@ mdl, scl = mg.train_from_dataset(
+     lr=a.lr, val_frac=a.val_frac, seed=a.seed, device=a.device, ckpt_path=a.out,
+     init_model=init_model, init_scaler=init_scaler, loss_weights6=w6,
+     n_candidates=a.k, ema_decay=(a.ema or None), proxy_eval=proxy,
+-    proxy_every=a.proxy_every, verbose=True)
++    proxy_every=a.proxy_every, val_path=a.val_data, verbose=True)
+ print("done ->", a.out, flush=True)

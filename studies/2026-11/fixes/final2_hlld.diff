@@ -1,0 +1,289 @@
+diff --git a/src/physics/exact_flux.py b/src/physics/exact_flux.py
+index 04f89e7..e58ff36 100644
+--- a/src/physics/exact_flux.py
++++ b/src/physics/exact_flux.py
+@@ -171,6 +171,63 @@ _PLANAR5_CROSSED = os.environ.get("RMHD_PLANAR5_CROSSED", "1") not in ("0", "",
+ # the contact, the fan's order).  Offered the lanes every rescue above lost.
+ # See rmhd.batched.planar4_b and docs/what_we_solve.md 5a.
+ _PLANAR4 = os.environ.get("RMHD_PLANAR4", "1") not in ("0", "", "off")
++# Lanes the four-unknown Newton loses from its own start (the mean total
++# pressure, slow waves of zero strength, the steering read off that start) are
++# offered again from HLLD's star pressure, which every face has already paid
++# for: both fast waves to p*, the slow waves weak fans steered by pressure or
++# field (_PLANAR4_STAR_STARTS, in this order), then the same starts with a
++# central-difference Jacobian (planar4_b.jacobian), each answer held to the
++# same acceptance and to a non-decreasing entropy across every shock.  On the
++# four-quadrant 128^2 run's lost near-normal faces the default start is 15%
++# off in pressure where both fast waves are rarefactions, and a field-steered
++# fan cannot carry B_t through zero, which is how the slow fans there reverse
++# the field.  Failure ledger (calea 78576): 195 of the 472 lanes the
++# loose-fallback retry still loses, the checked ones within 1e-6 of their own
++# tubes (HLLD 1e-3..1e-2); 600 controls, one other root.  RMHD_PLANAR4_STAR=1;
++# off by default.
++_PLANAR4_STAR = os.environ.get("RMHD_PLANAR4_STAR", "0") not in ("0", "", "off")
++# (central differences, steering of the two slow waves, start strength), in
++# the order they are tried; steering 0 field, 1 pressure, 2 SIGNED field
++# (planar4_b.KIND_S, for beta ~ 100 faces with the field nearly normal, whose
++# slow waves are nearly Alfven waves and carry B_t through zero: calea 78609,
++# 191 of the 249 lanes the other starts lose)
++_PLANAR4_STAR_FULL = tuple(
++    [(False,) + st for st in (((1, 1), 1e-4), ((1, 1), 1e-3), ((1, 0), 1e-4),
++                              ((0, 1), 1e-4), ((0, 1), 1e-3))]
++    + [(True,) + st for st in (((1, 1), 1e-4), ((1, 1), 1e-3), ((1, 0), 1e-4),
++                               ((0, 1), 1e-4), ((0, 1), 1e-3), ((2, 2), 1e-4))])
++# The starts that answered on the failure ledger, each only once: the full
++# set costs 1.85-2.9x wall on the 64^2 runs (numpy Newton calls on every lost
++# lane, whose per-call overhead the pool does not spread).  RMHD_PLANAR4_STAR_SET
++# = lean (default) | full; RMHD_PLANAR4_STAR_ITER caps each attempt's Newton.
++_PLANAR4_STAR_LEAN = ((False, (1, 1), 1e-4), (True, (1, 1), 1e-4),
++                      (True, (2, 2), 1e-4), (True, (0, 1), 1e-4),
++                      (True, (1, 0), 1e-4))
++# Then the same pressure steering from a start that puts a WEAK fast wave
++# (p* within 2% of its ahead pressure) just past its own ahead pressure
++# instead of at p*: next to the fast-Alfven degeneracy the basin in that
++# wave's pressure is narrower than p*'s error (lane 858, 2026-11-05: p* 1.7%
++# from p_RF; calea 78627, 13 of the 52 near-normal strong-field lanes left).
++# Last, both fast waves at their own ahead pressures x (1 + offset): the
++# strong-field near-normal faces whose p* is 2-9% from one side (calea 78634:
++# 29 of the 41 lanes everything above loses, none with a falling entropy).
++# (central, steering, slow start strength, fast start: "near" / "both", offset)
++_PLANAR4_STAR_SIDE = ((True, (1, 1), 1e-4, "near", 1e-3),
++                      (True, (1, 1), 1e-4, "near", -1e-3),
++                      (True, (1, 1), 1e-4, "both", 1e-3),
++                      (True, (1, 1), 1e-4, "both", -1e-3),
++                      (True, (1, 1), 1e-4, "both", 1e-2),
++                      (True, (1, 1), 1e-4, "both", -1e-2))
++_PLANAR4_STAR_STARTS = (_PLANAR4_STAR_FULL
++                        if os.environ.get("RMHD_PLANAR4_STAR_SET", "lean") == "full"
++                        else _PLANAR4_STAR_LEAN)
++_PLANAR4_STAR_ITER = int(os.environ.get("RMHD_PLANAR4_STAR_ITER", "25"))
++# How far the entropy may fall across a shock of a star-start answer:
++# K_behind / K_ahead >= 1 - _PLANAR4_STAR_DS (K = p / rho^gamma).  The
++# signed-field answers carry field-reversing jumps whose entropy falls by
++# 1e-10..2e-5 and whose fluxes still sit 10-300x closer to the faces' own
++# tubes than HLLD (calea 78606 tubes, 2026-11-04); 1e-9 refuses them.
++_PLANAR4_STAR_DS = float(os.environ.get("RMHD_PLANAR4_STAR_DS", "1e-9"))
+ # What the faces BELOW the weak-jump gate get: the linearised solver (the
+ # default) or HLLD (`linearised.py`, exact to second order in the jump where
+ # HLLD is first order).  Never counted as exact.
+@@ -870,43 +927,29 @@ def _ml_seeds(model, scaler, L, R, Bn, n_retries):
+     return dict(seed6=seed6, keys=keys, extra=extra)
+ 
+ 
+-def _planar4_and_ray(P, gamma, sL4, sR4, B4, *, accuracy, max_iter):
+-    """The four-unknown planar solve, the xi = 0 ray and the physical check
+-    -- the rung's body, so that the failure ledger can offer lanes to it
+-    under exactly production's acceptance.
+-
+-    Returns a dict: ``good``, ``star``, ``region``, ``zones6``
+-    (``[A, A, B, C, D, D]``), ``VsLv``, ``VsRv``, ``n_iter``, ``kinds`` (2, N),
+-    ``reason`` (0 accepted, 1 not converged, 2 not planar, 3 fails the
+-    certificate, 4 fan not ordered, 5 cannot start, 6 ray, 7 unphysical),
+-    ``cert_resid``, ``full_resid``.
+-    """
++def _planar4_accept(P, gamma, r, sL4, sR4, B4):
++    """Production's acceptance of a planar4 ``solve`` answer beyond its own
++    certificate: the xi = 0 ray resolved and the state there physical.
++    Returns ``(good, reason, star, region, zones6, VsLv, VsRv)``; the last four
++    are None when no lane converged."""
+     import numpy as np
+     from rmhd.batched import planar4_b as P4B
+     RAY = P["ray"]
+     S4 = P["planar4"]
+-    r = S4["solve"](sL4, sR4, B4, accuracy=accuracy, max_iter=max_iter,
+-                    planar_tol=_PLANAR_TOL, verify_tol=_PLANAR5_VERIFY)
+     good = r["converged"].astype(bool)
+     reason = r["reason"].astype(np.int8).copy()
+     A, B_, C_, D = r["zones"]
+     zones6 = [A, A, B_, C_, D, D]
+-    out = dict(good=good, star=None, region=None, zones6=zones6,
+-               VsLv=None, VsRv=None, n_iter=np.asarray(r["n_iter"]),
+-               kinds=r["kinds"], reason=reason, unk=r["unk"],
+-               cert_resid=np.asarray(r["cert_resid"]),
+-               full_resid=np.asarray(r["full_resid"]),
+-               resid=np.asarray(r["nrm"]))
+     if not good.any():
+-        return out
++        return good, reason, None, None, zones6, None, None
+     VsLv = [r["speeds"][0], S4["alfven_speed"](A, B4, "L"), r["speeds"][1]]
+     VsRv = [r["speeds"][4], S4["alfven_speed"](D, B4, "R"), r["speeds"][3]]
+     sh = r["shocks"]
+     st, reg, e = RAY.state_at_xi(
+         sL4, sR4, zones6, VsLv, VsRv, B4, gamma, P["xi"], P["fan_p"],
+         P["fan_n"], kinds={"LF": sh[0], "LS": sh[1], "RS": sh[2], "RF": sh[3]},
+-        slow_by_pressure=(r["kinds"][0] == P4B.KIND_P,
+-                          r["kinds"][1] == P4B.KIND_P))
++        slow_by_pressure=(r["kinds"][0] != P4B.KIND_B,
++                          r["kinds"][1] != P4B.KIND_B))
+     reason[good & e] = 6
+     good = good & ~e
+     rho, Pt, vn, vt1, vt2, Bt1, Bt2 = st
+@@ -919,7 +962,141 @@ def _planar4_and_ray(P, gamma, sL4, sR4, B4, *, accuracy, max_iter):
+         phys &= np.isfinite(c_)
+     reason[good & ~phys] = 7
+     good = good & phys
+-    out.update(good=good, star=st, region=reg, VsLv=VsLv, VsRv=VsRv)
++    return good, reason, st, reg, zones6, VsLv, VsRv
++
++
++def _planar4_and_ray(P, gamma, sL4, sR4, B4, *, accuracy, max_iter, hint=None):
++    """The four-unknown planar solve, the xi = 0 ray and the physical check
++    -- the rung's body, so that the failure ledger can offer lanes to it
++    under exactly production's acceptance.
++
++    ``hint`` (with RMHD_PLANAR4_STAR) is ``{"p": HLLD's star pressure}`` per
++    lane, the start of the second attempt (`_planar4_star`).
++
++    Returns a dict: ``good``, ``star``, ``region``, ``zones6``
++    (``[A, A, B, C, D, D]``), ``VsLv``, ``VsRv``, ``n_iter``, ``kinds`` (2, N),
++    ``reason`` (0 accepted, 1 not converged, 2 not planar, 3 fails the
++    certificate, 4 fan not ordered, 5 cannot start, 6 ray, 7 unphysical),
++    ``cert_resid``, ``full_resid``.
++    """
++    import numpy as np
++    S4 = P["planar4"]
++    r = S4["solve"](sL4, sR4, B4, accuracy=accuracy, max_iter=max_iter,
++                    planar_tol=_PLANAR_TOL, verify_tol=_PLANAR5_VERIFY)
++    good, reason, st, reg, zones6, VsLv, VsRv = _planar4_accept(
++        P, gamma, r, sL4, sR4, B4)
++    out = dict(good=good, star=st, region=reg, zones6=zones6,
++               VsLv=VsLv, VsRv=VsRv, n_iter=np.asarray(r["n_iter"]),
++               kinds=r["kinds"], reason=reason, unk=r["unk"],
++               cert_resid=np.asarray(r["cert_resid"]),
++               full_resid=np.asarray(r["full_resid"]),
++               resid=np.asarray(r["nrm"]))
++    if _PLANAR4_STAR and hint is not None and not good.all():
++        out = _planar4_star(P, gamma, sL4, sR4, B4, out, hint["p"],
++                            accuracy=accuracy, max_iter=max_iter)
++    return out
++
++
++def _shock_entropy_ratio(r, sL4, sR4, B4, gamma):
++    """The smallest K_behind / K_ahead (K = p / rho^gamma) over the shocks of
++    a planar4 answer; 1 where it has none."""
++    import numpy as np
++
++    def K(X):
++        rho, Pt, vx, vy, vz, By, Bz = X
++        v2 = vx * vx + vy * vy + vz * vz
++        W2 = 1.0 / np.maximum(1.0 - v2, 1e-300)
++        vB = vx * B4 + vy * By + vz * Bz
++        return (Pt - 0.5 * ((B4 ** 2 + By ** 2 + Bz ** 2) / W2 + vB ** 2)) / X[0] ** gamma
++
++    A, B_, C_, D = r["zones"]
++    m = np.ones(B4.shape[0])
++    with np.errstate(all="ignore"):
++        for row, (ah, bh) in enumerate(((sL4, A), (A, B_), (D, C_), (sR4, D))):
++            ratio = np.where(np.isfinite(K(bh) / K(ah)), K(bh) / K(ah), 0.0)
++            m = np.where(r["shocks"][row], np.minimum(m, ratio), m)
++    return m
++
++
++def _planar4_star(P, gamma, sL4, sR4, B4, out, p_hint, *, accuracy, max_iter):
++    """The lanes `_planar4_and_ray` lost, again from HLLD's star pressure
++    (see _PLANAR4_STAR): every start of _PLANAR4_STAR_STARTS, then of
++    _PLANAR4_STAR_SIDE, on the lanes still lost, the first accepted answer
++    kept.  ``out`` is updated in place on the lanes it answers and returned."""
++    import numpy as np
++    S4 = P["planar4"]
++    W = S4["waves"]
++    n = B4.shape[0]
++    L0, R0 = S4["to_planar"](sL4, sR4, B4)[:2]
++    lp = np.log(np.maximum(np.asarray(p_hint, dtype=float), 1e-12))
++    sub = lambda X, i: [c[i] for c in X]
++    starts = ([st + (None, 0.0) for st in _PLANAR4_STAR_STARTS]
++              + list(_PLANAR4_STAR_SIDE))
++    for central, kd, dl, fast, off in starts:
++        i = np.flatnonzero(~out["good"])
++        if i.size == 0:
++            break
++        if fast == "near":
++            # only a lane with a weak fast wave has something new to try
++            i = i[(np.abs(np.exp(lp[i]) / L0[1][i] - 1.0) < 0.02)
++                  | (np.abs(np.exp(lp[i]) / R0[1][i] - 1.0) < 0.02)]
++            if i.size == 0:
++                continue
++        pl, pr = np.exp(lp[i]), np.exp(lp[i])
++        if fast == "near":
++            for pp, P0 in ((pl, L0[1][i]), (pr, R0[1][i])):
++                near = np.abs(pp / P0 - 1.0) < 0.02
++                pp[near] = P0[near] * (1.0 + off)
++        elif fast == "both":
++            pl, pr = L0[1][i] * (1.0 + off), R0[1][i] * (1.0 + off)
++        with np.errstate(all="ignore"):
++            A, _, eA = W["fast_wave"](pl, sub(L0, i), "LF", B4[i])
++            D, _, eD = W["fast_wave"](pr, sub(R0, i), "RF", B4[i])
++            sl = (np.log(np.maximum(A[1] * (1.0 - dl), 1e-300)) if kd[0] == 1
++                  else A[5] * (1.0 + dl))
++            sr = (np.log(np.maximum(D[1] * (1.0 - dl), 1e-300)) if kd[1] == 1
++                  else D[5] * (1.0 + dl))
++        kinds = np.tile(np.array(kd, dtype=np.int8)[:, None], (1, i.size))
++        r = S4["solve"](sub(sL4, i), sub(sR4, i), B4[i], accuracy=accuracy,
++                        max_iter=min(max_iter, _PLANAR4_STAR_ITER),
++                        planar_tol=_PLANAR_TOL,
++                        verify_tol=_PLANAR5_VERIFY, kinds=kinds, retry=False,
++                        unk_init=[np.log(pl), sl, sr, np.log(pr)], central=central)
++        good, reason, st, reg, zones6, VsLv, VsRv = _planar4_accept(
++            P, gamma, r, sub(sL4, i), sub(sR4, i), B4[i])
++        good = good & ~(eA | eD)
++        if good.any():
++            good &= _shock_entropy_ratio(r, sub(sL4, i), sub(sR4, i), B4[i],
++                                         gamma) >= 1.0 - _PLANAR4_STAR_DS
++        out["n_iter"] = np.asarray(out["n_iter"]).copy()
++        out["n_iter"][i] += np.asarray(r["n_iter"])
++        if not good.any():
++            continue
++        w, g = i[good], np.flatnonzero(good)
++        if out["star"] is None:
++            out["star"] = [np.zeros(n) for _ in range(7)]
++            out["region"] = np.zeros(n, dtype=np.asarray(reg).dtype)
++            out["VsLv"] = [np.zeros(n) for _ in range(3)]
++            out["VsRv"] = [np.zeros(n) for _ in range(3)]
++        for j in range(7):
++            out["star"][j][w] = st[j][g]
++        out["region"][w] = np.asarray(reg)[g]
++        for k in range(3):
++            out["VsLv"][k][w] = VsLv[k][g]
++            out["VsRv"][k][w] = VsRv[k][g]
++        for z, z2 in zip(out["zones6"], zones6):
++            for j in range(7):
++                z[j][w] = z2[j][g]
++        out["kinds"][:, w] = r["kinds"][:, g]
++        out["reason"][w] = 0
++        for c in range(4):
++            out["unk"][c][w] = r["unk"][c][g]
++        for k, k2 in (("cert_resid", "cert_resid"), ("full_resid", "full_resid"),
++                      ("resid", "nrm")):
++            out[k] = np.asarray(out[k]).copy()
++            out[k][w] = np.asarray(r[k2])[g]
++        out["good"] = out["good"].copy()
++        out["good"][w] = True
+     return out
+ 
+ 
+@@ -975,6 +1152,10 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
+     F = {k: v.clone() for k, v in F.items()}
+     U = {k: v.clone() for k, v in U.items()}
+     p_star = p_star.clone()
++    # HLLD's star pressure, before any exact answer overwrites it: the
++    # four-unknown rung's second start (_PLANAR4_STAR)
++    p_hll = (p_star.detach().abs().reshape(-1).cpu().numpy().astype(float)
++             if _PLANAR4_STAR else None)
+ 
+     (L7, BnL), (R7, BnR) = to_solver_frame(sL, eos, idir), to_solver_frame(sR, eos, idir)
+     dBn = float((BnL - BnR).abs().max())
+@@ -1378,10 +1559,13 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
+         n4_att = int(cand.size)
+         if cand.size:
+             from . import exact_pool
++            kw4 = dict(accuracy=accuracy, max_iter=max_iter)
++            if _PLANAR4_STAR:
++                kw4["hint"] = {"p": p_hll[np.asarray(sel)[cand]]}
+             r4 = exact_pool.map_lanes("_planar4_and_ray", gamma,
+                                       [c[cand] for c in subL],
+                                       [c[cand] for c in subR], subBn[cand],
+-                                      accuracy=accuracy, max_iter=max_iter)
++                                      **kw4)
+             reason4[cand] = r4["reason"]
+             iters4[cand] = r4["n_iter"]
+             kinds4[:, cand] = r4["kinds"]

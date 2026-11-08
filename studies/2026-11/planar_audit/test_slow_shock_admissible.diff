@@ -1,0 +1,149 @@
+diff --git a/tests/batched/test_slow_shock_admissible.py b/tests/batched/test_slow_shock_admissible.py
+new file mode 100644
+index 0000000..cc8e674
+--- /dev/null
++++ b/tests/batched/test_slow_shock_admissible.py
+@@ -0,0 +1,143 @@
++"""Admissible slow-shock roots (slow_shock_b.SLOW_ADMISSIBLE,
++RMHD_SLOWSHOCK_ADMISSIBLE=1).
++
++The slow-shock sub-solver ranks its candidate roots by the Rankine-Hugoniot
++residual, and an EXPANSION shock satisfies the jump conditions as exactly as
++a compressive one.  Found 2026-11-03 in the four-quadrant 64^2 run's harvest
++(0.40% of its exact faces): a left slow "shock" riding on a strong fast shock
++at its speed, beyond the Alfven speed ahead of it, density x0.32, entropy
++x0.89.  Under the switch only candidates whose entropy does not fall and that
++meet the slow family's Lax conditions compete.  These tests pin: the compiled
++filter is the numpy filter's bitwise twin, every root it returns is
++admissible, the switch off changes nothing, and that lane.
++"""
++import numpy as np
++import pytest
++
++from rmhd.batched import slow_shock_b as SB
++from rmhd.batched import slow_shock_njit as SN
++from rmhd.batched import wave_speeds_b as WB
++
++np.seterr(all="ignore")
++GAMMA = 5.0 / 3.0
++
++
++def _problems(seed, N):
++    """slow_shock_njit's hard set: targets 0.02x..1.6x the ahead field."""
++    rng = np.random.default_rng(seed)
++    rho = 10 ** rng.uniform(-0.5, 1.2, N)
++    p = 10 ** rng.uniform(-2.5, 0.9, N)
++    v = rng.uniform(-0.7, 0.7, (3, N))
++    v *= 0.9 / np.maximum(1, np.linalg.norm(v, axis=0) / 0.9)
++    By, Bz, Bn = rng.uniform(-2, 2, N), rng.uniform(-2, 2, N), rng.uniform(0.05, 0.6, N)
++    fac = rng.uniform(0.02, 1.6, N)
++    B2 = Bn ** 2 + By ** 2 + Bz ** 2
++    v2 = (v ** 2).sum(0)
++    eta = Bn * v[0] + By * v[1] + Bz * v[2]
++    P = p + 0.5 * (B2 * (1 - v2) + eta ** 2)
++    return [rho, P, v[0], v[1], v[2], By, Bz], By * fac, Bz * fac, Bn
++
++
++def _entropy(s, Bn):
++    rho, P, vx, vy, vz, By, Bz = s
++    v2 = vx * vx + vy * vy + vz * vz
++    eta = Bn * vx + By * vy + Bz * vz
++    b2 = (Bn * Bn + By * By + Bz * Bz) * (1.0 - v2) + eta * eta
++    return (P - 0.5 * b2) / rho ** GAMMA
++
++
++# Four-quadrant 64^2 run, harvest row 486645 (it3/train3.npz): the left slow
++# wave's ahead state R3 and the contact field it was asked to reach.  The
++# solver built an expansion shock at the left fast shock's speed (stored
++# Vs -0.98982390, rho behind 0.1767 against 0.5567 ahead).
++R3 = [0.5566965600134972, 8.485273119321079, -0.9395570439335778, -0.053080474503701874,
++      -6.664117095837521e-18, -5.798891599435224, -7.322186718170669e-16]
++TARGET = (-0.4636081229973153, -5.677562038873746e-17)
++BN = 2.417194680901666
++
++
++@pytest.fixture
++def admissible(monkeypatch):
++    monkeypatch.setattr(SB, "SLOW_ADMISSIBLE", True)
++    monkeypatch.setattr(SB, "SLOW_RETRY", False)        # njit has no retry
++    monkeypatch.delenv("RMHD_SLOWSHOCK", raising=False)
++
++
++@pytest.mark.skipif(not SN.HAVE_NUMBA, reason="numba not installed")
++@pytest.mark.parametrize("switch", ["LS", "RS"])
++def test_compiled_filter_matches_numpy(admissible, switch):
++    ahead, Byt, Bzt, Bn = _problems(99, 300)
++    V1, b1, e1 = SB.make_solver(GAMMA)(Byt, Bzt, ahead, switch, Bn, accuracy=1e-8)
++    V2, b2, e2 = SN.make_solver(GAMMA)(Byt, Bzt, ahead, switch, Bn, accuracy=1e-8)
++    assert np.array_equal(e1, e2), f"err flips: {int((e1 != e2).sum())}"
++    both = ~e1
++    assert np.array_equal(V1[both], V2[both])
++    assert all(np.array_equal(b1[j][both], b2[j][both]) for j in range(7))
++
++
++@pytest.mark.parametrize("switch", ["LS", "RS"])
++def test_every_root_is_admissible(admissible, switch):
++    """Entropy never falls and the slow family's Lax conditions hold (to the
++    filter's tolerances) on every ranked root -- the Bt-method pair (the
++    B-Hugoniot and eq. 4.16) converged.  The ladder's loose fallback, the best
++    grid cell handed back when every rung fails, is not a root and is not
++    ranked, so it is not judged here."""
++    ahead, Byt, Bzt, Bn = _problems(99, 300)
++    V, b, e = SB.make_solver(GAMMA)(Byt, Bzt, ahead, switch, Bn, accuracy=1e-8)
++    ok = ~e
++    assert ok.sum() > 100
++    ah = [np.asarray(c)[ok] for c in ahead]
++    bh = [np.asarray(c)[ok] for c in b]
++    Vs, B = V[ok], Bn[ok]
++    f1, _ = SB.make_hug(GAMMA)(Vs, bh, ah, B)
++    f2, _ = SB.make_eq416(GAMMA)(Vs, bh, ah, B)
++    root = (np.abs(f1) + np.abs(f2)) <= 1e-7 * (1.0 + np.abs(ah[1]))
++    assert root.sum() > 100
++    assert np.all(_entropy(bh, B)[root] >= _entropy(ah, B)[root] * (1 - SB.ADM_ENTROPY_TOL))
++    ea, _, _, oka = WB.xi_all(*ah, B, GAMMA)
++    eb, _, _, okb = WB.xi_all(*bh, B, GAMMA)
++    la, ra = SB.alfven_bounds(ah, B, GAMMA)
++    k = 1 if switch == "LS" else 2
++    if switch == "LS":
++        m = np.minimum.reduce([ea[:, k] - Vs, Vs - eb[:, k], Vs - la, bh[2] - Vs])
++    else:
++        m = np.minimum.reduce([eb[:, k] - Vs, Vs - ea[:, k], Vs - bh[2], ra - Vs])
++    judged = root & oka[:, k] & okb[:, k]
++    assert np.all(m[judged] >= -SB.ADM_LAX_TOL)
++
++
++def test_off_is_the_old_solver(monkeypatch):
++    """With the switch off the admissibility code is never reached: the
++    numpy ladder's answers are the ones it always gave."""
++    monkeypatch.setattr(SB, "SLOW_ADMISSIBLE", False)
++    monkeypatch.delenv("RMHD_SLOWSHOCK", raising=False)
++    ahead, Byt, Bzt, Bn = _problems(7, 60)
++    V0, b0, e0 = SB.make_solver(GAMMA)(Byt, Bzt, ahead, "LS", Bn)
++    monkeypatch.setattr(SB, "ADM_LAX_TOL", -1.0)          # would refuse every root
++    monkeypatch.setattr(SB, "ADM_ENTROPY_TOL", -1.0)
++    V1, b1, e1 = SB.make_solver(GAMMA)(Byt, Bzt, ahead, "LS", Bn)
++    assert (~e0).sum() > 30
++    assert np.array_equal(e0, e1) and np.array_equal(V0[~e0], V1[~e1])
++
++
++def test_the_four_quadrant_expansion_shock(monkeypatch):
++    """The lane that started it: off, the solver returns the expansion shock
++    (entropy x0.89); on, a compressive root inside the slow window."""
++    monkeypatch.delenv("RMHD_SLOWSHOCK", raising=False)
++    monkeypatch.setattr(SB, "SLOW_RETRY", False)
++    ah = [np.array([c]) for c in R3]
++    By_t, Bz_t, Bn = np.array([TARGET[0]]), np.array([TARGET[1]]), np.array([BN])
++    out = {}
++    for on in (False, True):
++        monkeypatch.setattr(SB, "SLOW_ADMISSIBLE", on)
++        V, bh, e = SB.make_solver(GAMMA)(By_t, Bz_t, ah, "LS", Bn, accuracy=1e-10)
++        assert not e[0]
++        out[on] = (float(V[0]), [np.asarray(c) for c in bh])
++    V_off, b_off = out[False]
++    V_on, b_on = out[True]
++    la, _ = SB.alfven_bounds(ah, Bn, GAMMA)
++    assert abs(V_off - (-0.9898239012334493)) < 1e-8
++    assert (_entropy(b_off, Bn) / _entropy(ah, Bn))[0] < 0.9           # expansion
++    assert V_on >= la[0] - SB.ADM_LAX_TOL                              # inside the window
++    assert (_entropy(b_on, Bn) / _entropy(ah, Bn))[0] >= 1.0 - SB.ADM_ENTROPY_TOL
++    assert b_on[0][0] > R3[0]                                          # compressive

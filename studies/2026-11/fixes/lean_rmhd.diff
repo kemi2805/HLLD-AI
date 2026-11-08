@@ -1,0 +1,487 @@
+diff --git a/rmhd/batched/fan_njit.py b/rmhd/batched/fan_njit.py
+index c064ec3..1699023 100644
+--- a/rmhd/batched/fan_njit.py
++++ b/rmhd/batched/fan_njit.py
+@@ -407,9 +407,102 @@ def _make_driver(xi_c, rhs_c, kind_is_pressure: bool):
+     return driver
+ 
+ 
++def _make_driver_signed(xi_c, rhs_c):
++    """The compiled lane loop of planar4_b.fan_signed: the pressure fan's ODE
++    re-parametrised by the signed tangential field, ``dy/dB_t = rhs_p /
++    rhs_p[B_t]``, fixed-step RK4 from ``init[5]`` to ``target``; the same
++    freezing on a superluminal or non-finite stage as the other drivers."""
++
++    @njit(cache=False, error_model="numpy")
++    def _f(y, k, Bx, gamma):
++        v2 = y[2] * y[2] + y[3] * y[3] + y[4] * y[4]
++        if (not math.isfinite(v2)) or v2 >= 1.0:
++            return (math.nan, math.nan, math.nan, math.nan, math.nan, math.nan, math.nan)
++        d = rhs_c(y[1], y, k, Bx, gamma)
++        inv = 1.0 / d[5]
++        return (d[0] * inv, d[1] * inv, d[2] * inv, d[3] * inv, d[4] * inv,
++                d[5] * inv, d[6] * inv)
++
++    @njit(parallel=True, cache=False, error_model="numpy")
++    def driver(k, target, init, Bx, gamma, nsteps, out, Vs_out, err_out):
++        N = target.shape[0]
++        for n in prange(N):
++            y = (init[0, n], init[1, n], init[2, n], init[3, n], init[4, n],
++                 init[5, n], init[6, n])
++            x0 = init[5, n]
++            tgt = target[n]
++            Vs_out[n] = xi_c(y, k, Bx[n], gamma)
++            unchanged = abs(tgt - x0) <= 1e-15 * max(abs(tgt), 1.0)
++            h = 0.0 if unchanged else (tgt - x0) / nsteps
++            err = False
++            for _ in range(nsteps):
++                if err:
++                    break
++                k1 = _f(y, k, Bx[n], gamma)
++                y2 = (y[0] + 0.5 * h * k1[0], y[1] + 0.5 * h * k1[1],
++                      y[2] + 0.5 * h * k1[2], y[3] + 0.5 * h * k1[3],
++                      y[4] + 0.5 * h * k1[4], y[5] + 0.5 * h * k1[5],
++                      y[6] + 0.5 * h * k1[6])
++                k2 = _f(y2, k, Bx[n], gamma)
++                y3 = (y[0] + 0.5 * h * k2[0], y[1] + 0.5 * h * k2[1],
++                      y[2] + 0.5 * h * k2[2], y[3] + 0.5 * h * k2[3],
++                      y[4] + 0.5 * h * k2[4], y[5] + 0.5 * h * k2[5],
++                      y[6] + 0.5 * h * k2[6])
++                k3 = _f(y3, k, Bx[n], gamma)
++                y4 = (y[0] + h * k3[0], y[1] + h * k3[1], y[2] + h * k3[2],
++                      y[3] + h * k3[3], y[4] + h * k3[4], y[5] + h * k3[5],
++                      y[6] + h * k3[6])
++                k4 = _f(y4, k, Bx[n], gamma)
++                h6 = h / 6.0
++                yn = (y[0] + h6 * (k1[0] + 2.0 * k2[0] + 2.0 * k3[0] + k4[0]),
++                      y[1] + h6 * (k1[1] + 2.0 * k2[1] + 2.0 * k3[1] + k4[1]),
++                      y[2] + h6 * (k1[2] + 2.0 * k2[2] + 2.0 * k3[2] + k4[2]),
++                      y[3] + h6 * (k1[3] + 2.0 * k2[3] + 2.0 * k3[3] + k4[3]),
++                      y[4] + h6 * (k1[4] + 2.0 * k2[4] + 2.0 * k3[4] + k4[4]),
++                      y[5] + h6 * (k1[5] + 2.0 * k2[5] + 2.0 * k3[5] + k4[5]),
++                      y[6] + h6 * (k1[6] + 2.0 * k2[6] + 2.0 * k3[6] + k4[6]))
++                v2 = yn[2] * yn[2] + yn[3] * yn[3] + yn[4] * yn[4]
++                bad = (not math.isfinite(v2)) or v2 >= 1.0
++                for j in range(7):
++                    if not math.isfinite(yn[j]):
++                        bad = True
++                if bad:
++                    err = True            # freeze at the last good state
++                else:
++                    y = yn
++            for j in range(7):
++                out[j, n] = y[j]
++            err_out[n] = err
++
++    return driver
++
++
+ _DRIVERS = {}
+ 
+ 
++def make_signed(gamma):
++    """``fan_signed(target_Bt, init, switch, Bx, nsteps)`` compiled: the
++    driver of `_make_driver_signed`, same contract as the numpy loop in
++    planar4_b.fan_signed before its pressure check."""
++    xi_c, rhs_p, _rhs_n = _compiled()
++    if "s" not in _DRIVERS:
++        _DRIVERS["s"] = _make_driver_signed(xi_c, rhs_p)
++
++    def fan_signed(target, init, switch, Bx, g=gamma, nsteps=500):
++        init7 = np.stack([np.asarray(c, dtype=float) for c in init], axis=0)
++        N = init7.shape[1]
++        tgt = np.broadcast_to(np.asarray(target, dtype=float), (N,)).astype(float)
++        Bxa = np.broadcast_to(np.asarray(Bx, dtype=float), (N,)).astype(float)
++        out = np.full((7, N), np.nan)
++        Vs = np.full(N, np.nan)
++        err = np.ones(N, dtype=np.bool_)
++        _DRIVERS["s"](_K[switch], tgt, np.ascontiguousarray(init7), Bxa,
++                      float(g), int(nsteps), out, Vs, err)
++        return [out[j] for j in range(7)], Vs, err
++
++    return fan_signed
++
++
+ def make_integrators(gamma):
+     """``(fan_pressure, fan_normB)`` with rarefaction_b's signature, compiled.
+ 
+diff --git a/rmhd/batched/planar4_b.py b/rmhd/batched/planar4_b.py
+index 0f3c2a5..f751da0 100644
+--- a/rmhd/batched/planar4_b.py
++++ b/rmhd/batched/planar4_b.py
+@@ -72,11 +72,15 @@ from . import shock_b as SB
+ from . import wave_speeds_b as WB
+ from .jump import cons_flux
+ from .planar5_b import to_planar, from_planar
++from . import slow_shock_b as SSB
+ from .slow_shock_b import alfven_bounds
+ 
+-KIND_B, KIND_P = 0, 1
+-KIND_NAMES = {KIND_B: "B", KIND_P: "P"}
++KIND_B, KIND_P, KIND_S = 0, 1, 2
++KIND_NAMES = {KIND_B: "B", KIND_P: "P", KIND_S: "S"}
+ _SLACK_TOL = 1e-9
++# Fixed RK4 trip count of the signed-field fan (`fan_signed`), the normB
++# integrator's: a fixed count keeps the residual smooth in the unknowns.
++NSTEPS_SIGNED = 500
+ 
+ 
+ def make_solver(gamma):
+@@ -89,6 +93,7 @@ def make_solver(gamma):
+     _rhs_p, rhs_n = RB.make_rhs(gamma, xi_fn)
+     shockfunc = SB.make_shockfunc(gamma)
+     behind_fn = SB.make_postshock(gamma)
++    slow_shock = SSB.make_solver(gamma)
+ 
+     # ── which coordinate moves along the slow family ────────────────────
+     def steer(X, sw, Bn):
+@@ -200,6 +205,90 @@ def make_solver(gamma):
+         e = e | ~(np.abs(sl) <= _SLACK_TOL * np.maximum(1.0, np.abs(Bt)))
+         return B, Vs, e, np.abs(Bt) <= np.abs(X[5])
+ 
++    # ── a slow wave to a SIGNED tangential field (kind S) ───────────────
++    def fan_signed(Bt, X, sw, Bn, nsteps=NSTEPS_SIGNED):
++        """The slow fan from ``X`` to the signed tangential field ``Bt``
++        (planar frame): the pressure fan's ODE re-parametrised by B_t,
++        ``dy/dB_t = rhs_p / rhs_p[B_t]``, fixed-step RK4.
++
++        Why: with the field nearly normal and beta ~ 100 the slow wave is
++        nearly an Alfven wave -- a total-pressure change of 1e-5 swings B_t
++        by 0.1 (failure ledger lane 900, 2026-11-04) -- so pressure is an
++        ill-conditioned coordinate, while |B_t| (``fan_normB``) cannot carry
++        the field through zero, which these fans do.  B_t itself is monotone
++        along them.  Returns ``(state, head speed, err)``."""
++        N = Bt.shape[0]
++        from . import fan_njit as _FN
++        if _FN.wanted():
++            # RMHD_FAN=njit: the same loop compiled (fan_njit.make_signed)
++            y, Vs, err = _FN.make_signed(gamma)(Bt, X, sw, Bn, nsteps=nsteps)
++            y[5] = np.where(err, y[5], Bt)
++            err = err | ~(y[1] <= X[1] * (1.0 + 1e-14))
++            return y, Vs, err
++        y = [np.array(c, dtype=float, copy=True) for c in X]
++        x0 = np.array(X[5], dtype=float, copy=True)
++        unchanged = np.abs(Bt - x0) <= 1e-15 * np.maximum(np.abs(Bt), 1.0)
++        h = np.where(unchanged, 0.0, (Bt - x0) / nsteps)
++        Vs = xi(X, sw, Bn)
++        err = np.zeros(N, dtype=bool)
++
++        def f(yy):
++            k = _rhs_p(yy[1], yy, sw, Bn, gamma)
++            return [k[j] / k[5] for j in range(7)]
++
++        with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
++            for _ in range(int(nsteps)):
++                k1 = f(y)
++                k2 = f([y[j] + 0.5 * h * k1[j] for j in range(7)])
++                k3 = f([y[j] + 0.5 * h * k2[j] for j in range(7)])
++                k4 = f([y[j] + h * k3[j] for j in range(7)])
++                yn = [y[j] + (h / 6.0) * (k1[j] + 2.0 * k2[j] + 2.0 * k3[j] + k4[j])
++                      for j in range(7)]
++                v2 = yn[2] ** 2 + yn[3] ** 2 + yn[4] ** 2
++                bad = ~np.isfinite(v2) | (v2 >= 1.0)
++                for j in range(7):
++                    bad = bad | ~np.isfinite(yn[j])
++                live = ~(err | bad)
++                y = [np.where(live, yn[j], y[j]) for j in range(7)]
++                err = err | bad
++        y[5] = np.where(err, y[5], Bt)              # the parameter itself
++        # a fan lowers the pressure; anything else is the shock branch
++        err = err | ~(y[1] <= X[1] * (1.0 + 1e-14))
++        return y, Vs, err
++
++    def slow_wave_s(Bt, X, sw, Bn):
++        """Shock or fan to a signed tangential field: the fan where the
++        pressure fan's direction reaches ``Bt``, otherwise the slow shock to
++        that signed field (the Bt-method, ``slow_shock_b``).  ``(state, Vs,
++        err, is_shock)``."""
++        N = Bt.shape[0]
++        out = [np.array(c, dtype=float, copy=True) for c in X]
++        Vs = xi(X, sw, Bn)
++        err = np.zeros(N, dtype=bool)
++        shock = np.zeros(N, dtype=bool)
++        with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
++            dBdP = _rhs_p(X[1], X, sw, Bn, gamma)[5]
++        d = Bt - X[5]
++        nochange = np.abs(d) <= 1e-14 * np.maximum(np.abs(Bt), 1.0)
++        # along a fan the pressure falls, so B_t moves against dB_t/dP
++        fan = ~nochange & np.isfinite(dBdP) & (np.sign(d) == -np.sign(dBdP))
++        sh = ~nochange & ~fan
++        i = np.flatnonzero(fan)
++        if i.size:
++            y, V, e = fan_signed(Bt[i], [c[i] for c in X], sw, Bn[i])
++            for j in range(7):
++                out[j][i] = y[j]
++            Vs[i], err[i] = V, e
++        i = np.flatnonzero(sh)
++        if i.size:
++            V, bh, e = slow_shock(Bt[i], np.zeros(i.size), [c[i] for c in X],
++                                  sw, Bn[i], accuracy=1e-10)
++            for j in range(7):
++                out[j][i] = bh[j]
++            Vs[i], err[i] = V, e
++            shock[i] = True
++        return out, Vs, err, shock
++
+     # ── the wave structure ──────────────────────────────────────────────
+     def structure(L, R, u, Bn, kinds):
+         """Both sides from ``u``; the contact mismatch.
+@@ -222,11 +311,12 @@ def make_solver(gamma):
+                                   (D, "RS", u[2], kinds[1], 2)):
+             Y = [np.array(c, dtype=float, copy=True) for c in X]
+             V = np.zeros(n)
+-            for kind, fn_ in ((KIND_B, slow_wave_b), (KIND_P, slow_wave_p)):
++            for kind, fn_ in ((KIND_B, slow_wave_b), (KIND_P, slow_wave_p),
++                              (KIND_S, slow_wave_s)):
+                 i = np.flatnonzero(kd == kind)
+                 if i.size == 0:
+                     continue
+-                s_i = s[i] if kind == KIND_B else np.exp(s[i])
++                s_i = np.exp(s[i]) if kind == KIND_P else s[i]
+                 Yi, Vi, ei, shi = fn_(s_i, [c[i] for c in X], sw, Bn[i])
+                 for j in range(7):
+                     Y[j][i] = Yi[j]
+@@ -243,9 +333,17 @@ def make_solver(gamma):
+         vxc = 0.5 * (B[2] + C[2])
+         return fvec, [A, B, C, D], [Vs_LF, Vs_LS, vxc, Vs_RS, Vs_RF], bad, shocks
+ 
+-    def jacobian(L, R, u, Bn, kinds):
++    def jacobian(L, R, u, Bn, kinds, central=False):
+         """Forward-difference 4x4, the four probes stacked into the batch;
+-        backward where the forward probe left the feasible set."""
++        backward where the forward probe left the feasible set.
++
++        ``central``: central differences instead, falling back to the
++        one-sided ones where a probe leaves the feasible set.  On the
++        near-degenerate faces of the 2D runs (slow and Alfven speeds within
++        1e-4) the forward difference is too inaccurate for a Jacobian of
++        condition ~1e4: the Newton zig-zags at 0.9 per iteration where the
++        central one converges quadratically (failure ledger lane 1099,
++        2026-11-04)."""
+         EPS = 1.0e-6
+         n = Bn.shape[0]
+         fvec, zones, Vs, err, shocks = structure(L, R, u, Bn, kinds)
+@@ -258,6 +356,19 @@ def make_solver(gamma):
+         f2 = f2.reshape(4, 4, n)
+         e2 = e2.reshape(4, n)
+         fjac = (f2 - fvec[:, None, :]) / h[None, :, :]
++        if central:
++            colsm = [np.concatenate([u[c] - (h[c] if c == j else 0.0)
++                                     for j in range(4)]) for c in range(4)]
++            fm, _, _, em, _ = structure([tile(c) for c in L], [tile(c) for c in R],
++                                        colsm, tile(Bn), np.tile(kinds, (1, 4)))
++            fm = fm.reshape(4, 4, n)
++            em = em.reshape(4, n)
++            both = ~e2 & ~em
++            fjac = np.where(both[None], (f2 - fm) / (2.0 * h[None, :, :]), fjac)
++            # forward probe out, backward in: the backward difference
++            back = e2 & ~em
++            fjac = np.where(back[None], (fvec[:, None, :] - fm) / h[None, :, :], fjac)
++            e2 = e2 & em
+         jj, ll = np.nonzero(e2)
+         if jj.size:
+             u3 = [u[c][ll] - np.where(jj == c, h[c][ll], 0.0) for c in range(4)]
+@@ -336,7 +447,8 @@ def make_solver(gamma):
+ 
+     # ── the solve ───────────────────────────────────────────────────────
+     def solve(left, right, Bn, *, accuracy=1e-8, max_iter=40,
+-              planar_tol=1e-6, verify_tol=1e-8, kinds=None, retry=True):
++              planar_tol=1e-6, verify_tol=1e-8, kinds=None, retry=True,
++              unk_init=None, central=False):
+         """Solve a batch of PLANAR Riemann problems.
+ 
+         Returns a dict with ``unk``, ``nrm``, ``converged`` (certified),
+@@ -355,7 +467,7 @@ def make_solver(gamma):
+         """
+         r = _solve_once(left, right, Bn, accuracy=accuracy, max_iter=max_iter,
+                         planar_tol=planar_tol, verify_tol=verify_tol,
+-                        kinds=kinds)
++                        kinds=kinds, unk_init=unk_init, central=central)
+         r["attempts"] = np.ones(Bn.shape[0], dtype=int)
+         if not retry:
+             return r
+@@ -390,7 +502,7 @@ def make_solver(gamma):
+         return r
+ 
+     def _solve_once(left, right, Bn, *, accuracy, max_iter, planar_tol,
+-                    verify_tol, kinds):
++                    verify_tol, kinds, unk_init=None, central=False):
+         L, R, alpha, presid = to_planar(left, right, Bn)
+         n = Bn.shape[0]
+         p0 = np.log(np.maximum(0.5 * (L[1] + R[1]), 1e-12))
+@@ -404,6 +516,10 @@ def make_solver(gamma):
+                np.where(kinds[0] == KIND_B, A0[5], np.log(np.maximum(A0[1], 1e-300))),
+                np.where(kinds[1] == KIND_B, D0[5], np.log(np.maximum(D0[1], 1e-300))),
+                p0.copy()]
++        if unk_init is not None:
++            # a caller's start (planar frame, the same four unknowns)
++            unk = [np.array(c, dtype=float, copy=True) for c in unk_init]
++            cannot = np.zeros(n, dtype=bool)
+ 
+         fvec, zones, Vs, err, shocks = structure(L, R, unk, Bn, kinds)
+         err = err | cannot
+@@ -425,7 +541,7 @@ def make_solver(gamma):
+             sb = Bn[i]
+             ui = [c[i] for c in unk]
+             ki = kinds[:, i]
+-            f, J, z, V, e, sh = jacobian(sl, sr, ui, sb, ki)
++            f, J, z, V, e, sh = jacobian(sl, sr, ui, sb, ki, central=central)
+             live[i[e]] = False
+             ok = ~e
+             nrm = np.max(np.abs(f), axis=0)
+@@ -500,6 +616,7 @@ def make_solver(gamma):
+ 
+     return dict(solve=solve, structure=structure, jacobian=jacobian,
+                 certify=certify, rh_residual=rh_residual, steer=steer,
+-                slow_wave_p=slow_wave_p,
++                slow_wave_p=slow_wave_p, slow_wave_s=slow_wave_s,
++                fan_signed=fan_signed,
+                 slow_shock_p=slow_shock_p, waves=W, alfven_speed=alfven_speed,
+                 to_planar=to_planar, from_planar=from_planar)
+diff --git a/rmhd/batched/slow_shock_b.py b/rmhd/batched/slow_shock_b.py
+index b963e3a..abd4e0e 100644
+--- a/rmhd/batched/slow_shock_b.py
++++ b/rmhd/batched/slow_shock_b.py
+@@ -70,6 +70,17 @@ N_SEEDS = 6
+ # 98.54 -> 98.69%, Orszag-Tang 99.11 -> 99.24%, four-quadrant 96.00 -> 99.26%;
+ # L1 against 512^2 unchanged (on vs off <= 0.09% of it); wall +6 / +4 / +21%.
+ SLOW_RETRY = _os.environ.get("RMHD_SLOWSHOCK_RETRY", "1") == "1"
++# The ladder's LOOSE FALLBACK -- the best grid cell, handed back as an answer
++# when no rung converged -- is not a root, yet it counts as answered, so the
++# retry above never sees those lanes.  On the four-quadrant 128^2 run's lost
++# faces it is the whole loss of the fast-shear type: in a band of contact
++# fields around the true root the left slow-shock solve returns the cell
++# (Vs pinned at a grid node, P_tot off by 14%), which punches a hole in the
++# outer residual exactly at its zero (failure ledger lanes 62, 458;
++# 2026-11-04).  RMHD_SLOWSHOCK_LOOSE_RETRY=1 offers those lanes to the retry
++# as well; a lane the retry cannot answer keeps the cell, so with the retry
++# off, or where it fails, nothing changes.
++LOOSE_RETRY = _os.environ.get("RMHD_SLOWSHOCK_LOOSE_RETRY", "0") == "1"
+ RETRY_RH = 1e-8
+ RETRY_RUNGS = ((12, 16),)
+ 
+@@ -470,16 +481,19 @@ def make_solver(gamma):
+         return Vs_b, bh_b, good, cell
+ 
+     def ladder(By_t, Bz_t, ahead, switch, Bx, accuracy=1e-8,
+-               vxb_bracket=None, vxb_hint=None):
++               vxb_bracket=None, vxb_hint=None, with_loose=False):
+         # RMHD_SLOWSHOCK=njit: the compiled per-lane transcription in
+         # slow_shock_njit -- same contract, same return.  Measured bitwise-
+         # identical on 500 problems incl. 93 failures (test_slow_shock_njit).
++        # ``with_loose`` adds a fourth return: the lanes answered by the
++        # loose fallback.
+         from . import slow_shock_njit as _SN
+         if _SN.wanted():
+             return _SN.make_solver(gamma)(By_t, Bz_t, ahead, switch, Bx,
+                                           accuracy=accuracy,
+                                           vxb_bracket=vxb_bracket,
+-                                          vxb_hint=vxb_hint)
++                                          vxb_hint=vxb_hint,
++                                          with_loose=with_loose)
+         ahead = [np.asarray(c, dtype=float) for c in ahead]
+         N = ahead[0].shape[0]
+         bc = lambda v: np.broadcast_to(np.asarray(v, dtype=float),
+@@ -516,6 +530,7 @@ def make_solver(gamma):
+         Vs_out = vxa.copy()
+         bh_out = [c.copy() for c in ahead]
+         done = np.zeros(N, dtype=bool)
++        loose = np.zeros(N, dtype=bool)
+         # empty windows are unsolvable, exactly as in the scalar guard
+         dead = (Vs_hi <= Vs_lo) | (v_hi <= v_lo)
+ 
+@@ -574,26 +589,33 @@ def make_solver(gamma):
+                 for j in range(7):
+                     bh_out[j][sel] = bl[j][~ble]
+                 done[sel] = True
++                loose[sel] = True
+ 
++        if with_loose:
++            return Vs_out, bh_out, ~done, loose
+         return Vs_out, bh_out, ~done
+ 
+-    def retry(Vs, bh, err, By_t, Bz_t, ahead, switch, Bx, accuracy, vxb_bracket):
++    def retry(Vs, bh, err, By_t, Bz_t, ahead, switch, Bx, accuracy, vxb_bracket,
++              loose=None):
+         """The lanes the ladder failed, once more on ``retry_window``.
+ 
+         Each rung is the ladder's own ``attempt`` (grid, N_SEEDS Newtons, RH
+         ranking) on the compacted lanes still failing; a root counts only if
+         its full RH residual is at most RETRY_RH.  Lanes the ladder answered
+-        are not touched.
++        are not touched -- except those in ``loose`` (answered by the loose
++        fallback), which are retried too and keep their cell when the retry
++        finds nothing.
+         """
+         err = np.asarray(err, dtype=bool)
+-        if not err.any():
++        cand = err if loose is None else (err | np.asarray(loose, dtype=bool))
++        if not cand.any():
+             return Vs, bh, err
+         ahead = [np.asarray(c, dtype=float) for c in ahead]
+         N = ahead[0].shape[0]
+         bc = lambda v: np.broadcast_to(np.asarray(v, dtype=float),
+                                        (N,)).astype(float)
+         By_t, Bz_t, Bx = bc(By_t), bc(Bz_t), bc(Bx)
+-        i = np.flatnonzero(err)
++        i = np.flatnonzero(cand)
+         ah = [c[i] for c in ahead]
+         Vs_lo, Vs_hi, v_lo, v_hi = retry_window(ah, Bx[i], gamma, switch)
+         if vxb_bracket is not None:
+@@ -634,6 +656,13 @@ def make_solver(gamma):
+ 
+     def solve(By_t, Bz_t, ahead, switch, Bx, accuracy=1e-8,
+               vxb_bracket=None, vxb_hint=None):
++        if LOOSE_RETRY and SLOW_RETRY:
++            Vs, bh, err, loose = ladder(By_t, Bz_t, ahead, switch, Bx,
++                                        accuracy=accuracy,
++                                        vxb_bracket=vxb_bracket,
++                                        vxb_hint=vxb_hint, with_loose=True)
++            return retry(Vs, bh, err, By_t, Bz_t, ahead, switch, Bx, accuracy,
++                         vxb_bracket, loose=loose)
+         out = ladder(By_t, Bz_t, ahead, switch, Bx, accuracy=accuracy,
+                      vxb_bracket=vxb_bracket, vxb_hint=vxb_hint)
+         if not SLOW_RETRY:
+diff --git a/rmhd/batched/slow_shock_njit.py b/rmhd/batched/slow_shock_njit.py
+index 294f772..32a779f 100644
+--- a/rmhd/batched/slow_shock_njit.py
++++ b/rmhd/batched/slow_shock_njit.py
+@@ -303,7 +303,7 @@ def _build(ps_c, eq416_c, hug_c):
+ 
+     @njit(parallel=True, cache=False, error_model="numpy")
+     def solve_lanes(ahead, Byt, Bzt, Bx, is_LS, accuracy, has_bracket, br_lo, br_hi,
+-                    has_hint, hint, out_Vs, out_bh, err):
++                    has_hint, hint, out_Vs, out_bh, err, loose_out):
+         N = Bx.shape[0]
+         for n in prange(N):
+             ah = (ahead[0, n], ahead[1, n], ahead[2, n], ahead[3, n], ahead[4, n],
+@@ -363,6 +363,7 @@ def _build(ps_c, eq416_c, hug_c):
+                         fin = False
+                 if (not ble) and fin:
+                     Vs_out, bh_out, done = loose_V, bl, True
++                    loose_out[n] = True
+             out_Vs[n] = Vs_out
+             for q in range(7):
+                 out_bh[q, n] = bh_out[q]
+@@ -386,7 +387,7 @@ def make_solver(gamma):
+     lanes = _SOLVERS[key]
+ 
+     def solve(By_t, Bz_t, ahead, switch, Bx, accuracy=1e-8,
+-              vxb_bracket=None, vxb_hint=None):
++              vxb_bracket=None, vxb_hint=None, with_loose=False):
+         if switch not in ("LS", "RS"):
+             raise ValueError(switch)
+         ah = np.stack([np.asarray(c, dtype=float) for c in ahead], axis=0)
+@@ -403,8 +404,11 @@ def make_solver(gamma):
+         out_Vs = np.full(N, np.nan)
+         out_bh = np.full((7, N), np.nan)
+         err = np.ones(N, dtype=np.bool_)
++        loose = np.zeros(N, dtype=np.bool_)
+         lanes(np.ascontiguousarray(ah), Byt, Bzt, Bxa, switch == "LS", float(accuracy),
+-              has_br, br_lo, br_hi, has_hint, hint, out_Vs, out_bh, err)
++              has_br, br_lo, br_hi, has_hint, hint, out_Vs, out_bh, err, loose)
++        if with_loose:
++            return out_Vs, [out_bh[j] for j in range(7)], err, loose
+         return out_Vs, [out_bh[j] for j in range(7)], err
+ 
+     return solve

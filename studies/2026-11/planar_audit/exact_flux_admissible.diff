@@ -1,0 +1,249 @@
+diff --git a/src/physics/exact_flux.py b/src/physics/exact_flux.py
+index 04f89e7..2877adf 100644
+--- a/src/physics/exact_flux.py
++++ b/src/physics/exact_flux.py
+@@ -280,6 +280,32 @@ _CANONICAL = os.environ.get("RMHD_CANONICAL", "1") not in ("0", "", "off")
+ # crosses on 89.8% and is inadmissible on 0.03%).
+ _WAVE_ORDER = os.environ.get("RMHD_WAVE_ORDER", "1") not in ("0", "", "off")
+ _WAVE_ORDER_TOL = float(os.environ.get("RMHD_WAVE_ORDER_TOL", "1e-6"))
++# Admissibility of the accepted fan (opt-in: RMHD_ADMISSIBLE=report counts,
++# =1 refuses; 0 is production).  The jump conditions do not pick the physical
++# root either: a slow wave built as a shock comes from the Bt-method
++# sub-solver, which ranks its candidates by the Rankine-Hugoniot residual,
++# and an EXPANSION shock satisfies those as exactly as a compressive one.
++# MEASURED 2026-11-03 on the four-quadrant 64^2 run's harvest (every exact
++# face, 1,066,254 rows): 4,222 (0.40%) hold a slow shock across which the
++# entropy p/rho^gamma FALLS, 1.0% of the planar five-wave answers and 0.3%
++# of the seven-wave ones -- e.g. a left slow "shock" riding on a strong left
++# fast shock at its speed, beyond the Alfven speed ahead of it, that undoes
++# most of its compression.  The seven-wave residual passes them (it is a
++# residual), the wave-order gate never compares a slow wave with its fast
++# wave when the rotation between them has zero strength, and the planar
++# answers skip the gate.  A wave is refused if (a) it was built as a shock
++# and the entropy falls across it by more than _ADM_ENTROPY_TOL, relative;
++# (b) a shock violates the Lax conditions of its family -- its own
++# characteristics run into it from both sides, and the neighbouring
++# families' run away (for a slow shock: behind the Alfven speed ahead of it,
++# ahead of the contact) -- by more than _ADM_LAX_TOL; or (c) a slow wave
++# overlaps the fast wave on its side by more than _WAVE_ORDER_TOL, whatever
++# lies between them.
++_ADMISSIBLE = os.environ.get("RMHD_ADMISSIBLE", "0").lower()
++_ADM_REFUSE = _ADMISSIBLE in ("1", "on", "refuse")
++_ADM_REPORT = _ADM_REFUSE or _ADMISSIBLE == "report"
++_ADM_ENTROPY_TOL = float(os.environ.get("RMHD_ADM_ENTROPY_TOL", "1e-6"))
++_ADM_LAX_TOL = float(os.environ.get("RMHD_ADM_LAX_TOL", "1e-4"))
+ # Harvest the planar answers as solved rows.  On by default WITH the rescue:
+ # they are exact solutions of interfaces the seven-wave solver cannot reach,
+ # which is precisely the population the warm-start network has no training
+@@ -420,6 +446,91 @@ def _self_crossing(Zc, VL, VR, tol):
+     return crossed
+ 
+ 
++def _inadmissible(left, Zc, right, VL, VR, Bn, gamma, shocks=None):
++    """Per lane, the reasons the fan is not an admissible Riemann solution
++    (see _ADMISSIBLE): a bool mask per test, ``entropy``, ``lax``, ``order``,
++    and their union ``any``.
++
++    ``left``/``right`` are the outer states, ``Zc`` the six zones R2..R7 and
++    ``VL``/``VR`` the ``[LF, LA, LS]`` / ``[RF, RA, RS]`` speeds, as for
++    `_self_crossing` (a fan's speed is its head).  ``shocks`` (4, N) over
++    ``[LF, LS, RS, RF]`` overrides the shock/fan predicates the five- and
++    seven-wave solvers build with (fast: the total pressure rises; slow:
++    |B_t| falls) -- the four-unknown solver steers some slow waves by
++    pressure, and there |B_t| does not say which it built.
++    """
++    import numpy as np
++    from rmhd.batched import wave_speeds_b as WB
++    R = [left] + list(Zc) + [right]                      # R1 .. R8
++    n = np.asarray(Bn).shape[0]
++    bc = lambda a: np.broadcast_to(np.asarray(a, dtype=float), (n,))
++    R = [[bc(c) for c in s] for s in R]
++    Bn = bc(Bn)
++
++    def entropy(s):
++        rho, P, vx, vy, vz, By, Bz = s
++        v2 = vx * vx + vy * vy + vz * vz
++        eta = Bn * vx + By * vy + Bz * vz
++        b2 = (Bn * Bn + By * By + Bz * Bz) * (1.0 - v2) + eta * eta
++        return (P - 0.5 * b2) / rho ** gamma
++
++    def strength(a, b):
++        sP = np.sqrt(2.0 * np.maximum(np.maximum(a[1], b[1]), 1e-300))
++        return np.maximum.reduce([
++            np.abs(b[0] - a[0]) / np.abs(a[0]), np.abs(b[1] - a[1]) / np.abs(a[1]),
++            np.sqrt((b[2] - a[2]) ** 2 + (b[3] - a[3]) ** 2 + (b[4] - a[4]) ** 2),
++            np.hypot(b[5] - a[5], b[6] - a[6]) / sP])
++
++    with np.errstate(all="ignore"):
++        E = [WB.xi_all(*R[k], Bn, gamma) for k in range(8)]   # (eig, la, ra, ok)
++        lam = lambda k, f: np.asarray(E[k][0])[:, f]
++        ok = lambda k, f: np.asarray(E[k][3])[:, f]
++        la = lambda k: np.asarray(E[k][1])
++        ra = lambda k: np.asarray(E[k][2])
++        K = [entropy(R[k]) for k in range(8)]
++        bad_e = np.zeros(n, dtype=bool)
++        bad_l = np.zeros(n, dtype=bool)
++        ends = {}
++        #        name, ahead, behind, speed, family (LF LS RS RF), fast
++        for row, (name, a, b, s, f, fast) in enumerate((
++                ("LF", 0, 1, VL[0], 0, True), ("LS", 2, 3, VL[2], 1, False),
++                ("RS", 5, 4, VR[2], 2, False), ("RF", 7, 6, VR[0], 3, True))):
++            A, B = R[a], R[b]
++            s = bc(s)
++            if shocks is not None:
++                sh = np.asarray(shocks[row], dtype=bool)
++            elif fast:
++                sh = B[1] > A[1] * (1.0 + 1e-14)
++            else:
++                sh = np.hypot(B[5], B[6]) < np.hypot(A[5], A[6]) * (1.0 - 1e-12)
++            live = strength(A, B) > 1e-10
++            sh = sh & live
++            bad_e |= sh & (K[b] < K[a] * (1.0 - _ADM_ENTROPY_TOL))
++            # Lax, written with U_l / U_r the states left / right of the wave
++            if name == "LF":
++                m = [lam(a, f) - s, s - lam(b, f), la(b) - s]
++            elif name == "LS":
++                m = [lam(a, f) - s, s - lam(b, f), s - la(a), B[2] - s]
++            elif name == "RS":
++                m = [lam(b, f) - s, s - lam(a, f), s - B[2], ra(a) - s]
++            else:
++                m = [lam(b, f) - s, s - lam(a, f), s - ra(b)]
++            trusted = ok(a, f) & ok(b, f)
++            bad_l |= sh & trusted & (np.min(np.stack(m), axis=0) < -_ADM_LAX_TOL)
++            # the wave's extent: a shock at its speed, a fan head to tail
++            head, tail = lam(a, f), lam(b, f)
++            lo = np.where(sh, s, np.minimum(head, tail))
++            hi = np.where(sh, s, np.maximum(head, tail))
++            ends[name] = (lo, hi, live)
++        lo_lf, hi_lf, on_lf = ends["LF"]
++        lo_ls, hi_ls, on_ls = ends["LS"]
++        lo_rs, hi_rs, on_rs = ends["RS"]
++        lo_rf, hi_rf, on_rf = ends["RF"]
++        tol = _WAVE_ORDER_TOL
++        bad_o = (on_lf & on_ls & (lo_ls < hi_lf - tol)) | (on_rs & on_rf & (hi_rs > lo_rf + tol))
++    return dict(entropy=bad_e, lax=bad_l, order=bad_o, any=bad_e | bad_l | bad_o)
++
++
+ def exact_flux(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
+                fallback=hlld_flux, tau_weak: float = 1e-6,
+                accuracy: float = 1e-8, max_iter: int = 40,
+@@ -759,6 +870,11 @@ def _planar_and_ray(P, gamma, sL5, sR5, B5, *, accuracy, max_iter,
+         x5 = _self_crossing(zones6, VsLv5, VsRv5, _WAVE_ORDER_TOL)
+         reason[good & x5] = 6
+         good = good & ~x5
++    if _ADM_REFUSE and good.any():
++        # 8 = inadmissible (RMHD_ADMISSIBLE): 7 is the caller's "not offered"
++        xa = _inadmissible(sL5, zones6, sR5, VsLv5, VsRv5, B5, gamma)["any"]
++        reason[good & xa] = 8
++        good = good & ~xa
+     out.update(good=good, star=st5, region=reg5, VsLv=VsLv5, VsRv=VsRv5)
+     return out
+ 
+@@ -896,7 +1012,9 @@ def _planar4_and_ray(P, gamma, sL4, sR4, B4, *, accuracy, max_iter):
+                kinds=r["kinds"], reason=reason, unk=r["unk"],
+                cert_resid=np.asarray(r["cert_resid"]),
+                full_resid=np.asarray(r["full_resid"]),
+-               resid=np.asarray(r["nrm"]))
++               resid=np.asarray(r["nrm"]),
++               # per wave [LF, LS, RS, RF], lane axis first (exact_pool)
++               shocks=[np.asarray(r["shocks"][k], dtype=bool) for k in range(4)])
+     if not good.any():
+         return out
+     VsLv = [r["speeds"][0], S4["alfven_speed"](A, B4, "L"), r["speeds"][1]]
+@@ -919,6 +1037,11 @@ def _planar4_and_ray(P, gamma, sL4, sR4, B4, *, accuracy, max_iter):
+         phys &= np.isfinite(c_)
+     reason[good & ~phys] = 7
+     good = good & phys
++    if _ADM_REFUSE and good.any():
++        # 9 = inadmissible (RMHD_ADMISSIBLE): 8 is the caller's "not offered"
++        xa = _inadmissible(sL4, zones6, sR4, VsLv, VsRv, B4, gamma, shocks=sh)["any"]
++        reason[good & xa] = 9
++        good = good & ~xa
+     out.update(good=good, star=st, region=reg, VsLv=VsLv, VsRv=VsRv)
+     return out
+ 
+@@ -1176,6 +1299,20 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
+         crossed &= take & np.isin(cls, (C.FULL7, C.COPLANAR))
+         take = take & ~crossed
+     n_crossed = int(crossed.sum())
++    # admissibility (RMHD_ADMISSIBLE): counted under `report`, and under `1`
++    # refused like a self-crossing fan -- harvested as unsolved
++    # (R_SELF_CROSSING), offered to the planar rescue with the crossed lanes
++    inadm7 = np.zeros(sel.size, dtype=bool)
++    adm7 = dict(entropy=0, lax=0, order=0)
++    if _ADM_REPORT and take.any():
++        xa = _inadmissible(subL, res["zones"], subR, res["VsLv"], res["VsRv"],
++                           subBn, gamma)
++        seven7 = take & np.isin(cls, (C.FULL7, C.COPLANAR))
++        inadm7 = xa["any"] & seven7
++        adm7 = {k: int((xa[k] & seven7).sum()) for k in adm7}
++        if _ADM_REFUSE:
++            crossed = crossed | inadm7
++            take = take & ~inadm7
+ 
+     # Harvest before the flux assembly, while the per-lane verdict is still
+     # in hand: `take` is the only place that knows a lane cleared EVERY gate
+@@ -1210,6 +1347,8 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
+     reason7 = np.zeros(sel.size, dtype=np.int8)
+     reason7[take & reclass] = 5
+     reason7[crossed] = 4
++    if _ADM_REFUSE:
++        reason7[inadm7] = 6                     # 6 inadmissible (RMHD_ADMISSIBLE)
+     reason7[conv & ray_ok & ~physical] = 3
+     reason7[conv & ~ray_ok] = 2
+     reason7[~conv] = 1
+@@ -1275,6 +1414,8 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
+         from rmhd.batched import planar5_b as _P5B
+         planar_ok = np.asarray(_P5B.to_planar(subL, subR, subBn)[3]) <= _PLANAR_TOL
+     take5 = np.zeros(sel.size, dtype=bool)
++    adm5 = dict(entropy=0, lax=0, order=0, any=0)      # RMHD_ADMISSIBLE counts
++    adm4 = dict(entropy=0, lax=0, order=0, any=0)
+     n5_att = 0
+     reason5 = np.full(sel.size, 7, dtype=np.int8)        # 7 = not offered
+     iters5 = np.full(sel.size, -1, dtype=int)
+@@ -1312,6 +1453,16 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
+             good = r5["good"]
+             reason5[cand] = r5["reason"]
+             iters5[cand] = r5["n_iter"]
++            if _ADM_REPORT and np.asarray(good).any():
++                # what the rescue accepted (under `1` it refused the rest)
++                gi = np.flatnonzero(good)
++                cut = lambda a: np.asarray(a)[gi]
++                xa = _inadmissible([cut(c) for c in sL5],
++                                   [[cut(c) for c in z] for z in r5["zones6"]],
++                                   [cut(c) for c in sR5], [cut(v) for v in r5["VsLv"]],
++                                   [cut(v) for v in r5["VsRv"]], B5[gi], gamma)
++                for k in adm5:
++                    adm5[k] += int(xa[k].sum())
+             if good.any():
+                 st5, reg5 = r5["star"], r5["region"]
+                 # A2 is A and D2 is D unless a rung put a reversal there
+@@ -1386,6 +1537,16 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
+             iters4[cand] = r4["n_iter"]
+             kinds4[:, cand] = r4["kinds"]
+             good = r4["good"]
++            if _ADM_REPORT and np.asarray(good).any():
++                gi = np.flatnonzero(good)
++                cut = lambda a: np.asarray(a)[gi]
++                xa = _inadmissible([c[cand][gi] for c in subL],
++                                   [[cut(c) for c in z] for z in r4["zones6"]],
++                                   [c[cand][gi] for c in subR], [cut(v) for v in r4["VsLv"]],
++                                   [cut(v) for v in r4["VsRv"]], subBn[cand][gi], gamma,
++                                   shocks=[cut(s) for s in r4["shocks"]])
++                for k in adm4:
++                    adm4[k] += int(xa[k].sum())
+             if good.any():
+                 w = cand[good]
+                 for j in range(7):
+@@ -1572,6 +1733,11 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
+         # iterations, and how each slow wave was steered (0 field, 1 pressure)
+         reason4=reason4, planar4_n_iter=iters4, planar4_kinds=kinds4,
+         n_planar4_attempted=n4_att,
++        # RMHD_ADMISSIBLE: accepted answers that fail the admissibility test,
++        # per stage and per reason (under `1` the planar rungs refused them
++        # before they could be accepted, so their counts are of what was left)
++        n_inadmissible7=int(inadm7.sum()), inadmissible7_mask=inadm7,
++        inadmissible7=adm7, inadmissible5=adm5, inadmissible4=adm4,
+         n_planar4_exact=int(take4.sum()),
+         planar4_mask=take4,
+         n_planar4_skipped_compound=n4_skipped,

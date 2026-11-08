@@ -1,0 +1,147 @@
+diff --git a/rmhd/batched/slow_shock_b.py b/rmhd/batched/slow_shock_b.py
+index b963e3a..abd4e0e 100644
+--- a/rmhd/batched/slow_shock_b.py
++++ b/rmhd/batched/slow_shock_b.py
+@@ -70,6 +70,17 @@ N_SEEDS = 6
+ # 98.54 -> 98.69%, Orszag-Tang 99.11 -> 99.24%, four-quadrant 96.00 -> 99.26%;
+ # L1 against 512^2 unchanged (on vs off <= 0.09% of it); wall +6 / +4 / +21%.
+ SLOW_RETRY = _os.environ.get("RMHD_SLOWSHOCK_RETRY", "1") == "1"
++# The ladder's LOOSE FALLBACK -- the best grid cell, handed back as an answer
++# when no rung converged -- is not a root, yet it counts as answered, so the
++# retry above never sees those lanes.  On the four-quadrant 128^2 run's lost
++# faces it is the whole loss of the fast-shear type: in a band of contact
++# fields around the true root the left slow-shock solve returns the cell
++# (Vs pinned at a grid node, P_tot off by 14%), which punches a hole in the
++# outer residual exactly at its zero (failure ledger lanes 62, 458;
++# 2026-11-04).  RMHD_SLOWSHOCK_LOOSE_RETRY=1 offers those lanes to the retry
++# as well; a lane the retry cannot answer keeps the cell, so with the retry
++# off, or where it fails, nothing changes.
++LOOSE_RETRY = _os.environ.get("RMHD_SLOWSHOCK_LOOSE_RETRY", "0") == "1"
+ RETRY_RH = 1e-8
+ RETRY_RUNGS = ((12, 16),)
+ 
+@@ -470,16 +481,19 @@ def make_solver(gamma):
+         return Vs_b, bh_b, good, cell
+ 
+     def ladder(By_t, Bz_t, ahead, switch, Bx, accuracy=1e-8,
+-               vxb_bracket=None, vxb_hint=None):
++               vxb_bracket=None, vxb_hint=None, with_loose=False):
+         # RMHD_SLOWSHOCK=njit: the compiled per-lane transcription in
+         # slow_shock_njit -- same contract, same return.  Measured bitwise-
+         # identical on 500 problems incl. 93 failures (test_slow_shock_njit).
++        # ``with_loose`` adds a fourth return: the lanes answered by the
++        # loose fallback.
+         from . import slow_shock_njit as _SN
+         if _SN.wanted():
+             return _SN.make_solver(gamma)(By_t, Bz_t, ahead, switch, Bx,
+                                           accuracy=accuracy,
+                                           vxb_bracket=vxb_bracket,
+-                                          vxb_hint=vxb_hint)
++                                          vxb_hint=vxb_hint,
++                                          with_loose=with_loose)
+         ahead = [np.asarray(c, dtype=float) for c in ahead]
+         N = ahead[0].shape[0]
+         bc = lambda v: np.broadcast_to(np.asarray(v, dtype=float),
+@@ -516,6 +530,7 @@ def make_solver(gamma):
+         Vs_out = vxa.copy()
+         bh_out = [c.copy() for c in ahead]
+         done = np.zeros(N, dtype=bool)
++        loose = np.zeros(N, dtype=bool)
+         # empty windows are unsolvable, exactly as in the scalar guard
+         dead = (Vs_hi <= Vs_lo) | (v_hi <= v_lo)
+ 
+@@ -574,26 +589,33 @@ def make_solver(gamma):
+                 for j in range(7):
+                     bh_out[j][sel] = bl[j][~ble]
+                 done[sel] = True
++                loose[sel] = True
+ 
++        if with_loose:
++            return Vs_out, bh_out, ~done, loose
+         return Vs_out, bh_out, ~done
+ 
+-    def retry(Vs, bh, err, By_t, Bz_t, ahead, switch, Bx, accuracy, vxb_bracket):
++    def retry(Vs, bh, err, By_t, Bz_t, ahead, switch, Bx, accuracy, vxb_bracket,
++              loose=None):
+         """The lanes the ladder failed, once more on ``retry_window``.
+ 
+         Each rung is the ladder's own ``attempt`` (grid, N_SEEDS Newtons, RH
+         ranking) on the compacted lanes still failing; a root counts only if
+         its full RH residual is at most RETRY_RH.  Lanes the ladder answered
+-        are not touched.
++        are not touched -- except those in ``loose`` (answered by the loose
++        fallback), which are retried too and keep their cell when the retry
++        finds nothing.
+         """
+         err = np.asarray(err, dtype=bool)
+-        if not err.any():
++        cand = err if loose is None else (err | np.asarray(loose, dtype=bool))
++        if not cand.any():
+             return Vs, bh, err
+         ahead = [np.asarray(c, dtype=float) for c in ahead]
+         N = ahead[0].shape[0]
+         bc = lambda v: np.broadcast_to(np.asarray(v, dtype=float),
+                                        (N,)).astype(float)
+         By_t, Bz_t, Bx = bc(By_t), bc(Bz_t), bc(Bx)
+-        i = np.flatnonzero(err)
++        i = np.flatnonzero(cand)
+         ah = [c[i] for c in ahead]
+         Vs_lo, Vs_hi, v_lo, v_hi = retry_window(ah, Bx[i], gamma, switch)
+         if vxb_bracket is not None:
+@@ -634,6 +656,13 @@ def make_solver(gamma):
+ 
+     def solve(By_t, Bz_t, ahead, switch, Bx, accuracy=1e-8,
+               vxb_bracket=None, vxb_hint=None):
++        if LOOSE_RETRY and SLOW_RETRY:
++            Vs, bh, err, loose = ladder(By_t, Bz_t, ahead, switch, Bx,
++                                        accuracy=accuracy,
++                                        vxb_bracket=vxb_bracket,
++                                        vxb_hint=vxb_hint, with_loose=True)
++            return retry(Vs, bh, err, By_t, Bz_t, ahead, switch, Bx, accuracy,
++                         vxb_bracket, loose=loose)
+         out = ladder(By_t, Bz_t, ahead, switch, Bx, accuracy=accuracy,
+                      vxb_bracket=vxb_bracket, vxb_hint=vxb_hint)
+         if not SLOW_RETRY:
+diff --git a/rmhd/batched/slow_shock_njit.py b/rmhd/batched/slow_shock_njit.py
+index 294f772..32a779f 100644
+--- a/rmhd/batched/slow_shock_njit.py
++++ b/rmhd/batched/slow_shock_njit.py
+@@ -303,7 +303,7 @@ def _build(ps_c, eq416_c, hug_c):
+ 
+     @njit(parallel=True, cache=False, error_model="numpy")
+     def solve_lanes(ahead, Byt, Bzt, Bx, is_LS, accuracy, has_bracket, br_lo, br_hi,
+-                    has_hint, hint, out_Vs, out_bh, err):
++                    has_hint, hint, out_Vs, out_bh, err, loose_out):
+         N = Bx.shape[0]
+         for n in prange(N):
+             ah = (ahead[0, n], ahead[1, n], ahead[2, n], ahead[3, n], ahead[4, n],
+@@ -363,6 +363,7 @@ def _build(ps_c, eq416_c, hug_c):
+                         fin = False
+                 if (not ble) and fin:
+                     Vs_out, bh_out, done = loose_V, bl, True
++                    loose_out[n] = True
+             out_Vs[n] = Vs_out
+             for q in range(7):
+                 out_bh[q, n] = bh_out[q]
+@@ -386,7 +387,7 @@ def make_solver(gamma):
+     lanes = _SOLVERS[key]
+ 
+     def solve(By_t, Bz_t, ahead, switch, Bx, accuracy=1e-8,
+-              vxb_bracket=None, vxb_hint=None):
++              vxb_bracket=None, vxb_hint=None, with_loose=False):
+         if switch not in ("LS", "RS"):
+             raise ValueError(switch)
+         ah = np.stack([np.asarray(c, dtype=float) for c in ahead], axis=0)
+@@ -403,8 +404,11 @@ def make_solver(gamma):
+         out_Vs = np.full(N, np.nan)
+         out_bh = np.full((7, N), np.nan)
+         err = np.ones(N, dtype=np.bool_)
++        loose = np.zeros(N, dtype=np.bool_)
+         lanes(np.ascontiguousarray(ah), Byt, Bzt, Bxa, switch == "LS", float(accuracy),
+-              has_br, br_lo, br_hi, has_hint, hint, out_Vs, out_bh, err)
++              has_br, br_lo, br_hi, has_hint, hint, out_Vs, out_bh, err, loose)
++        if with_loose:
++            return out_Vs, [out_bh[j] for j in range(7)], err, loose
+         return out_Vs, [out_bh[j] for j in range(7)], err
+ 
+     return solve
