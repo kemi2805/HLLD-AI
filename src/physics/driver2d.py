@@ -175,10 +175,14 @@ def ct_stage(state, grid, eos, *, flux_fn=hlld_flux, limiter="mc",
     Ec = ct.emf_cell(Bcx, Bcy, prims["vx"], prims["vy"])
 
     want_hll = emf_mode == "hll"
-    Fx, ax = sweep(prims, grid, eos, 0, flux_fn, limiter, vel_var,
-                   Bnf=state.Bxf, want_hll_aux=want_hll, recorder=recorder)
-    Fy, ay = sweep(prims, grid, eos, 1, flux_fn, limiter, vel_var,
-                   Bnf=state.Byf, want_hll_aux=want_hll, recorder=recorder)
+    if _merge_sweeps(flux_fn, recorder):
+        (Fx, ax), (Fy, ay) = _merged_sweeps(prims, grid, eos, flux_fn, limiter, vel_var,
+                                            state.Bxf, state.Byf, want_hll)
+    else:
+        Fx, ax = sweep(prims, grid, eos, 0, flux_fn, limiter, vel_var,
+                       Bnf=state.Bxf, want_hll_aux=want_hll, recorder=recorder)
+        Fy, ay = sweep(prims, grid, eos, 1, flux_fn, limiter, vel_var,
+                       Bnf=state.Byf, want_hll_aux=want_hll, recorder=recorder)
 
     Efx = ct.face_emf_x(Fx, ax, emf_mode)
     Efy = ct.face_emf_y(Fy, ay, emf_mode)
@@ -191,6 +195,50 @@ def ct_stage(state, grid, eos, *, flux_fn=hlld_flux, limiter="mc",
 
     dBxf, dByf = ct.ct_rhs(Ez, grid.dx, grid.dy)
     return rhs, dBxf, dByf, {"x": ax, "y": ay}
+
+
+def _merge_sweeps(flux_fn, recorder):
+    """RMHD_MERGE_SWEEPS: the exact flux only (a partial of
+    exact_flux_batched), and not while an envelope recorder is attached."""
+    from . import sweep_merge
+    from .exact_flux import exact_flux_batched
+    return (sweep_merge.wanted() and recorder is None
+            and getattr(flux_fn, "func", flux_fn) is exact_flux_batched)
+
+
+def _merged_sweeps(prims, grid, eos, flux_fn, limiter, vel_var, Bxf, Byf, want_hll):
+    """The x and y sweeps of a stage with ONE seven-wave pipeline call
+    (sweep_merge): each sweep in its own thread, one at a time -- x up to its
+    pipeline, then y up to its own, the merged pipeline, then x to the end,
+    then y."""
+    import functools
+    import threading
+
+    from .sweep_merge import Rendezvous
+    R = Rendezvous(order=[0, 1])
+    fx = functools.partial(flux_fn, _rendezvous=R)
+    out = {}
+
+    def run(axis, Bnf):
+        try:
+            out[axis] = sweep(prims, grid, eos, axis, fx, limiter, vel_var,
+                              Bnf=Bnf, want_hll_aux=want_hll)
+            R.done(axis)
+        except BaseException as exc:          # noqa: BLE001 -- re-raised below
+            out[axis] = exc
+            R.abort(exc)
+
+    tx = threading.Thread(target=run, args=(0, Bxf), name="sweep-x")
+    tx.start()
+    R.arrived_or_failed(0)                    # x's pre-pipeline part alone first
+    ty = threading.Thread(target=run, args=(1, Byf), name="sweep-y")
+    ty.start()
+    tx.join()
+    ty.join()
+    for axis in (0, 1):
+        if isinstance(out[axis], BaseException):
+            raise out[axis]
+    return out[0], out[1]
 
 
 def sync_state(state, grid, eos, bc_x="outflow", bc_y="outflow",

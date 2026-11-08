@@ -48,10 +48,23 @@ R_NOT_CONVERGED = 0
 R_RAY_FAILED = 1
 R_UNPHYSICAL = 2
 R_SELF_CROSSING = 3        # converged, physical, but the fan is out of order
+R_RECLASSIFIED = 4         # the attempt came out degenerate, its three-wave answer was
+                           # refused (the input is not) -- recorded with RMHD_HARVEST_RESCUES
 R_REASONS = {R_NOT_CONVERGED: "not_converged",
              R_RAY_FAILED: "ray_failed",
              R_UNPHYSICAL: "unphysical",
-             R_SELF_CROSSING: "self_crossing"}
+             R_SELF_CROSSING: "self_crossing",
+             R_RECLASSIFIED: "reclassified"}
+
+
+# RMHD_HARVEST_RESCUES (exact_flux, off by default): the rungs after the
+# five-wave solver are harvested too, and then EVERY solved row carries three
+# more columns -- ``steer`` (k, 2) the slow-wave steering of each side
+# (planar4_b.KIND_*; -1 where the row's solver has none), ``rot`` (k, 2) a
+# rotation in front of each slow wave (-1 unknown), ``stage`` (k,) the planar
+# seven-wave stage that answered it (0 none).  Off, the shards keep their
+# schema.
+_RESCUE_COLUMNS = os.environ.get("RMHD_HARVEST_RESCUES", "0") not in ("0", "", "off")
 
 
 class Harvester:
@@ -126,7 +139,7 @@ class Harvester:
 
     def record(self, left, right, Bn, *, cls, converged, zones, VsLv, VsRv,
                attempts, accepted, seven_wave, source=0, ray_ok=None,
-               crossed=None):
+               crossed=None, extras=None):
         """Record one batch.
 
         ``left``/``right`` are 7-lists of per-lane arrays in the solver frame,
@@ -138,11 +151,18 @@ class Harvester:
         a 128^2 harvest were self-crossing fans.
 
         ``source`` tags which solver produced the rows: 0 = the seven-wave
-        Newton, 1 = the five-wave planar solver.  Both write exactly the same
-        schema -- a planar answer IS a seven-wave solution whose two
-        rotational discontinuities have zero strength -- but the planar rows
-        all carry ``phi_L = phi_R = 0`` exactly, so a trainer may want to
-        weight or ablate them.  Scalar or per-lane.
+        Newton, 1 = the five-wave planar solver, and with
+        RMHD_HARVEST_RESCUES 2 = the planar seven-wave rung, 3 = the
+        four-unknown solver.  All write exactly the same schema -- a planar
+        answer IS a seven-wave solution whose rotational discontinuities have
+        zero strength or turn the field by pi -- but the five-wave rows all
+        carry ``phi_L = phi_R = 0`` exactly, so a trainer may want to weight
+        or ablate them.  Scalar or per-lane.
+
+        ``extras`` (with RMHD_HARVEST_RESCUES): per-lane ``steer`` (2, n),
+        ``rot`` (2, n) and ``stage`` (n), written as the rows' columns of
+        those names (module comment above `Harvester`); rows recorded
+        without them get -1 / -1 / 0.
 
         ``ray_ok`` separates a lane that converged but produced no usable ray
         from one whose state came out unphysical.  Without it both are
@@ -171,7 +191,7 @@ class Harvester:
             idx = idx[:room]
             if idx.size:
                 self._solved.append(self._pack_solved(
-                    left, right, Bn, zones, VsLv, VsRv, att, idx, src))
+                    left, right, Bn, zones, VsLv, VsRv, att, idx, src, extras))
                 self.n_solved += idx.size
 
         # ── unsolved ─────────────────────────────────────────────────────
@@ -213,6 +233,25 @@ class Harvester:
                 >= self.flush_every):
             self._flush_due = True
 
+    def record_unsolved(self, left, right, Bn, idx, *, reason, cls, attempts):
+        """Record the lanes ``idx`` of a call as unsolved with one
+        ``reason``: for lanes a gate refused after `record` had already
+        counted them answered (exact_flux's reclassified lanes,
+        R_RECLASSIFIED).  Subject to the stride and the cap like `record`."""
+        idx = np.asarray(idx)
+        if self.n_unsolved >= self.max_unsolved or idx.size == 0:
+            return
+        idx = self._subsample(idx)[:self.max_unsolved - self.n_unsolved]
+        if idx.size:
+            self._unsolved.append(dict(
+                U_L=self._u8(left, Bn, idx), U_R=self._u8(right, Bn, idx),
+                reason=np.full(idx.size, reason, dtype=np.int8),
+                attempts=np.asarray(attempts)[idx].astype(np.int16),
+                cls=np.asarray(cls)[idx].astype(np.int8)))
+            self.n_unsolved += idx.size
+            if sum(a["U_L"].shape[0] for a in self._unsolved) >= self.flush_every:
+                self._flush_due = True
+
     @staticmethod
     def _u8(state, Bn, idx):
         """(n,8) row [rho,P,vx,vy,vz,By,Bz,Bx] -- solutions_to_arrays layout."""
@@ -220,7 +259,7 @@ class Harvester:
                         + [np.asarray(Bn)[idx]], axis=1)
 
     def _pack_solved(self, left, right, Bn, zones, VsLv, VsRv, att, idx,
-                     src=None):
+                     src=None, extras=None):
         k = idx.size
         U_L = self._u8(left, Bn, idx)
         U_R = self._u8(right, Bn, idx)
@@ -245,15 +284,24 @@ class Harvester:
                       np.asarray(VsRv[0])[idx]], axis=1)
         if src is None:
             src = np.zeros(len(att), dtype=np.int8)
-        return dict(U_L=U_L, U_R=U_R, zones=Z, speeds=S,
-                    attempts=att[idx].astype(np.int16),
-                    source=np.asarray(src)[idx].astype(np.int8))
+        out = dict(U_L=U_L, U_R=U_R, zones=Z, speeds=S,
+                   attempts=att[idx].astype(np.int16),
+                   source=np.asarray(src)[idx].astype(np.int8))
+        if _RESCUE_COLUMNS:
+            e = extras or {}
+            two = lambda key, fill: (np.asarray(e[key])[:, idx].T.astype(np.int8)
+                                     if key in e else np.full((k, 2), fill, np.int8))
+            out["steer"] = two("steer", -1)
+            out["rot"] = two("rot", -1)
+            out["stage"] = (np.asarray(e["stage"])[idx].astype(np.int8)
+                            if "stage" in e else np.zeros(k, np.int8))
+        return out
 
     # what answered a face, in the order the flux assembly decides it
     COVERAGE_KEYS = ("attempted", "exact", "routed", "seven", "planar5",
                      "three_wave", "degenerate", "verified",
                      "bad", "weak", "upwind", "planar4", "continuation",
-                     "linear_fallback")
+                     "linear_fallback", "coplanar7")
     # The relative jump of every face, by decade: bin 0 is a jump below
     # 1e-16 (the two states agree to rounding), bin k = 1..16 is
     # [10^(k-17), 10^(k-16)), bin 17 a jump of 1 or more.  One histogram per
@@ -266,7 +314,7 @@ class Harvester:
     TOTAL_KEYS = ("faces", "bad", "weak", "upwind", "routed", "attempted",
                   "exact", "verified", "seven", "planar5", "three_wave",
                   "planar4", "continuation", "degenerate", "linear_fallback",
-                  "hlld_after_attempt")
+                  "coplanar7", "hlld_after_attempt")
 
     def record_coverage(self, idir, n_interfaces, attempted_idx, exact_idx,
                         routed_idx=None, jump=None, **masks):
@@ -292,6 +340,8 @@ class Harvester:
             linear_fallback   attempted, lost by every exact rung, and given
                         the linearised flux instead of HLLD (its jump is below
                         RMHD_WEAK_FALLBACK_TAU); never exact
+            coplanar7   the planar seven-wave rung answered it
+                        (RMHD_COPLANAR7=late; all zero otherwise)
 
         ``jump`` (optional, over the whole sweep) is each face's relative
         jump; with it the sweep also stores ``jump_hist``, the faces of
