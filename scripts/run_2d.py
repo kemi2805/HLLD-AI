@@ -126,6 +126,13 @@ def main():
                     help="record EVERY solved seven-wave lane (not only the "
                          "retry-rescued ones) with high caps; the per-sweep "
                          "coverage map is always recorded")
+    ap.add_argument("--harvest-max", type=int, default=None,
+                    help="cap on the solved and on the unsolved rows "
+                         "(default 5,000,000 with --harvest-all, else the "
+                         "Harvester's 200,000); a 512^2 run passes 5M early")
+    ap.add_argument("--harvest-flush", type=int, default=None,
+                    help="rows per harvest shard (default: the Harvester's "
+                         "20,000)")
     ap.add_argument("--emf-mode", default="solver", choices=["solver", "hll"])
     ap.add_argument("--limiter", default="mc")
     ap.add_argument("--no-upwind-emf", action="store_true",
@@ -301,6 +308,11 @@ def main():
             if a.harvest_all:
                 hk.update(only_retried=False, max_solved=5_000_000,
                           max_unsolved=5_000_000)
+            if a.harvest_max is not None:
+                hk.update(max_solved=a.harvest_max,
+                          max_unsolved=a.harvest_max)
+            if a.harvest_flush is not None:
+                hk.update(flush_every=a.harvest_flush)
             harvester = Harvester(a.harvest, P["gamma"], rank=gen, **hk)
             harvester.n_sweeps = harvest_sweeps
         flux_fn = functools.partial(exact_flux_batched,
