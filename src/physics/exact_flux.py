@@ -43,6 +43,7 @@ from __future__ import annotations
 import math as _math
 import os
 import sys
+import time as _time
 
 import torch
 
@@ -401,6 +402,18 @@ _HARVEST_RESCUES = os.environ.get("RMHD_HARVEST_RESCUES", "0") not in ("0", "", 
 
 _EXTRA_CKPTS = [c.strip() for c in os.environ.get("RMHD_ML_CKPTS", "").split(",")
                 if c.strip()]
+# The Julia exact-flux chain (src/physics/julia_chain.py, 2026-11-08): "1"
+# answers every attempted lane in Julia; "compare" runs production and logs
+# Julia's per-lane agreement beside it; "driver" (2026-11-09,
+# src/physics/julia_driver.py) hands Julia the whole sweep -- HLLD, the gates,
+# the linearised flux, the seeds, the chain and the flux; "0" (default) is
+# production unchanged.
+_JULIA = os.environ.get("RMHD_JULIA", "0").strip().lower()
+_JULIA = {"": "0", "off": "0"}.get(_JULIA, _JULIA)
+if _JULIA not in ("0", "1", "compare", "driver"):
+    raise ValueError("RMHD_JULIA must be 0, 1, compare or driver, not %r" % _JULIA)
+# one line per sweep: which solver answered, and the exact part's wall (a CSV path)
+_RUNG_LOG = os.environ.get("RMHD_RUNG_LOG", "")
 # (the append-never-insert dance is gone: `rmhd.eos` cannot shadow `src.physics.eos`)
 
 _V = ("vx", "vy", "vz")
@@ -1658,6 +1671,11 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
     pipeline call is handed to it, which runs it once for the sweeps of an RK
     stage; everything else here runs per sweep, in the sweeps' order.
     """
+    if _JULIA == "driver" and _record_idir is None:
+        from . import julia_driver as _JD
+        return _JD.flux(sL, sR, eos, idir, tau_weak=tau_weak, tau_bt=tau_bt, accuracy=accuracy,
+                        max_iter=max_iter, n_retries=n_retries, harvester=harvester,
+                        rendezvous=_rendezvous, model=model, scaler=scaler)
     if _CANONICAL and _record_idir is None:
         from .canonical import canonical_flux
         return canonical_flux(
@@ -1834,12 +1852,28 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
     # rotation unknowns and handles Bt = 0 correctly -- 8 of the rotor's 12
     # degenerate x-sweep lanes converge on it at t=0 -- so a tier-0 gate would
     # have thrown those answers away along with the unrepresentable ones.
-    run = (_run_pipeline if _rendezvous is None
-           else lambda *a, **k: _rendezvous.pipeline(rec_idir, *a, **k))
-    res, d, star, region, ray_ok, n_fan = run(
-        P, gamma, subL, subR, subBn, seed6, keys, seeds_extra,
-        accuracy=accuracy, max_iter=max_iter, n_retries=n_retries,
-        tau_bt=tau_bt)
+    _jl = _JULIA == "1"
+    _t_exact = _time.perf_counter()
+    if _jl:
+        # Julia answers the whole chain per lane (julia_chain.py); every
+        # production block below that it replaces is skipped with `not _jl`
+        if _rendezvous is not None:
+            raise RuntimeError("RMHD_JULIA=1 answers each sweep in one call: "
+                               "set RMHD_MERGE_SWEEPS=0")
+        from . import julia_chain as _JC
+        jr = _JC.solve(gamma, subL, subR, subBn, seed6, seeds_extra,
+                       None if p_hll is None else p_hll[np.asarray(sel)],
+                       accuracy=accuracy, max_iter=max_iter,
+                       n_retries=n_retries, tau_bt=tau_bt,
+                       want_zones=harvester is not None)
+        res, d, star, region, ray_ok, n_fan = _JC.as_pipeline(jr)
+    else:
+        run = (_run_pipeline if _rendezvous is None
+               else lambda *a, **k: _rendezvous.pipeline(rec_idir, *a, **k))
+        res, d, star, region, ray_ok, n_fan = run(
+            P, gamma, subL, subR, subBn, seed6, keys, seeds_extra,
+            accuracy=accuracy, max_iter=max_iter, n_retries=n_retries,
+            tau_bt=tau_bt)
     diag.update(d)
     diag["n_seed_clamped"] = n_seed_clamped
     diag["n_ensemble_seeds"] = 0 if seeds_extra is None else len(seeds_extra)
@@ -1880,13 +1914,13 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
     # test: both rotations have zero strength by construction, so they cannot
     # cross anything that matters.
     crossed = np.zeros(sel.size, dtype=bool)
-    if _WAVE_ORDER and take.any():
+    if _WAVE_ORDER and take.any() and not _jl:
         crossed = _self_crossing(res["zones"], res["VsLv"], res["VsRv"],
                                  _WAVE_ORDER_TOL)
         crossed &= take & np.isin(cls, (C.FULL7, C.COPLANAR))
         take = take & ~crossed
     inadm7 = np.zeros(sel.size, dtype=bool)
-    if _ADMISSIBLE_GATE and take.any():
+    if _ADMISSIBLE_GATE and take.any() and not _jl:
         inadm7 = take & np.isin(cls, (C.FULL7, C.COPLANAR)) & ~_admissible_structure(
             P, gamma, subL, subR, subBn, res["zones"], res["VsLv"], res["VsRv"])
         take = take & ~inadm7
@@ -1898,7 +1932,7 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
     # in hand: `take` is the only place that knows a lane cleared EVERY gate
     # (converged, ray resolved, state physical, fan ordered), and downstream
     # only the assembled flux survives.
-    if harvester is not None:
+    if harvester is not None and not _jl:
         from src.physics.harvest import Harvester           # noqa: F401
         harvester.record(
             subL, subR, subBn, cls=cls, converged=conv, zones=res["zones"],
@@ -1960,7 +1994,7 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
     # before the flux assembly, so the run gets the better flux.
     take3 = np.zeros(sel.size, dtype=bool)
     n3_att = 0
-    if _3WAVE_FALLBACK:
+    if _3WAVE_FALLBACK and not _jl:
         cand = np.flatnonzero(~take & ~crossed & (np.abs(subBn) <= _BN_3WX_MAX))
         n3_att = int(cand.size)
         if cand.size:
@@ -2009,7 +2043,7 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
     reason5 = np.full(sel.size, 7, dtype=np.int8)        # 7 = not offered
     iters5 = np.full(sel.size, -1, dtype=int)
     rung5 = np.full(sel.size, -1, dtype=np.int8)         # -1 = not by planar
-    if _PLANAR5_FALLBACK:
+    if _PLANAR5_FALLBACK and not _jl:
         offered = ~take & ~take3
         if not _PLANAR5_CROSSED:
             offered &= ~crossed
@@ -2092,7 +2126,7 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
     stage7p = np.zeros(sel.size, dtype=np.int8)
     rot7p = np.zeros((2, sel.size), dtype=bool)
     iters7p = np.full(sel.size, -1, dtype=int)
-    if _COPLANAR7_LATE:
+    if _COPLANAR7_LATE and not _jl:
         offered = ~take & ~take3 & ~take5 & planar_ok & (cls == C.COPLANAR)
         if not _PLANAR5_CROSSED:
             offered &= ~crossed
@@ -2137,7 +2171,7 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
     iters4 = np.full(sel.size, -1, dtype=int)
     kinds4 = np.full((2, sel.size), -1, dtype=np.int8)
     n4_skipped = 0
-    if _PLANAR4:
+    if _PLANAR4 and not _jl:
         offered = ~take & ~take3 & ~take5 & ~take7p
         if not _PLANAR5_CROSSED:
             offered &= ~crossed
@@ -2192,7 +2226,7 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
     nc_att = 0
     reasonc = np.full(sel.size, 9, dtype=np.int8)        # 9 = not offered
     itersc = np.full(sel.size, -1, dtype=int)
-    if _CONTINUATION:
+    if _CONTINUATION and not _jl:
         if not (_PLANAR_PRECHECK and (_PLANAR5_FALLBACK or _PLANAR4)) and sel.size:
             from rmhd.batched import planar5_b as _P5B
             planar_ok = np.asarray(_P5B.to_planar(subL, subR, subBn)[3]) <= _PLANAR_TOL
@@ -2220,6 +2254,36 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
                 region[w] = np.asarray(rc["region"])[good]
                 takec[w] = True
 
+    if _jl:
+        # the rescues Julia ran: their masks and per-lane diagnostics; star and
+        # region already carry every exact lane's answer.  With
+        # RMHD_JULIA_DIAG (or a harvest) production's codes and iterations,
+        # else coarse codes; the gate counts come from Julia's reason7 always
+        jm = _JC.rescue_masks(jr, sel.size)
+        take5, take7p, take4 = jm["take5"], jm["take7p"], jm["take4"]
+        rung5, stage7p = jm["rung5"], jm["stage7p"]
+        reason5, reason7p, reason4 = jm["reason5"], jm["reason7p"], jm["reason4"]
+        n5_att, n7p_att, n4_att = jm["n5_att"], jm["n7p_att"], jm["n4_att"]
+        reason7 = jm["reason7"]
+        n_unphys, n_crossed = jm["n_unphys"], jm["n_crossed"]
+        n_reclass_refused = jm["n_reclass_refused"]
+        n_nonplanar_skipped = int((~take & ~planar_ok).sum())
+        if jm["iters5"] is not None:
+            iters5, iters7p, iters4 = jm["iters5"], jm["iters7p"], jm["iters4"]
+            kinds4, rot7p = jm["kinds4"], jm["rot7p"]
+        if harvester is not None:
+            # production's rows, its order: seven-wave, reclassified, five-wave, rescues
+            _JC.harvest(harvester, jr, subL, subR, subBn,
+                        planar5_rows=_HARVEST_PLANAR5, rescue_rows=_HARVEST_RESCUES)
+    if _JULIA == "compare":
+        from . import julia_chain as _JC
+        _JC.compare(rec_idir, gamma, subL, subR, subBn, seed6, seeds_extra,
+                    None if p_hll is None else p_hll[np.asarray(sel)],
+                    accuracy=accuracy, max_iter=max_iter, n_retries=n_retries,
+                    tau_bt=tau_bt,
+                    prod=dict(take=take, take3=take3, take5=take5, take7p=take7p,
+                              take4=take4, takec=takec, cls=cls, star=star,
+                              reason7=reason7))
     take_all = take | take3 | take5 | take7p | take4 | takec
     g = sel[take_all]
     if g.size:
@@ -2273,7 +2337,7 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
     # agree.  The planar path already verifies internally, so what is added
     # here is the seven-wave path and the run-level number.
     verified = np.zeros(sel.size, dtype=bool)
-    if take.any() and _VERIFY_EXACT:
+    if take.any() and _VERIFY_EXACT and not _jl:
         f6 = P["planar5"]["waves"]["fullfuncv6"]
         seven = np.isin(cls, (C.FULL7, C.COPLANAR))
 
@@ -2305,6 +2369,10 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
                        np.log(np.maximum(Bt4, 1e-30)),
                        np.arctan2(R4[6], R4[5]),
                        np.log(np.maximum(R4[1], 1e-30)), z, z])
+    if _jl:
+        # production's own check on Julia's answers with the diagnostics, else
+        # by construction (Julia's Newton accepts on this residual at this tolerance)
+        verified = _JC.verified(jr, take, cls, take5, take7p, take4, _VERIFY_TOL)
     # the three-wave path is deliberately never marked verified (measured:
     # 0.0% of its answers reach 1e-6 on this residual); the planar path
     # verifies inside `solve` before it reports convergence
@@ -2429,4 +2497,11 @@ def exact_flux_batched(sL, sR, eos, idir: int = 0, *, model=None, scaler=None,
         frac_hlld_fallback=fell_back / max(N, 1),
         frac_exact=n_exact / max(N, 1),
     )
+    if _jl:
+        LAST_DIAG.update(n_ray_failed=jm["n_ray_failed"], julia_wall=jr["wall"])
+    if _RUNG_LOG:
+        from . import julia_chain as _JC
+        _JC.log_rungs(_RUNG_LOG, rec_idir, N, int(sel.size),
+                      take & np.isin(cls, (C.FULL7, C.COPLANAR)), degen, take5,
+                      take7p, take4, lin_fb, _time.perf_counter() - _t_exact)
     return F, U, p_star
