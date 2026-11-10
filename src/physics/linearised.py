@@ -57,6 +57,22 @@ from .hlld import Cons, Prim, compute_srmhd_fluxes, hlld_flux
 _VARS = ("rho", "p", "vn", "vt1", "vt2", "Bt1", "Bt2")
 _CONS = ("D", "tau", "Sn", "St1", "St2", "Bt1", "Bt2")
 LAST_LINEAR: dict = {}
+# RMHD_LINEAR_ZERO_TOL (2026-11-09, 0 = off = the strict sign test): see
+# linearised_flux, "waves at xi < 0"
+import os as _os
+_ZERO_TOL = float(_os.environ.get("RMHD_LINEAR_ZERO_TOL", "0") or 0.0)
+# RMHD_LINEAR_PAD8 (2026-11-09, off by default): LAPACK's eigenvectors of a
+# batch of 7x7 matrices depend on where a matrix sits in the batch (a 7x7
+# float64 is 392 bytes, so every other matrix starts 8 bytes off a 16-byte
+# boundary; measured on the Mac: the same matrix gives bitwise-equal
+# eigenvalues at every position but different eigenvectors at odd ones).
+# Mirror faces then get fluxes one rounding unit apart, which the Newton
+# tolerances amplify until a pair splits onto different solvers (rotor 64^2
+# step 9).  Each 7x7 is solved as the leading block of an 8x8 (512 bytes)
+# with one isolated eigenvalue _PAD_EIG, far outside the wave speeds, which
+# is dropped: measured bitwise position-independent, same eigenvalues.
+_PAD8 = _os.environ.get("RMHD_LINEAR_PAD8", "0") not in ("0", "", "off")
+_PAD_EIG = 1.0e3
 
 
 def _axes(idir: int):
@@ -105,6 +121,25 @@ def _solve_batched(M, B):
 
 
 def _eig_batched(A):
+    """Eigen-decomposition per element; with RMHD_LINEAR_PAD8 each 7x7 is
+    solved inside an 8x8 (module comment at _PAD8)."""
+    if not _PAD8:
+        return _eig_batched_raw(A)
+    n = A.shape[0]
+    P = torch.zeros(n, 8, 8, dtype=A.dtype)
+    P[:, :7, :7] = A
+    P[:, 7, 7] = _PAD_EIG
+    w8, R8, ok = _eig_batched_raw(P)
+    # the padding's eigenvector is e_8; every other one has a zero 8th row
+    k = torch.argmax(R8[:, 7, :].abs(), dim=1)
+    keep = torch.ones(n, 8, dtype=torch.bool)
+    keep[torch.arange(n), k] = False
+    w = w8[keep].reshape(n, 7)
+    R = R8[:, :7, :].transpose(1, 2)[keep].reshape(n, 7, 7).transpose(1, 2)
+    return w, R, ok
+
+
+def _eig_batched_raw(A):
     """Eigen-decomposition per element.  LAPACK refuses the WHOLE batch when
     one element does not converge (measured on the rotor: one face in
     ~10^5), so that element is retried alone and flagged if it fails."""
@@ -204,7 +239,21 @@ def linearised_flux(sL: Prim, sR: Prim, eos: hybrid_eos, idir: int = 0,
         dV = (VR - VL)[:, i].T.unsqueeze(-1)                    # (n, 7, 1)
         alpha, solved = _solve_batched(Rm[i], dV)
         alpha = alpha.squeeze(-1)                               # (n, 7)
-        left = (lam[i] < 0.0).to(dt)                            # waves at xi < 0
+        if _ZERO_TOL > 0.0:
+            # RMHD_LINEAR_ZERO_TOL: a wave slower than tol x the face's
+            # fastest is stationary and stays right of the face with the
+            # other stationary waves.  Where B_n = 0 five speeds are zero;
+            # LAPACK returns one of them as -6e-18 (sign = rounding) and
+            # splits the jump among the five along an arbitrary basis that
+            # changes with the matrix's place in the batch -- so a strict
+            # `< 0` put a basis-dependent part of the jump left of the face
+            # (rotor 64^2 step 1: mirror faces 0.3% apart in the mass flux).
+            # All stationary waves on one side, the ray state is the jump's
+            # projection on their eigenspace: basis-independent.
+            lmax = lam[i].abs().amax(dim=1, keepdim=True)
+            left = (lam[i] < -_ZERO_TOL * lmax).to(dt)
+        else:
+            left = (lam[i] < 0.0).to(dt)                        # waves at xi < 0
         step = torch.einsum("nkj,nj->nk", Rm[i], alpha * left)  # (n, 7)
         Vs[:, i] = torch.where(solved[None, :], VL[:, i] + step.T, VL[:, i])
         ok[i] &= solved

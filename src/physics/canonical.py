@@ -102,6 +102,17 @@ KEY = [(5, -1.0), (0, 1.0), (1, 1.0), (2, 1.0), (3, 1.0), (4, 1.0), (6, 1.0),
 # exactly, which keeps exact images bit for bit equivariant.
 TOL = 1e-7
 _KIND = [0, 1, 2, 2, 2, 3, 3, 3] * 2          # rho, p, v, B per column
+# RMHD_CANONICAL_POS_ZERO (2026-11-09, off by default): the canonical
+# problem's exact zeros are written as +0.0.  The elements act by sign flips,
+# and -0.0 == +0.0 in every comparison above, so two mirror faces reach the
+# same canonical VALUES with zeros of either sign (in 2D, v_z = B_z = 0 on
+# every face; at the rotor's t = 0 also v and B_t outside the disc).
+# Downstream that is not harmless: atan2(+-0, negative) = +-pi, so the seed
+# networks' angles differ by 2 pi and the mirror faces start their Newton from
+# different seeds (rotor 64^2, step 1: all 26 pairs of the first sweep, two of
+# them answered by different solvers -- the Julia run's 7.3e-3 asymmetry).
+import os as _os
+_POS_ZERO = _os.environ.get("RMHD_CANONICAL_POS_ZERO", "0") not in ("0", "", "off")
 
 
 def choose(sL, sR, idir):
@@ -166,6 +177,11 @@ def transform(sL, sR, idir, g):
             d[vec[0]] = torch.where(sw, -vn, vn) * scale
             d[vec[1]] = s1 * ta * scale
             d[vec[2]] = s2 * tb * scale
+            if _POS_ZERO:
+                # -0.0 + 0.0 = +0.0: a component that is exactly zero must
+                # not carry the sign of the element that produced it
+                for k in vec:
+                    d[k] = d[k] + 0.0
         out.append(d)
     return out[0], out[1]
 
